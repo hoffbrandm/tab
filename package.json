@@ -1,10 +1,13 @@
 {
   "name": "tab-personal-expense-tracker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "start": "node server.mjs"
+    "start": "node dev-server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

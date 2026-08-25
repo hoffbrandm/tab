@@ -1,0 +1,8 @@
+data
+test
+dev-server.mjs
+.env
+.env.*
+.git
+README.md
+.env.example
