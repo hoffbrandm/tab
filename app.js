@@ -6,6 +6,7 @@ const toast = document.querySelector("#toast");
 
 let session = null;
 let methods = { github: false, password: false };
+let storeKind = "github";
 let store = { version: 1, friends: [], transactions: [] };
 let storeSha = null;
 let screen = parseHash();
@@ -84,11 +85,9 @@ async function bootApp() {
   boot = { name: "loading" };
   render();
   try {
-    const me = await api("/api/auth/me").catch(async (error) => {
-      if (error.status === 401) return error.payload;
-      throw error;
-    });
+    const me = await api("/api/auth/me");
     methods = me.methods || methods;
+    storeKind = me.driver || "github";
     if (!me.authenticated) {
       const params = new URLSearchParams(location.search);
       const reason = params.get("error");
@@ -182,7 +181,7 @@ function syncChip() {
   if (sync.name === "error") {
     return `<button class="status-chip error" data-sync-chip data-action="retry-sync" type="button">${esc(sync.message || "Could not save")}</button>`;
   }
-  return `<span class="status-chip" data-sync-chip>Saved to GitHub</span>`;
+  return `<span class="status-chip" data-sync-chip>${storeKind === "github" ? "Saved to GitHub" : "Saved"}</span>`;
 }
 
 function errorScreen(message, actionLabel, action) {
@@ -232,7 +231,7 @@ function homeScreen() {
     <div class="friend-list">${friends.length ? friends.map(friendCard).join("") : emptyHome()}</div>
     ${friends.length ? `<button class="primary floating" data-action="add-expense">Add expense</button>` : ""}
     <section class="account-card">
-      <div><strong>Signed in as ${esc(session.login)}</strong><p class="helper account-copy">Data is saved to GitHub, not this browser.</p></div>
+      <div><strong>Signed in as ${esc(session.login)}</strong><p class="helper account-copy">${storeKind === "github" ? "Data is saved to GitHub, not this browser." : "Local file store is on. Production saves to GitHub."}</p></div>
       <button class="secondary wide" data-action="sign-out">Sign out</button>
     </section>
   </section>`;

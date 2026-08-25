@@ -53,6 +53,11 @@ export function createApp({
     };
   }
 
+  function storeKind() {
+    if (env.STORE_DRIVER === "file" || env.STORE_DRIVER === "memory") return env.STORE_DRIVER;
+    return "github";
+  }
+
   function allowedLogin() {
     return String(env.ALLOWED_GITHUB_LOGIN || "hoffbrandm").trim().toLowerCase();
   }
@@ -89,12 +94,13 @@ export function createApp({
 
   async function me(request) {
     const available = methods();
+    const driver = storeKind();
     try {
       const session = sessionFrom(request);
-      return json(200, { authenticated: true, login: session.login, methods: available });
+      return json(200, { authenticated: true, login: session.login, methods: available, driver });
     } catch (error) {
       if (error instanceof HttpError && error.status === 401) {
-        return json(401, { authenticated: false, methods: available });
+        return json(200, { authenticated: false, methods: available, driver });
       }
       throw error;
     }

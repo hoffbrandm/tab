@@ -62,7 +62,7 @@ test("unauthenticated reads and writes are rejected", async () => {
   const me = await request(app, "/api/auth/me");
   const read = await request(app, "/api/store");
   const write = await request(app, "/api/store", { method: "PUT", body: { store: validStore, sha: "mem-1" } });
-  assert.equal(me.status, 401);
+  assert.equal(me.status, 200);
   assert.equal(me.json.authenticated, false);
   assert.deepEqual(me.json.methods, { github: true, password: true });
   assert.equal(read.status, 401);
