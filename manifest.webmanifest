@@ -1,0 +1,8 @@
+{
+  "name": "Tab",
+  "short_name": "Tab",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f5f2",
+  "theme_color": "#f6f5f2"
+}
