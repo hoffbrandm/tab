@@ -1,14 +1,17 @@
 import { balanceFor, balanceText, formatMoney, parseMoneyToPence, runningBalances, splitExpense } from "./calculations.js";
+import { createGistStore, GistError } from "./gist-store.js";
+import { createSession } from "./session.js";
+import { emptyStore } from "./store.js";
 
 const LOCAL_KEY = "tab.personal.v1";
 const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
+const sessionStore = createSession({ storage: window.sessionStorage });
 
 let session = null;
-let methods = { github: false, password: false };
-let storeKind = "github";
-let store = { version: 1, friends: [], transactions: [] };
-let storeSha = null;
+let gist = null;
+let store = emptyStore();
+let gistId = null;
 let screen = parseHash();
 let modal = null;
 let boot = { name: "loading" };
@@ -25,7 +28,7 @@ function parseHash() {
 function setScreen(next, replace = false) {
   screen = next;
   const hash = next.name === "friend" ? `#/friend/${next.friendId}` : "#/home";
-  if (`#${location.hash.replace(/^#/, "")}` === hash || location.hash === hash) {
+  if (location.hash === hash) {
     render();
     return;
   }
@@ -52,28 +55,11 @@ function dateLabel(value) {
 }
 function signedBalanceClass(pence) { return pence > 0 ? "positive" : pence < 0 ? "negative" : "neutral"; }
 
-async function api(path, { method = "GET", body } = {}) {
-  const response = await fetch(path, {
-    method,
-    credentials: "same-origin",
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(payload.error || "Something went wrong.");
-    error.status = response.status;
-    error.payload = payload;
-    throw error;
-  }
-  return payload;
-}
-
 function readLocalStore() {
   try {
     const saved = JSON.parse(localStorage.getItem(LOCAL_KEY));
     if (saved?.version === 1 && Array.isArray(saved.friends) && Array.isArray(saved.transactions)) return saved;
-  } catch { /* Ignore a corrupt leftover browser copy. */ }
+  } catch { /* Ignore a leftover browser copy. */ }
   return null;
 }
 
@@ -81,28 +67,40 @@ function clearLocalStore() {
   try { localStorage.removeItem(LOCAL_KEY); } catch { /* Private mode can refuse this. */ }
 }
 
+function openWithToken(token, login = "") {
+  gist = createGistStore({ token });
+  session = { login, token };
+}
+
 async function bootApp() {
   boot = { name: "loading" };
   render();
+  const saved = sessionStore.read();
+  if (!saved) {
+    boot = { name: "signed-out" };
+    render();
+    return;
+  }
   try {
-    const me = await api("/api/auth/me");
-    methods = me.methods || methods;
-    storeKind = me.driver || "github";
-    if (!me.authenticated) {
-      const params = new URLSearchParams(location.search);
-      const reason = params.get("error");
-      boot = { name: methods.github || methods.password ? "signed-out" : "setup", reason };
-      render();
-      return;
-    }
-    session = { login: me.login };
-    const payload = await api("/api/store");
+    openWithToken(saved.token, saved.login);
+    const identity = await gist.identify();
+    session.login = identity.login;
+    sessionStore.write({ token: saved.token, login: identity.login });
+    const payload = await gist.read();
     store = payload.store;
-    storeSha = payload.sha;
+    gistId = payload.gistId;
     boot = { name: "ready" };
     maybeOfferLocalImport();
     render();
   } catch (error) {
+    if (error instanceof GistError && error.status === 401) {
+      sessionStore.clear();
+      session = null;
+      gist = null;
+      boot = { name: "signed-out", reason: "token" };
+      render();
+      return;
+    }
     boot = { name: "error", message: error.message };
     render();
   }
@@ -124,22 +122,14 @@ async function persist() {
   sync = { name: "saving" };
   updateSyncChip();
   try {
-    const payload = await api("/api/store", { method: "PUT", body: { store, sha: storeSha } });
+    const payload = await gist.write(store, gistId);
     store = payload.store;
-    storeSha = payload.sha;
+    gistId = payload.gistId;
     sync = { name: "saved" };
     updateSyncChip();
   } catch (error) {
-    if (error.status === 409 && error.payload?.store) {
-      store = error.payload.store;
-      storeSha = error.payload.sha;
-      sync = { name: "error", message: "The tab changed on another device. Reloaded the latest copy." };
-      updateSyncChip();
-      render();
-    } else {
-      sync = { name: "error", message: error.message };
-      updateSyncChip();
-    }
+    sync = { name: "error", message: error.message };
+    updateSyncChip();
     throw error;
   }
 }
@@ -148,14 +138,12 @@ async function withStoreUpdate(mutator) {
   if (isSaving) return false;
   isSaving = true;
   const previous = structuredClone(store);
-  const previousSha = storeSha;
   try {
     mutator();
     await persist();
     return true;
   } catch {
     store = previous;
-    storeSha = previousSha;
     return false;
   } finally {
     isSaving = false;
@@ -165,7 +153,6 @@ async function withStoreUpdate(mutator) {
 function render() {
   if (boot.name === "loading") app.innerHTML = `<section class="busy"><p>Opening your tabs…</p></section>`;
   else if (boot.name === "error") app.innerHTML = errorScreen(boot.message, "Try again", "reload");
-  else if (boot.name === "setup") app.innerHTML = setupScreen();
   else if (boot.name === "signed-out") app.innerHTML = signInScreen();
   else app.innerHTML = screen.name === "friend" ? friendScreen(byId(screen.friendId)) : homeScreen();
   renderModal();
@@ -181,7 +168,7 @@ function syncChip() {
   if (sync.name === "error") {
     return `<button class="status-chip error" data-sync-chip data-action="retry-sync" type="button">${esc(sync.message || "Could not save")}</button>`;
   }
-  return `<span class="status-chip" data-sync-chip>${storeKind === "github" ? "Saved to GitHub" : "Saved"}</span>`;
+  return `<span class="status-chip" data-sync-chip>Saved to a private gist</span>`;
 }
 
 function errorScreen(message, actionLabel, action) {
@@ -192,32 +179,28 @@ function errorScreen(message, actionLabel, action) {
   </section>`;
 }
 
-function setupScreen() {
-  return `<section class="shell gate">
-    <header class="topbar"><span class="wordmark">TAB</span></header>
-    <div class="intro"><p class="eyebrow">Needs setup</p><h1>Sign-in is not configured yet.</h1>
-      <p class="lede">This app will not store tabs in the browser. Add a GitHub OAuth app or a passphrase, plus a server-side GitHub token, then reload.</p>
-    </div>
-    <div class="gate-card"><p class="helper">See the README for <code>GITHUB_TOKEN</code>, <code>SESSION_SECRET</code>, and either GitHub OAuth or <code>TAB_PASSWORD</code>.</p></div>
-  </section>`;
-}
-
 function signInScreen() {
-  const reason = boot.reason === "forbidden"
-    ? "That GitHub account is not allowed to open this tab."
-    : boot.reason === "oauth"
-      ? "GitHub sign-in did not finish. Try again."
-      : "";
+  const reason = boot.reason === "token"
+    ? "That GitHub token was rejected. Create a new gist-only token and try again."
+    : "";
   return `<section class="shell gate">
     <header class="topbar"><span class="wordmark">TAB</span></header>
-    <div class="intro"><p class="eyebrow">Private tab</p><h1>Your tabs live on GitHub.</h1>
-      <p class="lede">Sign in on this phone or browser. After a reset, sign in again and the same friends and balances come back.</p>
+    <div class="intro"><p class="eyebrow">Private tab</p><h1>Your tabs live in a private gist.</h1>
+      <p class="lede">This site is only the app. Friends and expenses stay in a private GitHub gist, not in this browser and not in the public repo. After a reset, paste the same token and they come back.</p>
     </div>
     <div class="gate-card">
       ${reason ? `<p class="form-error">${esc(reason)}</p>` : ""}
-      ${methods.github ? `<a class="github wide" href="/api/auth/login">Sign in with GitHub</a>` : ""}
-      ${methods.github && methods.password ? `<p class="helper">Or use your passphrase.</p>` : ""}
-      ${methods.password ? `<form id="login-form"><label>Passphrase<input type="password" name="password" required autocomplete="current-password" /></label><p class="form-error" id="form-error"></p><button class="primary wide" type="submit">Sign in</button></form>` : ""}
+      <form id="login-form">
+        <label class="visually-hidden" for="github-user">GitHub user</label>
+        <input id="github-user" name="username" value="hoffbrandm" autocomplete="username" class="visually-hidden" />
+        <label>GitHub token
+          <input type="password" name="token" required autocomplete="current-password" spellcheck="false" />
+        </label>
+        <p class="helper">Use a fine-grained token with <strong>Gists: Read and write</strong> only. A password manager can remember it on your phone.</p>
+        <p class="form-error" id="form-error"></p>
+        <button class="primary wide" type="submit">Sign in</button>
+      </form>
+      <a class="text-button token-link" href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noreferrer">Create a token on GitHub</a>
     </div>
   </section>`;
 }
@@ -231,7 +214,7 @@ function homeScreen() {
     <div class="friend-list">${friends.length ? friends.map(friendCard).join("") : emptyHome()}</div>
     ${friends.length ? `<button class="primary floating" data-action="add-expense">Add expense</button>` : ""}
     <section class="account-card">
-      <div><strong>Signed in as ${esc(session.login)}</strong><p class="helper account-copy">${storeKind === "github" ? "Data is saved to GitHub, not this browser." : "Local file store is on. Production saves to GitHub."}</p></div>
+      <div><strong>Signed in as ${esc(session.login)}</strong><p class="helper account-copy">Data is in a private gist, not this browser.</p></div>
       <button class="secondary wide" data-action="sign-out">Sign out</button>
     </section>
   </section>`;
@@ -308,7 +291,7 @@ function renderModal() {
   layer.className = "modal-layer";
   layer.innerHTML = `<div class="scrim" data-action="close-modal"></div><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">${modalMarkup()}</section>`;
   document.body.append(layer);
-  const focus = layer.querySelector("input, select, button");
+  const focus = layer.querySelector("input:not(.visually-hidden), select, button");
   requestAnimationFrame(() => focus?.focus());
 }
 
@@ -363,7 +346,7 @@ function deleteForm() {
 
 function importForm() {
   return `<div class="delete-confirm"><div class="modal-head"><div><p class="eyebrow">This browser</p><h2 id="modal-title">Import the old local tab?</h2></div></div>
-    <p>This browser still has friends and expenses from before Tab saved to GitHub. Import them once, then they leave this device.</p>
+    <p>This browser still has friends and expenses from before Tab saved to a private gist. Import them once, then they leave this device.</p>
     <div class="confirm-actions">
       <button class="secondary" data-action="discard-local">Leave them</button>
       <button class="primary" data-action="import-local">Import</button>
@@ -401,6 +384,18 @@ function openTransaction(type, friendId, transaction) {
 function openFriendForm(friend) { modal = { kind: "friend", friend }; renderModal(); }
 function closeModal() { modal = null; render(); }
 
+function signOut() {
+  sessionStore.clear();
+  session = null;
+  gist = null;
+  store = emptyStore();
+  gistId = null;
+  boot = { name: "signed-out" };
+  modal = null;
+  history.replaceState(null, "", `${location.pathname}#/home`);
+  render();
+}
+
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
@@ -431,16 +426,7 @@ document.addEventListener("click", async (event) => {
     if (saved) { closeModal(); showToast("Deleted"); }
     else showToast(sync.message || "Could not delete");
   }
-  if (action === "sign-out") {
-    await api("/api/auth/logout", { method: "POST" }).catch(() => {});
-    session = null;
-    store = { version: 1, friends: [], transactions: [] };
-    storeSha = null;
-    boot = { name: "signed-out" };
-    modal = null;
-    history.replaceState(null, "", "/");
-    render();
-  }
+  if (action === "sign-out") signOut();
   if (action === "reload") bootApp();
   if (action === "retry-sync") persist().catch(() => {});
   if (action === "discard-local") { clearLocalStore(); closeModal(); }
@@ -455,7 +441,7 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("submit", (event) => {
   if (event.target.id === "friend-form") saveFriend(event);
   if (event.target.id === "transaction-form") saveTransaction(event);
-  if (event.target.id === "login-form") signInWithPassword(event);
+  if (event.target.id === "login-form") signIn(event);
 });
 
 document.addEventListener("input", (event) => {
@@ -476,13 +462,15 @@ window.addEventListener("popstate", () => {
   if (boot.name === "ready") render();
 });
 
-async function signInWithPassword(event) {
+async function signIn(event) {
   event.preventDefault();
-  const data = new FormData(event.target);
+  const token = new FormData(event.target).get("token").trim();
+  if (!token) return showFormError("Paste a GitHub token that can use gists.");
   setBusy(event.target, true);
   try {
-    await api("/api/auth/login", { method: "POST", body: { password: data.get("password") } });
-    if (location.search) history.replaceState(null, "", location.pathname + location.hash);
+    const client = createGistStore({ token });
+    const identity = await client.identify();
+    sessionStore.write({ token, login: identity.login });
     await bootApp();
   } catch (error) {
     showFormError(error.message);

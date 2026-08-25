@@ -1,47 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  createSessionToken,
-  parseCookies,
-  passwordsMatch,
-  readSession,
-  serializeCookie,
-  verify,
-} from "../api/_lib/session.js";
+import { SESSION_KEY, createSession } from "../session.js";
 
-const secret = "test-session-secret";
+function memoryStorage(initial = {}) {
+  const data = { ...initial };
+  return {
+    getItem(key) { return Object.hasOwn(data, key) ? data[key] : null; },
+    setItem(key, value) { data[key] = String(value); },
+    removeItem(key) { delete data[key]; },
+    data,
+  };
+}
 
-test("session tokens round-trip the GitHub login", () => {
-  const now = 1_000_000;
-  const token = createSessionToken({ login: "hoffbrandm", secret, now, maxAgeMs: 60_000 });
-  assert.deepEqual(readSession(token, secret, now + 10), { login: "hoffbrandm", exp: now + 60_000 });
+test("session storage keeps only the sign-in credential", () => {
+  const storage = memoryStorage();
+  const session = createSession({ storage });
+  session.write({ token: "gho_test", login: "hoffbrandm" });
+  assert.deepEqual(session.read(), { token: "gho_test", login: "hoffbrandm" });
+  const saved = JSON.parse(storage.getItem(SESSION_KEY));
+  assert.equal(saved.token, "gho_test");
+  assert.equal("friends" in saved, false);
+  assert.equal("transactions" in saved, false);
 });
 
-test("expired or tampered sessions are rejected", () => {
-  const now = 1_000_000;
-  const token = createSessionToken({ login: "hoffbrandm", secret, now, maxAgeMs: 60_000 });
-  assert.equal(readSession(token, secret, now + 60_001), null);
-  assert.equal(readSession(`${token}x`, secret, now), null);
-  assert.equal(readSession(token, "other-session-secret", now), null);
-});
-
-test("passwords are compared in constant-length buffers", () => {
-  assert.equal(passwordsMatch("secret", "secret"), true);
-  assert.equal(passwordsMatch("secret", "Secret"), false);
-  assert.equal(passwordsMatch("nope", "secret"), false);
-  assert.equal(passwordsMatch("secret", ""), false);
-});
-
-test("cookies are httpOnly, lax, and optionally secure", () => {
-  const cookie = serializeCookie("tab_session", "abc", { secure: true, maxAgeSec: 120 });
-  assert.match(cookie, /HttpOnly/);
-  assert.match(cookie, /SameSite=Lax/);
-  assert.match(cookie, /Secure/);
-  assert.deepEqual(parseCookies("tab_session=abc; other=1"), { tab_session: "abc", other: "1" });
-});
-
-test("signed payloads reject a swapped signature", () => {
-  const token = createSessionToken({ login: "hoffbrandm", secret, now: 1 });
-  const [body] = token.split(".");
-  assert.throws(() => verify(`${body}.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`, secret));
+test("a missing or corrupt session looks signed out", () => {
+  const storage = memoryStorage({ [SESSION_KEY]: "{not-json" });
+  const session = createSession({ storage });
+  assert.equal(session.read(), null);
+  session.write({ token: "gho_test", login: "hoffbrandm" });
+  session.clear();
+  assert.equal(session.read(), null);
+  assert.equal(storage.getItem(SESSION_KEY), null);
 });

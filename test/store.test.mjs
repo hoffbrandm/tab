@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { emptyStore, parseStore } from "../api/_lib/store.js";
-import { HttpError } from "../api/_lib/http-error.js";
+import { emptyStore, parseStore, StoreError } from "../store.js";
 
 const friend = {
   id: "ben",
@@ -40,30 +39,30 @@ test("a valid store is normalised", () => {
 });
 
 test("unsupported versions are rejected", () => {
-  assert.throws(() => parseStore({ version: 2, friends: [], transactions: [] }), HttpError);
+  assert.throws(() => parseStore({ version: 2, friends: [], transactions: [] }), StoreError);
 });
 
 test("missing collections are rejected", () => {
-  assert.throws(() => parseStore({ version: 1, friends: [] }), HttpError);
+  assert.throws(() => parseStore({ version: 1, friends: [] }), StoreError);
 });
 
 test("duplicate friend ids are rejected", () => {
-  assert.throws(() => parseStore({ version: 1, friends: [friend, { ...friend, name: "Benny" }], transactions: [] }), HttpError);
+  assert.throws(() => parseStore({ version: 1, friends: [friend, { ...friend, name: "Benny" }], transactions: [] }), StoreError);
 });
 
 test("orphan transactions are rejected", () => {
-  assert.throws(() => parseStore({ version: 1, friends: [], transactions: [expense] }), HttpError);
+  assert.throws(() => parseStore({ version: 1, friends: [], transactions: [expense] }), StoreError);
 });
 
 test("invalid money and dates are rejected", () => {
-  assert.throws(() => parseStore({ version: 1, friends: [friend], transactions: [{ ...expense, amountPence: 10.5 }] }), HttpError);
-  assert.throws(() => parseStore({ version: 1, friends: [friend], transactions: [{ ...expense, date: "25/08/2026" }] }), HttpError);
+  assert.throws(() => parseStore({ version: 1, friends: [friend], transactions: [{ ...expense, amountPence: 10.5 }] }), StoreError);
+  assert.throws(() => parseStore({ version: 1, friends: [friend], transactions: [{ ...expense, date: "25/08/2026" }] }), StoreError);
 });
 
 test("expense adjustments must keep both shares at zero or more", () => {
   assert.throws(
     () => parseStore({ version: 1, friends: [friend], transactions: [{ ...expense, myShareAdjustmentPence: 10000 }] }),
-    HttpError,
+    StoreError,
   );
   const parsed = parseStore({
     version: 1,

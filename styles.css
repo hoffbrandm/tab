@@ -310,6 +310,18 @@ select:focus-visible {
 .account-card { margin-top: 22px; }
 .account-copy { margin: 6px 0 0; }
 .gate form { display: grid; gap: 16px; }
+.token-link { justify-self: start; }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 .modal-layer {
   position: fixed;
