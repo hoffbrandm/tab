@@ -86,6 +86,7 @@ const household = {
 test("empty household templates are not treated as live data", () => {
   assert.equal(householdHasData(emptyHousehold()), false);
   assert.equal(householdHasData(household), true);
+  assert.deepEqual(emptyHousehold().reserves, []);
 });
 
 test("cashflow income is net pay from payslips that land in the month", () => {

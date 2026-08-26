@@ -558,13 +558,14 @@ function monthliesScreen() {
       </section>
       <section class="block">
         ${sectionHead("Cash in reserve", "add-reserve", "Add")}
+        <p class="helper">Daily envelope / monthly thousand — one standing line, not two features. Type the amount. Cleaner and nails can sit beside it.</p>
         ${reserves.length ? reserves.map((item) => lineRow({
           edit: "edit-reserve",
           id: item.id,
           title: item.name,
           detail: reserveLineDetail(item),
           amount: formatMoney(item.amountPence),
-        })).join("") : emptyLines("The daily envelope / monthly thousand is one standing line. Type the amount. Cleaner and nails can sit beside it.", "add-reserve", "Add a reserve line")}
+        })).join("") : emptyLines("Add the daily envelope here. The monthly amount lives in your household, not in this app.", "add-reserve", "Add the daily envelope")}
       </section>
     `,
   });
@@ -1142,7 +1143,7 @@ function pendingForm() {
 
 function reserveLineDetail(item) {
   const name = String(item?.name || "").toLowerCase();
-  if (/£?\s*30|a day|daily|thousand|envelope|float/.test(name)) {
+  if (/\ba day\b|daily|thousand|envelope|float/.test(name)) {
     return "Daily envelope / monthly thousand · no tick";
   }
   return "Standing monthly out · no tick";
@@ -1150,10 +1151,11 @@ function reserveLineDetail(item) {
 
 function reserveForm() {
   const item = modal.item || {};
-  return `<form id="reserve-form">${modalHead(item.id ? "Reserve" : "Cash in reserve", item.id ? "Edit reserve" : "Add a reserve line")}
+  const adding = !item.id;
+  return `<form id="reserve-form">${modalHead(adding ? "Cash in reserve" : "Reserve", adding ? "Daily envelope / monthly thousand" : "Edit reserve")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="£30 a day" /></label>
     ${moneyLabel("Monthly amount", "amount", item.amountPence)}
-    <p class="helper">The daily envelope and the monthly thousand are the same line. Type the amount. Cleaner and nails are siblings. Insurance saving stays on Annual as year ÷ 12.</p>
+    <p class="helper">This is the daily envelope and the monthly thousand — the same line. Type the amount; it is not stored in the app. Cleaner and nails are siblings. Insurance saving stays on Annual as year ÷ 12.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save reserve" : "Add reserve"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-reserve">Delete reserve</button>' : ""}
