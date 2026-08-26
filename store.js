@@ -158,7 +158,6 @@ function parseHousehold(value) {
         name: item.name,
         amountPence: item.amountPence,
         dueDay: item.dueDay,
-        paidMonths: item.paidMonths,
         paidFrom: "card",
       })),
     ];
@@ -268,7 +267,6 @@ function parseBill(bill) {
     name: requiredName(bill.name, "Bill"),
     amountPence: moneyPence(bill.amountPence, "Bill"),
     dueDay: dueDay(bill.dueDay, "Bill"),
-    paidMonths: monthList(bill.paidMonths, "Bill"),
   };
 }
 
@@ -344,7 +342,6 @@ function parseMonthly(item) {
     amountPence: moneyPence(item.amountPence, "Monthly"),
     dueDay: dueRoll === "firstWorking" ? dueDay(item.dueDay || 1, "Monthly") : dueDay(item.dueDay, "Monthly"),
     dueRoll,
-    paidMonths: monthList(item.paidMonths, "Monthly"),
     paidFrom,
   };
 }
@@ -407,7 +404,6 @@ function parseCardSub(sub, cardIds) {
     name: requiredName(sub.name, "Card subscription"),
     amountPence: moneyPence(sub.amountPence, "Card subscription"),
     dueDay: dueDay(sub.dueDay, "Card subscription"),
-    paidMonths: monthList(sub.paidMonths, "Card subscription"),
   };
   if (sub.cardId) {
     const cardId = requiredId(sub.cardId, "Card subscription card");
@@ -471,8 +467,10 @@ function parsePayslipCategory(item) {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     throw new StoreError("Each payslip category must be an object.");
   }
-  const kind = PAYSLIP_CATEGORY_KINDS.includes(item.kind) ? item.kind : "deduction";
-  const builtin = BUILTIN_PAYSLIP_CATEGORIES.find((entry) => entry.kind === kind && kind !== "deduction");
+  const kind = PAYSLIP_CATEGORY_KINDS.includes(item.kind)
+    ? item.kind
+    : (item.inNet === false || item.parental ? "parental" : "deduction");
+  const builtin = BUILTIN_PAYSLIP_CATEGORIES.find((entry) => entry.kind === kind && kind !== "deduction" && kind !== "parental");
   return {
     id: requiredId(item.id || builtin?.id || `cat-${kind}`, "Payslip category"),
     label: requiredName(item.label || builtin?.label, "Payslip category"),
@@ -573,6 +571,7 @@ function parseDeduction(item) {
     amountPence: moneyPence(item.amountPence, "Deduction"),
   };
   if (item.extra) parsed.extra = true;
+  if (item.inNet === false || item.parental || item.kind === "parental") parsed.inNet = false;
   return parsed;
 }
 
@@ -611,16 +610,6 @@ function dueDay(value, label) {
     throw new StoreError(`${label} due day must be 1 to 31.`);
   }
   return day;
-}
-
-function monthList(value, label) {
-  if (value == null) return [];
-  if (!Array.isArray(value)) throw new StoreError(`${label} paid months must be an array.`);
-  const months = [...new Set(value.map(String))].filter(Boolean);
-  if (months.some((month) => !isMonthKey(month))) {
-    throw new StoreError(`${label} paid month must be YYYY-MM.`);
-  }
-  return months.sort();
 }
 
 function dateList(value, label) {

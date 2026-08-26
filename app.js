@@ -542,7 +542,7 @@ function monthliesScreen() {
   return shell({
     eyebrow: "Monthlies",
     title: "Standing outs.",
-    lede: "Name, amount, and due day. Optional first working day. These are config — they are not ticked. Cash lines and reserve lines count in Out for the whole month on screen.",
+    lede: "Name, amount, and due day. Optional first working day. These are config — they are not ticked. Cash lines, card lines, and reserve lines count in Out for the whole month on screen.",
     month: true,
     body: `
       <section class="block">
@@ -820,14 +820,14 @@ function moreScreen() {
       </section>
       <section class="block">
         ${sectionHead("Payslip categories", "add-payslip-category-master", "Add")}
-        <p class="helper">Master list for every slip. Pick these on a payslip and type the amount. Names are edited here, not on the slip.</p>
+        <p class="helper">The slip’s column set. Pick these and type the amount. Net is gross through the usual deductions. Parental pay sits on the slip and stays outside that sum.</p>
         ${categories.length ? categories.map((item) => lineRow({
           edit: "edit-payslip-category",
           id: item.id,
           title: item.label,
           detail: payslipKindLabel(item.kind),
           amount: "",
-        })).join("") : emptyLines("Add bonus, tax, NI, gym — whatever appears on a slip.", "add-payslip-category-master", "Add a category")}
+        })).join("") : emptyLines("The usual slip columns live here. Add another if a new one appears.", "add-payslip-category-master", "Add a category")}
       </section>
       <section class="block">
         ${sectionHead("People", "add-person", "Add")}
@@ -852,6 +852,7 @@ function payslipKindLabel(kind) {
     tax: "Deduction",
     ni: "Deduction",
     deduction: "Deduction",
+    parental: "On the slip · not in net",
   }[kind] || "Deduction";
 }
 
@@ -1058,7 +1059,7 @@ function monthlyForm() {
       <option value="card" ${item.paidFrom !== "cash" ? "selected" : ""}>Card — due date only, not ticked</option>
       <option value="cash" ${item.paidFrom === "cash" ? "selected" : ""}>Cash — standing out for the whole month</option>
     </select></label>
-    <p class="helper">UK weekdays are Monday to Friday. Cash lines count in Out for the whole viewed month. There is nothing to tick.</p>
+    <p class="helper">UK weekdays are Monday to Friday. Cash and card lines count in Out for the whole viewed month. There is nothing to tick.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save monthly" : "Add monthly"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-monthly">Delete monthly</button>' : ""}
@@ -1143,7 +1144,7 @@ function reserveForm() {
   return `<form id="reserve-form">${modalHead(item.id ? "Reserve" : "Cash in reserve", item.id ? "Edit reserve" : "Add a reserve line")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Cleaner, daily float…" /></label>
     ${moneyLabel("Monthly amount", "amount", item.amountPence)}
-    <p class="helper">A standing monthly out with no tick and no due day. Counts in Out every month.</p>
+    <p class="helper">A typed monthly envelope — cleaner, nails, or a daily float. No tick. Counts in Out every month. Insurance saving stays on Annual as year ÷ 12.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save reserve" : "Add reserve"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-reserve">Delete reserve</button>' : ""}
@@ -1158,8 +1159,9 @@ function payslipCategoryForm() {
     <label>On the slip<select name="kind">
       <option value="extra" ${kind === "extra" || kind === "bonus" || kind === "benefits" ? "selected" : ""}>Extra — adds to net</option>
       <option value="deduction" ${kind === "deduction" || kind === "sacrifice" || kind === "tax" || kind === "ni" ? "selected" : ""}>Deduction — leaves net</option>
+      <option value="parental" ${kind === "parental" ? "selected" : ""}>On the slip — not in net</option>
     </select></label>
-    <p class="helper">The slip picks this name and you type the amount. Net is calculated.</p>
+    <p class="helper">Net is gross through jury-service-class deductions. Parental pay is on the slip and outside that sum.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save category" : "Add category"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-payslip-category">Delete category</button>' : ""}
@@ -1316,6 +1318,7 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
         label: category.label,
         amountPence: amount || 0,
         ...(category.kind === "extra" ? { extra: true } : {}),
+        ...(category.kind === "parental" ? { inNet: false } : {}),
       });
     }
   }
@@ -1392,17 +1395,6 @@ function openItem(kind, list, id) {
 function askDelete(target, id, label, copy) {
   modal = { kind: "delete", target, id, label, copy };
   renderModal();
-}
-
-function togglePaid(list, id) {
-  applyLocal(() => {
-    const item = findIn(list, id);
-    if (!item) return;
-    const months = new Set(item.paidMonths || []);
-    if (months.has(viewMonth)) months.delete(viewMonth);
-    else months.add(viewMonth);
-    item.paidMonths = [...months].sort();
-  });
 }
 
 function openLocalWorkbook() {
@@ -1498,8 +1490,6 @@ document.addEventListener("click", async (event) => {
   if (action === "add-donation") openItem("donation");
   if (action === "edit-donation") openItem("donation", "donations", id);
 
-  if (action === "toggle-bill") { event.preventDefault(); togglePaid("bills", id); }
-  if (action === "toggle-sub") { event.preventDefault(); togglePaid("cardSubs", id); }
   if (action === "toggle-oneoff") {
     event.preventDefault();
     applyLocal(() => {
@@ -1867,7 +1857,6 @@ async function saveMonthly(event) {
         dueDay: dueRoll === "firstWorking" ? (Number(data.get("dueDay")) || 1) : requireDueDay(data.get("dueDay")),
         dueRoll,
         paidFrom: data.get("paidFrom") === "cash" ? "cash" : "card",
-        paidMonths: modal.item?.paidMonths || [],
       };
     },
   });
@@ -1986,7 +1975,9 @@ async function savePayslipCategory(event) {
   }
   const existing = modal.item || {};
   const special = ["bonus", "benefits", "sacrifice", "tax", "ni"].includes(existing.kind);
-  const kind = special ? existing.kind : (data.get("kind") === "extra" ? "extra" : "deduction");
+  const kind = special ? existing.kind : (
+    data.get("kind") === "extra" ? "extra" : data.get("kind") === "parental" ? "parental" : "deduction"
+  );
   const payload = {
     id: existing.id || uid(),
     label,
@@ -2051,7 +2042,6 @@ async function saveSub(event) {
         name: requireName(data.get("name"), "name"),
         amountPence: requireMoney(data.get("amount"), "amount"),
         dueDay: requireDueDay(data.get("dueDay")),
-        paidMonths: modal.item?.paidMonths || [],
       };
       if (data.get("cardId")) payload.cardId = data.get("cardId");
       return payload;

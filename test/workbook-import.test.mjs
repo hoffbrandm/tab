@@ -21,6 +21,13 @@ test("a synthetic workbook maps into household lines and keeps friend tabs", asy
   assert.ok(household.bills.some((item) => item.name === "Phone contract"));
   assert.equal(household.bills.some((item) => item.name === "MOT"), false);
   assert.equal(household.bills.some((item) => item.name === "Insurance saving"), false);
+  assert.equal("paidMonths" in household.bills.find((item) => item.name === "Mortgage"), false);
+  assert.equal(report.reserves, 3);
+  assert.ok(household.reserves.some((item) => item.name === "Cleaner" && item.amountPence === 8000));
+  assert.ok(household.reserves.some((item) => item.name === "Nails"));
+  assert.ok(household.reserves.some((item) => item.name === "£30 a day"));
+  assert.equal(household.reserves.some((item) => item.name === "Insurance saving"), false);
+  assert.equal(household.pendings[0].note, "Flight hold");
   assert.equal(report.envelopes, 1);
   assert.equal(household.envelopes[0].weeklyPence, 7000);
   assert.equal(report.cardSubs, 1);
@@ -96,7 +103,9 @@ test("a synthetic workbook maps into household lines and keeps friend tabs", asy
   assert.equal(kept.household.bills[0].id, "keep-me");
 
   const flow = cashflowForMonth(store.household, "2026-04", new Date("2026-04-10T12:00:00Z"));
-  assert.equal(flow.incomePence, 242000);
+  assert.equal(flow.incomePence, 238000);
+  assert.ok(store.household.payslips[0].otherDeductions.some((row) => row.label === "Smp" || row.label === "SMP"));
+  assert.equal(store.household.payslips[0].otherDeductions.find((row) => /smp/i.test(row.label)).inNet, false);
   assert.ok(flow.pendingPence >= 6000);
   const summary = reportLines(report);
   assert.ok(summary.landed.some((item) => item[0] === "Income" && item[1] === 2));
@@ -104,7 +113,7 @@ test("a synthetic workbook maps into household lines and keeps friend tabs", asy
   assert.equal(importHasData(report), true);
   assert.equal(importHasData({
     incomes: 0, bills: 0, envelopes: 0, cardSubs: 0, cards: 0, pendings: 0,
-    oneOffs: 0, annualBills: 0, pots: 0, pensions: 0, payslips: 0, donations: 0, skipped: 2,
+    oneOffs: 0, annualBills: 0, pots: 0, pensions: 0, payslips: 0, donations: 0, reserves: 0, skipped: 2,
   }), false);
 });
 

@@ -19,6 +19,7 @@ import {
   householdHasData,
   incomeFromPayslipsPence,
   isCurrentMonth,
+  isParentalPayLabel,
   jumpToCurrentMonthLabel,
   monthlyIsAllowed,
   payslipAniPence,
@@ -116,10 +117,11 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
   assert.equal(flow.oneOffsPence, 40000);
   assert.equal(flow.oneOffs.map((item) => item.name).join(), "MOT");
   assert.equal(flow.envelopesMonthlyPence, 28000);
-  assert.equal(flow.outPence, 218000);
-  assert.equal(flow.leftPence, 282000);
-  assert.equal(flow.committedOutPence, 218000);
-  assert.equal(flow.potPence, 282000);
+  assert.equal(flow.cardOutPence, 11000);
+  assert.equal(flow.outPence, 229000);
+  assert.equal(flow.leftPence, 271000);
+  assert.equal(flow.committedOutPence, 229000);
+  assert.equal(flow.potPence, 271000);
   assert.equal(flow.daysInMonth, 31);
   assert.equal(annualReservePence(household.annualBills), 10000);
 
@@ -128,8 +130,8 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
     reserves: [{ id: "r-1", name: "Daily float", amountPence: 90000 }],
   }, "2026-08", today);
   assert.equal(reserved.reservePence, 90000);
-  assert.equal(reserved.outPence, 308000);
-  assert.equal(reserved.leftPence, 192000);
+  assert.equal(reserved.outPence, 319000);
+  assert.equal(reserved.leftPence, 181000);
 
   const future = cashflowForMonth(household, "2026-09", today);
   assert.equal(future.billsPence, 140000);
@@ -142,8 +144,8 @@ test("a monthly due on the 21st counts as allowed on or after the 21st", () => {
   assert.equal(monthlyIsAllowed(item, "2026-08", 20), false);
   assert.equal(monthlyIsAllowed(item, "2026-08", 21), true);
   assert.equal(monthlyIsAllowed(item, "2026-08", 22), true);
-  const ticked = { ...item, paidMonths: ["2026-08"] };
-  assert.equal(monthlyIsAllowed(ticked, "2026-08", 10), true);
+  const leftoverTick = { ...item, paidMonths: ["2026-08"] };
+  assert.equal(monthlyIsAllowed(leftoverTick, "2026-08", 10), false);
   const before = cashflowForMonth({
     ...emptyHousehold(),
     monthlies: [item],
@@ -184,13 +186,15 @@ test("first working day skips a weekend 1st", () => {
   assert.equal(monthlyIsAllowed(item, "2026-05", 1), true);
 });
 
-test("a ticked card sub counts as allowed before its due day", () => {
-  const ticked = {
+test("card subs sit in Out for the month and paidMonths is not a tick", () => {
+  const leftover = {
     ...household,
     cardSubs: [{ id: "s-2", name: "Later sub", amountPence: 9000, dueDay: 28, paidMonths: ["2026-08"] }],
   };
-  const flow = cashflowForMonth(ticked, "2026-08", new Date("2026-08-10T12:00:00Z"));
-  assert.equal(flow.allowedPence, 9000);
+  const flow = cashflowForMonth(leftover, "2026-08", new Date("2026-08-10T12:00:00Z"));
+  assert.equal(flow.allowedPence, 0);
+  assert.equal(flow.cardOutPence, 9000);
+  assert.equal(flow.outPence, leftover.bills.reduce((total, item) => total + item.amountPence, 0) + 9000 + 10000 + 40000 + 28000);
 });
 
 test("pending amounts sit with card balances against the allowed-so-far", () => {
@@ -208,7 +212,7 @@ test("pending amounts sit with card balances against the allowed-so-far", () => 
 test("a new-month reset clears ticks for that month only", () => {
   const copy = structuredClone(household);
   resetMonthTicks(copy, "2026-08");
-  assert.deepEqual(copy.bills[0].paidMonths, []);
+  assert.deepEqual(copy.bills[0].paidMonths, ["2026-08"]);
   assert.deepEqual(copy.envelopes[0].happenedDates, []);
   assert.equal(copy.envelopes[0].name, "Food shop");
   assert.equal(copy.envelopes[0].weeklyPence, 7000);
@@ -591,7 +595,11 @@ test("payslip categories stay available after a later slip leaves them unused", 
   assert.ok(later.some((item) => item.label === "Cycle scheme"));
 });
 
-test("payslip net is gross plus extras minus deductions", () => {
+test("payslip net is gross through jury-service deductions and skips parental pay", () => {
+  assert.equal(isParentalPayLabel("SMP"), true);
+  assert.equal(isParentalPayLabel("Enhanced maternity"), true);
+  assert.equal(isParentalPayLabel("OSPP"), true);
+  assert.equal(isParentalPayLabel("Jury service"), false);
   assert.equal(payslipNetPence({
     grossPence: 400000,
     bonusPence: 20000,
@@ -600,10 +608,59 @@ test("payslip net is gross plus extras minus deductions", () => {
     taxPence: 60000,
     niPence: 20000,
     otherDeductions: [
-      { id: "gym", label: "Gym", amountPence: 4000 },
-      { id: "cycle", label: "Cycle", amountPence: 8000 },
+      { id: "gym", label: "Gym flex", amountPence: 4000 },
+      { id: "cycle", label: "Cycle scheme", amountPence: 8000 },
+      { id: "jury", label: "Jury service", amountPence: 2000 },
+      { id: "smp", label: "SMP", amountPence: 15000 },
+      { id: "mat", label: "Enhanced maternity", amountPence: 80000, inNet: false },
     ],
-  }), 303000);
+  }), 301000);
+  assert.equal(payslipNetPence({
+    grossPence: 400000,
+    netPence: 999999,
+    otherDeductions: [{ id: "smp", label: "SMP", amountPence: 15000 }],
+  }), 400000);
+});
+
+test("Home In uses calculated payslip net, not a typed take-home leftover", () => {
+  const hh = {
+    ...emptyHousehold(),
+    people: [{ id: "you", name: "You" }],
+    payslips: [slipFor("you", "2026-08", 999999, {
+      grossPence: 300000,
+      taxPence: 40000,
+      niPence: 20000,
+      netPence: 999999,
+    })],
+  };
+  const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-10T12:00:00Z"));
+  assert.equal(flow.incomePence, 240000);
+});
+
+test("weekly ticks and purchased one-offs do not move Out", () => {
+  const hh = {
+    ...emptyHousehold(),
+    weeklyRules: [{
+      id: "food",
+      name: "Food shop",
+      amountPence: 7000,
+      cadence: "times",
+      timesPerMonth: 4,
+      tickedKeys: [],
+    }],
+    oneOffs: [{ id: "o-1", name: "MOT", month: "2026-08", estimatePence: 40000, purchased: false }],
+  };
+  const today = new Date("2026-08-10T12:00:00Z");
+  const before = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(before.outPence, 68000);
+  toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
+  const afterTick = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(afterTick.outPence, before.outPence);
+  assert.equal(afterTick.weeklySlots.filter((slot) => slot.ticked).length, 1);
+  hh.oneOffs[0].purchased = true;
+  const afterBuy = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(afterBuy.outPence, before.outPence);
+  assert.equal(afterBuy.oneOffsPence, 40000);
 });
 
 test("a new payslip defaults to the previous month’s used categories", () => {
