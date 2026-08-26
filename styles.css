@@ -571,6 +571,8 @@ legend { padding: 0; margin-bottom: 7px; }
   gap: 2px;
 }
 .month-switch strong { letter-spacing: -0.03em; }
+.cash-hero { padding-top: 18px; }
+.cash-hero h1 { font-size: clamp(2.4rem, 9vw, 3.3rem); }
 .month-nav {
   border: 1px solid var(--line);
   background: var(--card);

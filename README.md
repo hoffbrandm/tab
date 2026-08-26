@@ -79,6 +79,8 @@ An older gist with only `friends` and `transactions` still loads. The household 
 
 Hash routes keep refresh and Back in the same place (`#/home`, `#/planned`, `#/tabs`, `#/friend/<id>`, and the rest under More).
 
+On More you can upload a Numbers/Excel `.xlsx` once. It maps the Main / Payslips / Annually / Where’s the money / Charity sheets into the household document and writes that to the private gist. Friend tabs are left alone. If household lines already exist, the import asks before replacing them. The public repo never contains your workbook.
+
 ## Run it locally
 
 This project has no third-party dependencies.

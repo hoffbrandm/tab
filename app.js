@@ -9,7 +9,6 @@ import {
   householdHasData,
   donationGrossPence,
   emptyHousehold,
-  envelopeMonthlyPence,
   giftAidGrossPence,
   happenedInMonth,
   monthKey,
@@ -292,22 +291,22 @@ function shell({ eyebrow, title, lede, extra = "", body, month = false, back = "
       <span></span>
     </header>
     <div class="sync-row">${syncChip()}</div>
-    ${month ? monthSwitcher() : ""}
-    <div class="intro compact">
+    ${month ? monthSwitcher({ reset: month === "reset" }) : ""}
+    ${title ? `<div class="intro compact">
       <p class="eyebrow">${esc(eyebrow)}</p>
       <h1>${esc(title)}</h1>
       ${lede ? `<p class="lede">${lede}</p>` : ""}
-    </div>
+    </div>` : ""}
     ${extra}
     ${body}
     ${dock()}
   </section>`;
 }
 
-function monthSwitcher() {
+function monthSwitcher({ reset = false } = {}) {
   return `<div class="month-switch">
     <button type="button" class="month-nav" data-action="month-prev" aria-label="Previous month">‹</button>
-    <div><strong>${esc(monthLabel(viewMonth))}</strong>${viewMonth === monthKey() ? "" : `<button type="button" class="text-button" data-action="month-now">This month</button>`}</div>
+    <div><strong>${esc(monthLabel(viewMonth))}</strong>${viewMonth === monthKey() ? "" : `<button type="button" class="text-button" data-action="month-now">This month</button>`}${reset ? `<button type="button" class="text-button" data-action="reset-month">Reset ticks</button>` : ""}</div>
     <button type="button" class="month-nav" data-action="month-next" aria-label="Next month">›</button>
   </div>`;
 }
@@ -345,44 +344,34 @@ function emptyLines(text, action, label) {
 function cashflowScreen() {
   const hh = household();
   const flow = cashflowForMonth(hh, viewMonth, new Date());
-  const verdict = spendVerdict(flow.overUnderPence, formatMoney);
+  const leftoverClass = flow.potPence < 0 ? "negative" : "neutral";
   const verdictClass = flow.overUnderPence < 0 ? "negative" : flow.overUnderPence > 0 ? "positive" : "neutral";
-  const landing = hh.payslips.filter((slip) => slip.moneyLandsMonth === viewMonth);
 
   return shell({
     eyebrow: "This month",
-    title: "Cashflow.",
-    lede: "Add a line. Tick it when it happens.",
-    month: true,
-    extra: `<div class="dash">
-        <div class="stat"><span>In</span><strong>${formatMoney(flow.incomePence)}</strong></div>
-        <div class="stat"><span>Out</span><strong>${formatMoney(flow.committedOutPence)}</strong></div>
-        <div class="stat"><span>Left</span><strong class="${flow.potPence < 0 ? "negative" : ""}">${formatMoney(flow.potPence)}</strong></div>
-      </div>
-      <section class="verdict ${verdictClass}">
-        <p>${esc(verdict)}</p>
-        <p class="helper">${esc(savingLine(flow))} Cards ${formatMoney(flow.cardBalancesPence)}${flow.pendingPence ? ` + pending ${formatMoney(flow.pendingPence)}` : ""} vs allowed so far ${formatMoney(flow.allowedWithSubsPence)}.</p>
-      </section>
-      <button class="secondary wide" type="button" data-action="reset-month">Reset ${esc(monthLabel(viewMonth))} ticks</button>`,
+    title: "",
+    month: "reset",
+    extra: `<section class="friend-hero cash-hero">
+        <p class="eyebrow">This month</p>
+        <h1 class="${leftoverClass}">${formatMoney(flow.potPence)}</h1>
+        <p class="balance-label">Left after monthly out</p>
+        <p class="balance-value ${verdictClass}">${esc(spendVerdict(flow.overUnderPence, formatMoney))}</p>
+        <p class="helper">${esc(savingLine(flow))} In ${formatMoney(flow.incomePence)} · Out ${formatMoney(flow.committedOutPence)} · Cards ${formatMoney(flow.cardBalancesPence)}${flow.pendingPence ? ` + pending ${formatMoney(flow.pendingPence)}` : ""}.</p>
+      </section>`,
     body: `
       <section class="block">
         ${sectionHead("Income", "add-income", "Add")}
-        ${hh.incomes.length ? hh.incomes.map((item) => {
-          const person = personById(item.personId);
-          const slip = landing.find((row) => row.personId === item.personId);
-          const hint = slip ? `Payslip net ${formatMoney(slip.netPence)}${payslipIsConfirmed(slip) ? "" : " · forecast"}` : "";
-          return lineRow({
-            edit: "edit-income",
-            id: item.id,
-            title: item.label,
-            detail: [person?.name, hint].filter(Boolean).join(" · "),
-            amount: formatMoney(item.amountPence),
-          });
-        }).join("") : emptyLines("Typed monthly take-home for each of you. Not pulled from a bank.", "add-income", "Add income")}
+        ${hh.incomes.length ? hh.incomes.map((item) => lineRow({
+          edit: "edit-income",
+          id: item.id,
+          title: item.label,
+          detail: personById(item.personId)?.name || "",
+          amount: formatMoney(item.amountPence),
+        })).join("") : ""}
       </section>
       <section class="block">
         ${sectionHead("Monthly", "add-bill", "Add")}
-        ${hh.bills.length ? hh.bills.map((item) => lineRow({
+        ${hh.bills.map((item) => lineRow({
           edit: "edit-bill",
           id: item.id,
           title: item.name,
@@ -390,81 +379,73 @@ function cashflowScreen() {
           amount: formatMoney(item.amountPence),
           tickAction: "toggle-bill",
           ticked: paidInMonth(item, viewMonth),
-          tickLabel: paidInMonth(item, viewMonth) ? "Paid this period" : "Not paid this period",
-        })).join("") : emptyLines("Mortgage, council tax, energy — amount, due day, tick when paid.", "add-bill", "Add a monthly")}
+          tickLabel: paidInMonth(item, viewMonth) ? "Paid" : "Not paid",
+        })).join("")}
       </section>
       <section class="block">
         ${sectionHead("Weekly", "add-envelope", "Add")}
-        ${hh.envelopes.length ? hh.envelopes.map((item) => {
+        ${hh.envelopes.map((item) => {
           const happened = happenedInMonth(item, viewMonth);
           return lineRow({
             edit: "edit-envelope",
             id: item.id,
             title: item.name,
-            detail: `${formatMoney(item.weeklyPence)} a week · ${happened.length} this month · month plan ${formatMoney(envelopeMonthlyPence(item.weeklyPence, viewMonth))}`,
+            detail: happened.length ? `${happened.length} this month` : "Tick when it happened",
             amount: formatMoney(item.weeklyPence),
             tickAction: "tick-envelope",
             ticked: viewMonth === monthKey() ? happened.includes(today()) : happened.includes(`${viewMonth}-01`),
-            tickLabel: "Mark this week happened",
+            tickLabel: "This week happened",
           });
-        }).join("") : emptyLines("Food shop, Amazon, and other weekly slots. Tick when that week happened.", "add-envelope", "Add a weekly slot")}
-      </section>
-      <section class="block">
-        ${sectionHead("Card subscriptions", "add-sub", "Add")}
-        ${hh.cardSubs.length ? hh.cardSubs.map((item) => {
-          const allowed = paidInMonth(item, viewMonth) || (flow.dayOfMonth > 0 && item.dueDay <= flow.dayOfMonth);
-          const card = hh.cards.find((row) => row.id === item.cardId);
-          return lineRow({
-            edit: "edit-sub",
-            id: item.id,
-            title: item.name,
-            detail: `Due ${ordinalDay(item.dueDay)}${card ? ` · ${card.name}` : ""} · ${allowed ? "counts as allowed" : "not yet allowed"}`,
-            amount: formatMoney(item.amountPence),
-            tickAction: "toggle-sub",
-            ticked: paidInMonth(item, viewMonth),
-            tickLabel: paidInMonth(item, viewMonth) ? "Allowed this period" : "Mark allowed",
-          });
-        }).join("") : emptyLines("Recurring card subs. They count as allowed once the due day arrives, or when you tick them.", "add-sub", "Add a subscription")}
+        }).join("")}
       </section>
       <section class="block">
         ${sectionHead("Cards", "add-card", "Add")}
-        ${hh.cards.length ? hh.cards.map((item) => lineRow({
+        ${hh.cards.map((item) => lineRow({
           edit: "edit-card",
           id: item.id,
           title: item.name,
-          detail: `${item.pendingPence ? `Pending ${formatMoney(item.pendingPence)} · ` : ""}${item.updatedOn ? `Updated ${dateLabel(item.updatedOn)}` : "Update today’s figure"}`,
+          detail: item.pendingPence ? `Pending ${formatMoney(item.pendingPence)}` : "Balance",
           amount: formatMoney(item.balancePence),
-        })).join("") : emptyLines("Balance and any pending amount.", "add-card", "Add a card")}
-      </section>
-      <section class="block">
-        ${sectionHead("Pending", "add-pending", "Add")}
-        ${hh.pendings.length ? hh.pendings.map((item) => lineRow({
+        })).join("")}
+        ${hh.pendings.map((item) => lineRow({
           edit: "edit-pending",
           id: item.id,
           title: item.name,
-          detail: "Counts with the cards",
+          detail: "Pending",
           amount: formatMoney(item.amountPence),
-        })).join("") : emptyLines("Holds and pending card amounts.", "add-pending", "Add pending")}
+        })).join("")}
+        ${hh.cards.length || hh.pendings.length ? `<button class="text-button" type="button" data-action="add-pending">Add pending</button>` : ""}
       </section>
-      <section class="block">
-        ${sectionHead("This month’s one-offs", "add-oneoff", "Add")}
-        ${flow.oneOffs.length ? flow.oneOffs.map((item) => lineRow({
+      ${hh.cardSubs.length ? `<section class="block">
+        ${sectionHead("Card subs", "add-sub", "Add")}
+        ${hh.cardSubs.map((item) => lineRow({
+          edit: "edit-sub",
+          id: item.id,
+          title: item.name,
+          detail: `Due ${ordinalDay(item.dueDay)}`,
+          amount: formatMoney(item.amountPence),
+          tickAction: "toggle-sub",
+          ticked: paidInMonth(item, viewMonth),
+          tickLabel: paidInMonth(item, viewMonth) ? "Allowed" : "Not yet",
+        })).join("")}
+      </section>` : `<section class="block">${sectionHead("Card subs", "add-sub", "Add")}</section>`}
+      ${flow.oneOffs.length ? `<section class="block">
+        ${sectionHead("This month", "add-oneoff", "Add")}
+        ${flow.oneOffs.map((item) => lineRow({
           edit: "edit-oneoff",
           id: item.id,
           title: item.name,
-          detail: item.purchased ? "Purchased" : "Still planned",
+          detail: item.purchased ? "Purchased" : "Planned",
           amount: formatMoney(item.estimatePence),
           tickAction: "toggle-oneoff",
           ticked: item.purchased,
           tickLabel: item.purchased ? "Purchased" : "Not purchased",
-        })).join("") : emptyLines("Anything on Planned for this month shows here automatically.", "go-planned", "Open planned")}
-      </section>
-      <section class="block">
-        ${sectionHead("Annual reserve", "go-annual", "Edit")}
-        ${hh.annualBills.length
-          ? `<article class="line"><div class="line-main static"><span class="line-copy"><strong>Set aside this month</strong><small>Total annual bills ÷ 12</small></span><span class="line-amount">${formatMoney(flow.annualReservePence)}</span></div></article>`
-          : emptyLines("Insurance, MOT, memberships. The monthly reserve feeds this cashflow.", "go-annual", "Add annual bills")}
-      </section>
+        })).join("")}
+      </section>` : ""}
+      ${hh.annualBills.length ? `<section class="block">
+        ${sectionHead("Set aside", "go-annual", "Edit")}
+        <article class="line"><div class="line-main static"><span class="line-copy"><strong>Annual reserve</strong></span><span class="line-amount">${formatMoney(flow.annualReservePence)}</span></div></article>
+      </section>` : ""}
     `,
   });
 }
@@ -475,8 +456,8 @@ function plannedScreen() {
   const later = items.filter((item) => item.month !== viewMonth);
   return shell({
     eyebrow: "Planned",
-    title: "One-offs.",
-    lede: "Item, month, estimate, purchased. This month’s rows land on Home by themselves.",
+    title: "Planned.",
+    lede: "This month’s items show on Home.",
     month: true,
     body: `
       <section class="block">
@@ -684,7 +665,7 @@ function moreScreen() {
   return shell({
     eyebrow: "More",
     title: "More.",
-    lede: "The quieter corners, plus a one-time spreadsheet import.",
+    lede: "",
     body: `
       <section class="nav-grid">
         ${links.map(([name, title, detail]) => `<a class="friend-card" href="#/${name}" data-action="go" data-screen="${name}">
