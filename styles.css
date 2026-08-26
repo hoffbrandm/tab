@@ -553,6 +553,181 @@ legend { padding: 0; margin-bottom: 7px; }
   }
 }
 
+.app-shell { padding-bottom: calc(128px + env(safe-area-inset-bottom)); }
+.intro.compact { padding: 18px 2px 14px; }
+.intro.compact h1 { font-size: clamp(1.85rem, 8vw, 2.7rem); }
+
+.month-switch {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.month-switch div {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+}
+.month-switch strong { letter-spacing: -0.03em; }
+.month-nav {
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: 12px;
+  min-height: 44px;
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.dash {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+.dash.single { grid-template-columns: 1fr; }
+.stat {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px 10px;
+  display: grid;
+  gap: 4px;
+}
+.stat span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.stat strong {
+  font-size: 1.02rem;
+  letter-spacing: -0.03em;
+}
+
+.verdict {
+  border-radius: 16px;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  margin-bottom: 8px;
+}
+.verdict p { margin: 0 0 8px; font-weight: 750; }
+.verdict p:last-child { margin-bottom: 0; }
+.verdict.positive { background: var(--green-soft); border-color: transparent; }
+.verdict.negative { background: var(--red-soft); border-color: transparent; }
+
+.block { margin-top: 8px; }
+.line {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.tick {
+  flex: none;
+  width: 42px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 800;
+  border-radius: 10px;
+}
+.tick.on { color: var(--green); }
+.line-main {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  padding: 13px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.line-main.static { cursor: default; }
+.line-copy { display: grid; gap: 3px; min-width: 0; }
+.line-copy small { color: var(--muted); font-size: 0.78rem; line-height: 1.35; }
+.line-amount { font-weight: 750; white-space: nowrap; font-size: 0.92rem; }
+.empty-lines {
+  color: var(--muted);
+  padding: 8px 0 16px;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+.empty-lines p { margin: 0 0 4px; }
+
+.dock {
+  position: fixed;
+  z-index: 4;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: min(100%, 680px);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
+  background: rgba(246, 245, 242, 0.94);
+  border-top: 1px solid var(--line);
+  backdrop-filter: blur(10px);
+}
+.dock-item {
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  text-decoration: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 750;
+  border-radius: 12px;
+}
+.dock-item.active { color: var(--ink); background: #e8e8e3; }
+
+.nav-grid { display: grid; gap: 10px; }
+.ani-controls,
+.extra-actions {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.ani-controls { grid-template-columns: 1fr 1fr; }
+.inline-label { margin: 0 0 10px; }
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-weight: 650;
+}
+.check-row input { width: 22px; min-height: 22px; margin-top: 2px; flex: none; }
+.hidden { display: none !important; }
+.deduction-row {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 13px;
+  background: #ecebe6;
+}
+.app-shell .floating { bottom: calc(78px + env(safe-area-inset-bottom)); }
+
+@media (min-width: 700px) {
+  .app-shell { padding-bottom: 48px; }
+  .dock {
+    position: static;
+    transform: none;
+    width: 100%;
+    margin-top: 28px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--card);
+    padding: 8px;
+  }
+  .app-shell .floating { bottom: auto; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation: none !important;

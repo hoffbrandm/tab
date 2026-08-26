@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { emptyHousehold } from "../household.js";
 import { emptyStore, parseStore, StoreError } from "../store.js";
 
 const friend = {
@@ -22,7 +23,60 @@ const expense = {
 };
 
 test("empty store is the current document shape", () => {
-  assert.deepEqual(emptyStore(), { version: 1, friends: [], transactions: [] });
+  assert.deepEqual(emptyStore(), { version: 1, friends: [], transactions: [], household: emptyHousehold() });
+});
+
+test("a v1 gist without household still loads and gains an empty household", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [friend],
+    transactions: [expense],
+  });
+  assert.deepEqual(parsed.household, emptyHousehold());
+  assert.equal(parsed.friends[0].name, "Ben");
+});
+
+test("household lines are normalised and unknown fields are dropped", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      people: [{ id: "you", name: "  Alex  ", niNumber: "drop-this" }],
+      incomes: [{ id: "in-1", personId: "you", label: " Take-home ", amountPence: 250000, extra: true }],
+      bills: [{ id: "b-1", name: "Mortgage", amountPence: 120000, dueDay: 1, paidMonths: ["2026-08"] }],
+      envelopes: [],
+      cards: [],
+      cardSubs: [],
+      oneOffs: [{ id: "o-1", name: "MOT", month: "2026-08", estimatePence: 40000, purchased: false }],
+      annualBills: [{ id: "a-1", name: "Insurance", amountPence: 240000, month: 6 }],
+      pots: [{ id: "p-1", name: "Emergency", amountPence: 100000, updatedOn: "2026-08-01" }],
+      pensions: [{ id: "pen-1", name: "Workplace", status: "active", note: "", policyNumber: "nope" }],
+      payslips: [],
+      donations: [{
+        id: "d-1",
+        who: "Alex",
+        charity: "Example",
+        date: "2026-05-02",
+        amountPence: 2000,
+        giftAid: true,
+      }],
+    },
+  });
+  assert.equal(parsed.household.people[0].name, "Alex");
+  assert.equal("niNumber" in parsed.household.people[0], false);
+  assert.equal("policyNumber" in parsed.household.pensions[0], false);
+  assert.equal(parsed.household.incomes[0].label, "Take-home");
+  assert.equal(parsed.household.annualBills[0].month, 6);
+});
+
+test("household amounts must be whole pence", () => {
+  assert.throws(() => parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: { ...emptyHousehold(), bills: [{ id: "b-1", name: "Gas", amountPence: 10.5, dueDay: 1 }] },
+  }), StoreError);
 });
 
 test("a valid store is normalised", () => {

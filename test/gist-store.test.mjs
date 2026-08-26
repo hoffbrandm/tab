@@ -9,9 +9,10 @@ import {
   storeHasTabData,
   storeToGistContent,
 } from "../gist-store.js";
-import { emptyStore } from "../store.js";
+import { emptyHousehold } from "../household.js";
+import { emptyStore, parseStore } from "../store.js";
 
-const store = {
+const store = parseStore({
   version: 1,
   friends: [{ id: "ben", name: "Ben", email: "", createdAt: "2026-08-25T10:00:00.000Z" }],
   transactions: [{
@@ -25,7 +26,7 @@ const store = {
     createdAt: "2026-08-25T10:01:00.000Z",
     myShareAdjustmentPence: 0,
   }],
-};
+});
 
 function jsonResponse(status, body) {
   return new Response(JSON.stringify(body), {
@@ -88,6 +89,12 @@ test("store documents round-trip through gist file content", () => {
   assert.deepEqual(parseGistContent(""), emptyStore());
   assert.equal(storeHasTabData(store), true);
   assert.equal(storeHasTabData(emptyStore()), false);
+  assert.equal(storeHasTabData({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: { ...emptyHousehold(), pots: [{ id: "p-1", name: "Bills", amountPence: 1, updatedOn: "2026-08-01" }] },
+  }), true);
 });
 
 test("a first sign-in creates a private gist when none exists", async () => {
