@@ -495,7 +495,7 @@ legend { padding: 0; margin-bottom: 7px; }
   position: fixed;
   z-index: 20;
   left: 50%;
-  bottom: 28px;
+  bottom: calc(86px + env(safe-area-inset-bottom));
   transform: translate(-50%, 80px);
   background: var(--ink);
   color: #fff;
@@ -530,6 +530,7 @@ legend { padding: 0; margin-bottom: 7px; }
 }
 
 @media (min-width: 700px) {
+  #toast { bottom: 28px; }
   .shell { padding-top: 34px; padding-bottom: 48px; }
   .friend-card:hover {
     box-shadow: 0 5px 17px rgba(28, 37, 33, 0.08);
