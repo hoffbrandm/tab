@@ -573,6 +573,130 @@ legend { padding: 0; margin-bottom: 7px; }
 .month-switch strong { letter-spacing: -0.03em; }
 .cash-hero { padding-top: 18px; }
 .cash-hero h1 { font-size: clamp(2.4rem, 9vw, 3.3rem); }
+.statement {
+  display: grid;
+  gap: 10px;
+  padding: 20px 2px 8px;
+}
+.statement-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+}
+.statement-row span {
+  color: var(--muted);
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.78rem;
+}
+.statement-row.in strong,
+.statement-row.out strong {
+  font-size: clamp(1.45rem, 6vw, 1.9rem);
+  letter-spacing: -0.04em;
+}
+.statement-row.left {
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  align-items: flex-end;
+}
+.statement-row.left span {
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+.statement-row.left strong {
+  font-size: clamp(2.3rem, 9vw, 3.2rem);
+  letter-spacing: -0.055em;
+  line-height: 0.95;
+}
+.card-balance-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.card-balance-row .line-main { padding-right: 0; }
+.card-balance-row .money-input {
+  width: 118px;
+  flex: none;
+}
+.home-add-card {
+  display: grid;
+  grid-template-columns: 1fr 118px auto;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 0 4px;
+}
+.home-add-card input {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0 12px;
+  background: var(--card);
+}
+.pending-table { display: grid; gap: 8px; }
+.pending-head,
+.pending-row {
+  display: grid;
+  grid-template-columns: 118px 1fr 36px;
+  gap: 8px;
+  align-items: center;
+}
+.pending-head {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.pending-row input {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0 12px;
+  background: var(--card);
+}
+.home-planned {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  padding: 4px 14px 12px;
+}
+.home-planned summary {
+  cursor: pointer;
+  font-weight: 800;
+  padding: 12px 0;
+  letter-spacing: -0.02em;
+}
+.payslip-cats {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 8px;
+  padding: 0;
+}
+.payslip-cats h3 {
+  margin: 8px 0 0;
+  font-size: 1rem;
+}
+.payslip-cat-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px auto;
+  gap: 10px;
+  align-items: center;
+}
+.payslip-cat-name { font-weight: 750; }
+.payslip-net {
+  margin: 8px 0 14px;
+  font-size: 1.05rem;
+}
+.payslip-net strong {
+  font-size: 1.4rem;
+  letter-spacing: -0.03em;
+}
 .month-nav {
   border: 1px solid var(--line);
   background: var(--card);

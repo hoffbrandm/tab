@@ -6,21 +6,28 @@ import {
   aniFromHousehold,
   aniProjection,
   annualReservePence,
+  addPendingRow,
   cashflowForMonth,
   currentPeriodHint,
   currentUkTaxYear,
   datesOfWeekdayInMonth,
+  defaultCategoriesForNewPayslip,
   effectiveDueDate,
   emptyHousehold,
   extraSacrificeRatio,
   giftAidGrossPence,
   householdHasData,
   incomeFromPayslipsPence,
+  isCurrentMonth,
+  jumpToCurrentMonthLabel,
   monthlyIsAllowed,
   payslipAniPence,
   payslipCategoriesOf,
   payslipIsConfirmed,
+  payslipNetPence,
   payslipRecordLabels,
+  pendingListTotalPence,
+  pendingsForMonth,
   potsNeedCurrentMonthLog,
   rememberPayslipCategories,
   resetMonthTicks,
@@ -100,21 +107,34 @@ test("cashflow income is net pay from payslips that land in the month", () => {
   assert.equal(july.incomePence, 0);
 });
 
-test("cashflow totals use this month’s one-offs and annual reserve / 12", () => {
-  const flow = cashflowForMonth(household, "2026-08", new Date("2026-08-10T12:00:00Z"));
+test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const flow = cashflowForMonth(household, "2026-08", today);
   assert.equal(flow.incomePence, 500000);
   assert.equal(flow.billsPence, 140000);
   assert.equal(flow.annualReservePence, 10000);
   assert.equal(flow.oneOffsPence, 40000);
   assert.equal(flow.oneOffs.map((item) => item.name).join(), "MOT");
-  assert.equal(flow.committedOutPence, 190000);
-  assert.equal(flow.potPence, 310000);
+  assert.equal(flow.envelopesMonthlyPence, 28000);
+  assert.equal(flow.outPence, 218000);
+  assert.equal(flow.leftPence, 282000);
+  assert.equal(flow.committedOutPence, 218000);
+  assert.equal(flow.potPence, 282000);
   assert.equal(flow.daysInMonth, 31);
-  assert.equal(flow.dayOfMonth, 10);
-  assert.equal(flow.allowedPence, 2000);
-  assert.equal(flow.cardBalancesPence, 100000);
-  assert.equal(flow.overUnderPence, -98000);
   assert.equal(annualReservePence(household.annualBills), 10000);
+
+  const reserved = cashflowForMonth({
+    ...household,
+    reserves: [{ id: "r-1", name: "Daily float", amountPence: 90000 }],
+  }, "2026-08", today);
+  assert.equal(reserved.reservePence, 90000);
+  assert.equal(reserved.outPence, 308000);
+  assert.equal(reserved.leftPence, 192000);
+
+  const future = cashflowForMonth(household, "2026-09", today);
+  assert.equal(future.billsPence, 140000);
+  assert.equal(future.envelopesMonthlyPence, 28000);
+  assert.equal(spendVerdict(future.overUnderPence, formatMoney, { month: "2026-09", today }), "");
 });
 
 test("a monthly due on the 21st counts as allowed on or after the 21st", () => {
@@ -194,16 +214,15 @@ test("a new-month reset clears ticks for that month only", () => {
   assert.equal(copy.envelopes[0].weeklyPence, 7000);
   const today = new Date("2026-08-10T12:00:00Z");
   const over = cashflowForMonth(household, "2026-08", today);
-  assert.equal(over.overUnderPence < 0, true);
-  assert.equal(savingLine(over, today), "Spending ahead of the pot.");
-  const covered = cashflowForMonth({
+  assert.equal(over.leftPence > 0, true);
+  assert.equal(savingLine(over, today), "This month can save.");
+  const short = cashflowForMonth({
     ...emptyHousehold(),
-    monthlies: [{ id: "m-1", name: "Phone", amountPence: 100000, dueDay: 1, paidMonths: [], paidFrom: "card" }],
-    cards: [{ id: "c-1", name: "Card", balancePence: 80000, pendingPence: 0, updatedOn: "2026-08-10" }],
+    monthlies: [{ id: "m-1", name: "Rent", amountPence: 300000, dueDay: 1, paidMonths: [], paidFrom: "cash" }],
     payslips: [slipFor("you", "2026-08", 200000)],
     people: [{ id: "you", name: "You" }],
   }, "2026-08", today);
-  assert.equal(savingLine(covered, today), "On track to save.");
+  assert.equal(savingLine(short, today), "This month does not balance yet.");
 });
 
 test("viewing the current month leaves previous-month ticks and the card picture alone", () => {
@@ -365,7 +384,20 @@ test("historical month labels stay historical", () => {
   assert.equal(labels.lands, "April 2026");
   assert.equal(labels.taxYear, "2025-26");
   const past = cashflowForMonth({ ...emptyHousehold(), annualBills: [] }, "2026-03", today);
-  assert.equal(savingLine({ ...past, potPence: -100 }, today), "March 2026 does not balance yet.");
+  assert.equal(savingLine({ ...past, potPence: -100, leftPence: -100 }, today), "March 2026 does not balance yet.");
+});
+
+test("September 2026 is not this month on 26 August 2026", () => {
+  const today = new Date("2026-08-26T12:00:00Z");
+  assert.equal(isCurrentMonth("2026-09", today), false);
+  assert.equal(isCurrentMonth("2026-08", today), true);
+  assert.equal(currentPeriodHint("2026-09", today), "September 2026");
+  assert.equal(jumpToCurrentMonthLabel("2026-09", today), "Back to August 2026");
+  assert.equal(jumpToCurrentMonthLabel("2026-08", today), "");
+  const september = cashflowForMonth({ ...emptyHousehold(), annualBills: [] }, "2026-09", today);
+  assert.equal(savingLine({ ...september, potPence: -100, leftPence: -100 }, today), "September 2026 does not balance yet.");
+  assert.equal(spendVerdict(0, formatMoney, { month: "2026-09", today }), "");
+  assert.equal(spendVerdict(0, formatMoney, { month: "2026-08", today }), "Cards match the allowed expecteds.");
 });
 
 test("annual bills become the cashflow monthly reserve", () => {
@@ -383,10 +415,12 @@ test("annual bills become the cashflow monthly reserve", () => {
   assert.equal(edited.annualReservePence, 20000);
 });
 
-test("over and underspend are plain English", () => {
+test("over and underspend stay off future months", () => {
+  const today = new Date("2026-08-26T12:00:00Z");
   assert.equal(spendVerdict(2000, formatMoney), "£20.00 under — room on the cards.");
   assert.equal(spendVerdict(-4500, formatMoney), "£45.00 over the allowed expecteds.");
   assert.equal(spendVerdict(0, formatMoney), "Cards match the allowed expecteds.");
+  assert.equal(spendVerdict(0, formatMoney, { month: "2026-09", today }), "");
 });
 
 test("UK tax year starts on 6 April", () => {
@@ -555,6 +589,56 @@ test("payslip categories stay available after a later slip leaves them unused", 
   });
   assert.ok(later.some((item) => item.kind === "bonus"));
   assert.ok(later.some((item) => item.label === "Cycle scheme"));
+});
+
+test("payslip net is gross plus extras minus deductions", () => {
+  assert.equal(payslipNetPence({
+    grossPence: 400000,
+    bonusPence: 20000,
+    benefitsPence: 5000,
+    salarySacrificePensionPence: 30000,
+    taxPence: 60000,
+    niPence: 20000,
+    otherDeductions: [
+      { id: "gym", label: "Gym", amountPence: 4000 },
+      { id: "cycle", label: "Cycle", amountPence: 8000 },
+    ],
+  }), 303000);
+});
+
+test("a new payslip defaults to the previous month’s used categories", () => {
+  const hh = {
+    ...emptyHousehold(),
+    people: [{ id: "you", name: "You" }],
+    payslipCategories: [
+      { id: "bonus", label: "Bonus", kind: "bonus" },
+      { id: "tax", label: "Tax", kind: "tax" },
+      { id: "gym", label: "Gym", kind: "deduction" },
+      { id: "cycle", label: "Cycle", kind: "deduction" },
+    ],
+    payslips: [{
+      id: "aug",
+      personId: "you",
+      periodMonth: "2026-08",
+      bonusPence: 25000,
+      taxPence: 60000,
+      otherDeductions: [{ id: "gym", label: "Gym", amountPence: 4000 }],
+    }],
+  };
+  const defaults = defaultCategoriesForNewPayslip(hh, "you");
+  assert.deepEqual(defaults.map((item) => item.id).sort(), ["bonus", "gym", "tax"]);
+  assert.equal(defaults.some((item) => item.id === "cycle"), false);
+});
+
+test("pending table rows add to the total without a per-row modal", () => {
+  const hh = { ...emptyHousehold(), pendings: [] };
+  addPendingRow(hh, { id: "p-1", amountPence: 2500, note: "", month: "2026-08" });
+  addPendingRow(hh, { id: "p-2", amountPence: 1750, note: "hold", month: "2026-08" });
+  assert.equal(hh.pendings.length, 2);
+  assert.equal(pendingListTotalPence(hh.pendings), 4250);
+  assert.equal(pendingsForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z")).length, 2);
+  const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
+  assert.equal(flow.pendingPence, 4250);
 });
 
 test("payslip ANI is gross plus benefits minus salary sacrifice", () => {

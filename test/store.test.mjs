@@ -205,6 +205,24 @@ test("monthlies keep a working-day due roll and pots keep snapshots", () => {
   assert.ok(parsed.household.payslipCategories.some((item) => item.kind === "bonus"));
 });
 
+test("pendings keep a note and month, and reserves are standing outs", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      pendings: [{ id: "p-1", name: "Flight hold", amountPence: 3000, month: "2026-08" }],
+      reserves: [{ id: "r-1", name: "Daily float", amountPence: 90000 }],
+    },
+  });
+  assert.equal(parsed.household.pendings[0].note, "Flight hold");
+  assert.equal(parsed.household.pendings[0].month, "2026-08");
+  assert.equal("name" in parsed.household.pendings[0], false);
+  assert.equal(parsed.household.reserves[0].name, "Daily float");
+  assert.equal(parsed.household.reserves[0].amountPence, 90000);
+});
+
 test("weekday weekly rules keep their calendar cadence", () => {
   const parsed = parseStore({
     version: 1,
