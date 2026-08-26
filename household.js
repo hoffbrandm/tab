@@ -142,6 +142,14 @@ export function monthLabel(month) {
   );
 }
 
+export function monthName(month) {
+  const parsed = parseMonthKey(month);
+  if (!parsed) return String(month || "");
+  return new Intl.DateTimeFormat("en-GB", { month: "long" }).format(
+    new Date(parsed.year, parsed.month - 1, 1),
+  );
+}
+
 export function ordinalDay(day) {
   const n = Number(day);
   if (!Number.isInteger(n) || n < 1) return "";
@@ -200,7 +208,7 @@ export function currentPeriodHint(month, today = new Date()) {
 
 export function jumpToCurrentMonthLabel(viewedMonth, today = new Date()) {
   if (isCurrentMonth(viewedMonth, today)) return "";
-  return `Back to ${monthLabel(monthKey(today))}`;
+  return `Back to ${monthName(monthKey(today))}`;
 }
 
 export function payslipLandsMonth(payslip) {
@@ -600,11 +608,8 @@ export function cashflowForMonth(household, month, today = new Date()) {
   };
 }
 
-export function spendVerdict(overUnderPence, formatMoney, { month, today = new Date() } = {}) {
-  if (month && !isCurrentMonth(month, today)) return "";
-  if (overUnderPence === 0) return "Cards match the allowed expecteds.";
-  if (overUnderPence > 0) return `${formatMoney(overUnderPence)} under — room on the cards.`;
-  return `${formatMoney(-overUnderPence)} over the allowed expecteds.`;
+export function spendVerdict() {
+  return "";
 }
 
 export function savingLine(flow, today = new Date()) {
@@ -699,6 +704,10 @@ export function potHistorySeries(pots) {
     });
     return { id: pot.id, name: pot.name, points };
   });
+}
+
+export function keepPayslipFormRows(rows) {
+  return (rows || []).filter((item) => item && String(item.id || "").trim());
 }
 
 export function payslipCategoriesOf(household) {

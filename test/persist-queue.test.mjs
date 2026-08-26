@@ -23,6 +23,17 @@ test("applyLocal flips state and renders before persist runs", async () => {
   assert.equal(persisted, 1);
 });
 
+test("a second applyLocal is not dropped while a write is outstanding", async () => {
+  const flipped = [];
+  const queue = createPersistQueue({
+    persist: async () => {},
+    debounceMs: 30,
+  });
+  queue.applyLocal(() => flipped.push("first"));
+  queue.applyLocal(() => flipped.push("second"));
+  assert.deepEqual(flipped, ["first", "second"]);
+});
+
 test("rapid applyLocal queues one persist write", async () => {
   let persisted = 0;
   const queue = createPersistQueue({

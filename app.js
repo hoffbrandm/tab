@@ -10,6 +10,7 @@ import {
   currentUkTaxYear,
   defaultCategoriesForNewPayslip,
   donationGrossPence,
+  keepPayslipFormRows,
   emptyHousehold,
   giftAidGrossPence,
   isCurrentMonth,
@@ -331,7 +332,7 @@ function shell({ eyebrow, title, lede, extra = "", body, month = false, back = "
       <span></span>
     </header>
     <div class="sync-row">${syncChip()}</div>
-    ${month ? monthSwitcher({ reset: month === "reset" }) : ""}
+    ${month ? monthSwitcher() : ""}
     ${title ? `<div class="intro compact">
       <p class="eyebrow">${esc(eyebrow)}</p>
       <h1>${esc(title)}</h1>
@@ -561,9 +562,9 @@ function monthliesScreen() {
           edit: "edit-reserve",
           id: item.id,
           title: item.name,
-          detail: "Standing monthly out · no tick",
+          detail: reserveLineDetail(item),
           amount: formatMoney(item.amountPence),
-        })).join("") : emptyLines("Standing monthly outs without a due day — a cleaner, a daily float, or anything you set aside every month.", "add-reserve", "Add a reserve line")}
+        })).join("") : emptyLines("The daily envelope / monthly thousand is one standing line. Type the amount. Cleaner and nails can sit beside it.", "add-reserve", "Add a reserve line")}
       </section>
     `,
   });
@@ -1015,9 +1016,9 @@ function transactionForm() {
 }
 
 function deleteForm() {
-  return `<div class="delete-confirm">${modalHead("Please check", modal.target === "reset-month" ? `Reset ${modal.label}?` : `Delete ${modal.label || (modal.target === "friend" ? "friend and history" : "this entry")}?`)}
+  return `<div class="delete-confirm">${modalHead("Please check", `Delete ${modal.label || (modal.target === "friend" ? "friend and history" : "this entry")}?`)}
     <p>${esc(modal.copy || (modal.target === "friend" ? "This will permanently remove this friend and every transaction in their tab." : "This cannot be undone."))}</p>
-    <div class="confirm-actions"><button class="secondary" data-action="close-modal">Keep it</button><button class="${modal.target === "reset-month" ? "primary" : "danger"}" data-action="delete-confirmed">${modal.target === "reset-month" ? "Reset ticks" : "Delete"}</button></div></div>`;
+    <div class="confirm-actions"><button class="secondary" data-action="close-modal">Keep it</button><button class="danger" data-action="delete-confirmed">Delete</button></div></div>`;
 }
 
 function importForm() {
@@ -1139,12 +1140,20 @@ function pendingForm() {
   </form>`;
 }
 
+function reserveLineDetail(item) {
+  const name = String(item?.name || "").toLowerCase();
+  if (/£?\s*30|a day|daily|thousand|envelope|float/.test(name)) {
+    return "Daily envelope / monthly thousand · no tick";
+  }
+  return "Standing monthly out · no tick";
+}
+
 function reserveForm() {
   const item = modal.item || {};
   return `<form id="reserve-form">${modalHead(item.id ? "Reserve" : "Cash in reserve", item.id ? "Edit reserve" : "Add a reserve line")}
-    <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Cleaner, daily float…" /></label>
+    <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="£30 a day" /></label>
     ${moneyLabel("Monthly amount", "amount", item.amountPence)}
-    <p class="helper">A typed monthly envelope — cleaner, nails, or a daily float. No tick. Counts in Out every month. Insurance saving stays on Annual as year ÷ 12.</p>
+    <p class="helper">The daily envelope and the monthly thousand are the same line. Type the amount. Cleaner and nails are siblings. Insurance saving stays on Annual as year ÷ 12.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save reserve" : "Add reserve"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-reserve">Delete reserve</button>' : ""}
@@ -1259,14 +1268,16 @@ function payslipForm() {
 }
 
 function payslipFormCategories(slip, personId) {
-  if (modal.slipCategories) return modal.slipCategories;
+  if (modal.slipCategories) return keepPayslipFormRows(modal.slipCategories);
   if (slip?.id) {
     const master = masterPayslipCategories(household());
     const used = master.filter((category) => (payslipAmountForCategory(slip, category) || 0) > 0);
-    modal.slipCategories = used.length ? used : [];
+    modal.slipCategories = keepPayslipFormRows(used);
     return modal.slipCategories;
   }
-  modal.slipCategories = defaultCategoriesForNewPayslip(household(), personId || household().people[0]?.id);
+  modal.slipCategories = keepPayslipFormRows(
+    defaultCategoriesForNewPayslip(household(), personId || household().people[0]?.id),
+  );
   return modal.slipCategories;
 }
 
@@ -1521,7 +1532,7 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     snapshotPayslipForm();
-    modal.slipCategories = (modal.slipCategories || []).filter((item) => item.id !== id);
+    modal.slipCategories = keepPayslipFormRows((modal.slipCategories || []).filter((item) => item.id !== id));
     renderModal();
   }
   if (action === "show-extra") {
@@ -1633,7 +1644,7 @@ document.addEventListener("change", async (event) => {
     const category = masterPayslipCategories(household()).find((item) => item.id === value);
     if (!category) return;
     snapshotPayslipForm();
-    modal.slipCategories = [...(modal.slipCategories || []), category];
+    modal.slipCategories = keepPayslipFormRows([...(modal.slipCategories || []), category]);
     event.target.value = "";
     renderModal();
   }

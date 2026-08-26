@@ -22,6 +22,7 @@ import {
   isCurrentMonth,
   isParentalPayLabel,
   jumpToCurrentMonthLabel,
+  keepPayslipFormRows,
   monthlyIsAllowed,
   payslipAniPence,
   payslipCategoriesOf,
@@ -397,12 +398,12 @@ test("September 2026 is not this month on 26 August 2026", () => {
   assert.equal(isCurrentMonth("2026-09", today), false);
   assert.equal(isCurrentMonth("2026-08", today), true);
   assert.equal(currentPeriodHint("2026-09", today), "September 2026");
-  assert.equal(jumpToCurrentMonthLabel("2026-09", today), "Back to August 2026");
+  assert.equal(jumpToCurrentMonthLabel("2026-09", today), "Back to August");
   assert.equal(jumpToCurrentMonthLabel("2026-08", today), "");
   const september = cashflowForMonth({ ...emptyHousehold(), annualBills: [] }, "2026-09", today);
   assert.equal(savingLine({ ...september, potPence: -100, leftPence: -100 }, today), "September 2026 does not balance yet.");
   assert.equal(spendVerdict(0, formatMoney, { month: "2026-09", today }), "");
-  assert.equal(spendVerdict(0, formatMoney, { month: "2026-08", today }), "Cards match the allowed expecteds.");
+  assert.equal(spendVerdict(0, formatMoney, { month: "2026-08", today }), "");
 });
 
 test("annual bills become the cashflow monthly reserve", () => {
@@ -420,11 +421,11 @@ test("annual bills become the cashflow monthly reserve", () => {
   assert.equal(edited.annualReservePence, 20000);
 });
 
-test("over and underspend stay off future months", () => {
+test("the over-allowed headline is gone", () => {
   const today = new Date("2026-08-26T12:00:00Z");
-  assert.equal(spendVerdict(2000, formatMoney), "£20.00 under — room on the cards.");
-  assert.equal(spendVerdict(-4500, formatMoney), "£45.00 over the allowed expecteds.");
-  assert.equal(spendVerdict(0, formatMoney), "Cards match the allowed expecteds.");
+  assert.equal(spendVerdict(2000, formatMoney), "");
+  assert.equal(spendVerdict(-4500, formatMoney), "");
+  assert.equal(spendVerdict(0, formatMoney), "");
   assert.equal(spendVerdict(0, formatMoney, { month: "2026-09", today }), "");
 });
 
@@ -702,6 +703,27 @@ test("a new payslip defaults to the previous month’s used categories", () => {
   const defaults = defaultCategoriesForNewPayslip(hh, "you");
   assert.deepEqual(defaults.map((item) => item.id).sort(), ["bonus", "gym", "tax"]);
   assert.equal(defaults.some((item) => item.id === "cycle"), false);
+});
+
+test("a just-added payslip row is kept even when the label is still empty", () => {
+  const added = { id: "new-row", label: "", kind: "deduction" };
+  assert.equal(payslipCategoriesOf({ payslipCategories: [added] }).length, 0);
+  assert.deepEqual(keepPayslipFormRows([added, { id: "", label: "Ghost" }]).map((item) => item.id), ["new-row"]);
+});
+
+test("pending amounts do not list on a future month when they belong to this month", () => {
+  const today = new Date("2026-08-26T12:00:00Z");
+  const hh = {
+    ...emptyHousehold(),
+    pendings: [{ id: "p-1", note: "hold", amountPence: 6000, month: "2026-08" }],
+  };
+  const august = pendingsForMonth(hh, "2026-08", today);
+  const september = pendingsForMonth(hh, "2026-09", today);
+  assert.equal(august.length, 1);
+  assert.equal(pendingListTotalPence(august), 6000);
+  assert.equal(september.length, 0);
+  assert.equal(pendingListTotalPence(september), 0);
+  assert.equal(cashflowForMonth(hh, "2026-09", today).pendingPence, 0);
 });
 
 test("pending table rows add to the total without a per-row modal", () => {

@@ -76,7 +76,7 @@ An older gist with only `friends` and `transactions` still loads. The household 
 
 - **Home** — an accounting statement for the month on screen: **In** (calculated payslip net for slips that land), **Out** (standing cash and card monthlies + annual reserve + cash-in-reserve + this month’s planned + weeklies), **Left / savings**. Allowed is not shown. Cards sit on Home with an inline balance. Pending is a small amount table, not named line-items. Weeklies are ticked here (the sheet’s untitled column Q); a weekly tick does not move In / Out / Left. This month’s planned items live in an accordion and sit in Out whether or not they are purchased. Ticks and table edits flip in memory and save to the gist in the background.
 - **Weeklies** — each rule is entered once: name, typical amount, and cadence (once a month, N times a month, or every week on a chosen weekday). Slots are the count of that weekday in the month being viewed (four Tuesdays → four slots). An extra occurrence can be added for that month only. A new month starts unticked; old months keep their ticks.
-- **Monthlies** — standing bills: name, amount, due day, cash or card. Optional first working day. Config only — no ticks (the sheet never ticked cash bills or card subs). Cash and card lines count in Out for the whole viewed month. **Cash in reserve** is a typed monthly envelope without a due day (cleaner, nails, a daily float). Insurance saving is the Annual total ÷ 12, not a second typed line.
+- **Monthlies** — standing bills: name, amount, due day, cash or card. Optional first working day. Config only — no ticks (the sheet never ticked cash bills or card subs). Cash and card lines count in Out for the whole viewed month. **Cash in reserve** is typed monthly envelopes. The daily envelope / monthly thousand is one line (the sheet’s “£30 a day”), not a second feature; the amount lives in the gist. Cleaner and nails sit beside it. Insurance saving is the Annual total ÷ 12.
 - **Planned** — item, month, estimate, purchased. The current month’s rows also sit on Home. This screen is the list across months.
 - **Annual** — yearly bills. Total ÷ 12 is the monthly reserve in Out. Edit here; do not type it twice.
 - **Pots** — named pots with dated monthly snapshots and a simple graphic of values over time. A quiet line reminds you to log this calendar month if it is missing. Optional pension *names and status* only.
@@ -87,7 +87,7 @@ An older gist with only `friends` and `transactions` still loads. The household 
 
 Hash routes keep refresh and Back in the same place (`#/home`, `#/weeklies`, `#/monthlies`, `#/planned`, `#/annual`, `#/pots`, `#/payslips`, `#/ani`, `#/giving`, `#/tabs`, `#/friend/<id>`, `#/more`). The bar lists every destination. Account is sign-in, gist status, and payslip category names.
 
-Month labels use the month or tax year on the record. “This month” is only for the current calendar month. The public repo never contains a real workbook or personal figures. A teammate can seed the private gist separately.
+Month labels use the month or tax year on the record. “This month” is only for the current calendar month. The jump control on another month says “Back to August”, never “This month”. The public repo never contains a real workbook or personal figures. A teammate can seed the private gist separately.
 
 ## Run it locally
 
