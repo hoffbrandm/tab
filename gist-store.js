@@ -1,3 +1,4 @@
+import { householdHasData } from "./household.js";
 import { emptyStore, parseStore, StoreError } from "./store.js";
 
 export const GIST_DESCRIPTION = "tab.personal.v1";
@@ -24,7 +25,7 @@ export function pickGist(gists, options) {
 }
 
 export function storeHasTabData(store) {
-  return Boolean(store?.friends?.length || store?.transactions?.length);
+  return Boolean(store?.friends?.length || store?.transactions?.length || householdHasData(store?.household));
 }
 
 export function storeToGistContent(store) {
