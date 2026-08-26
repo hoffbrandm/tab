@@ -40,6 +40,7 @@ let boot = { name: "loading" };
 let sync = { name: "saved" };
 let isSaving = false;
 let localImportOffered = false;
+let localSession = false;
 let viewMonth = monthKey();
 let aniPersonId = null;
 let aniTaxYear = null;
@@ -230,7 +231,12 @@ function updateSyncChip() {
   if (chip) chip.outerHTML = syncChip();
 }
 
+function isLocalHost() {
+  return location.hostname === "127.0.0.1" || location.hostname === "localhost";
+}
+
 function syncChip() {
+  if (localSession) return `<span class="status-chip" data-sync-chip>This session only — not a gist</span>`;
   if (sync.name === "saving") return `<span class="status-chip saving" data-sync-chip>Saving…</span>`;
   if (sync.name === "error") {
     return `<button class="status-chip error" data-sync-chip data-action="retry-sync" type="button">${esc(sync.message || "Could not save")}</button>`;
@@ -268,6 +274,7 @@ function signInScreen() {
         <button class="primary wide" type="submit">Sign in</button>
       </form>
       <a class="text-button token-link" href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noreferrer">Create a token on GitHub</a>
+      ${isLocalHost() ? `<button class="secondary wide" type="button" data-action="local-workbook">Open a local workbook</button><p class="helper">This machine only. Nothing is written to a gist or to localStorage. Close the tab and it is gone.</p>` : ""}
     </div>
   </section>`;
 }
@@ -1101,12 +1108,29 @@ function togglePaid(list, id) {
   });
 }
 
+function openLocalWorkbook() {
+  localSession = true;
+  session = { login: "local", token: "" };
+  gist = {
+    identify: async () => ({ login: "local" }),
+    read: async () => ({ store: emptyStore(), gistId: "local" }),
+    write: async (next) => ({ store: parseStore(next), gistId: "local" }),
+  };
+  store = emptyStore();
+  gistId = "local";
+  boot = { name: "ready" };
+  sync = { name: "local" };
+  history.replaceState(null, "", `${location.pathname}#/home`);
+  render();
+}
+
 function signOut() {
   sessionStore.clear();
   session = null;
   gist = null;
   store = emptyStore();
   gistId = null;
+  localSession = false;
   boot = { name: "signed-out" };
   modal = null;
   history.replaceState(null, "", `${location.pathname}#/home`);
@@ -1256,6 +1280,7 @@ document.addEventListener("click", async (event) => {
     else showToast(sync.message || "Could not delete");
   }
   if (action === "sign-out") signOut();
+  if (action === "local-workbook") openLocalWorkbook();
   if (action === "reload") bootApp();
   if (action === "retry-sync") persist().catch(() => {});
   if (action === "discard-local") { clearLocalStore(); closeModal(); }

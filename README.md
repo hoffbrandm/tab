@@ -88,7 +88,7 @@ npm test
 npm start
 ```
 
-Then open `http://127.0.0.1:4173`. Production is the same static files on GitHub Pages.
+Then open `http://127.0.0.1:4173`. On that local address you can open a session-only workbook without a token (nothing is written to a gist or to `localStorage`). Production is the same static files on GitHub Pages and always uses the private gist.
 
 ## Tests
 
