@@ -12,6 +12,21 @@ const MONTH_NAMES = {
   dec: 12, december: 12,
 };
 
+const MAIN_TICK_COL = 16;
+const MAIN_SECTION_COL = 17;
+const PAYSLIP_SOURCE_COLS = 31;
+const SECTION_NAMES = [
+  "income",
+  "cash out",
+  "cash in reserve",
+  "credit card out",
+  "weekly expenses",
+  "monthly expenses",
+  "exceptions",
+  "pending",
+  "credit card",
+];
+
 function uid() {
   return crypto.randomUUID ? crypto.randomUUID() : `imp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -22,13 +37,26 @@ function text(value) {
   return String(value).trim();
 }
 
+function isExcelError(value) {
+  const raw = text(value).toLowerCase();
+  return raw.startsWith("#") || raw === "-1/0" || raw === "1/0";
+}
+
 function moneyToPence(value) {
   if (value == null || value === "") return 0;
+  if (isExcelError(value)) return 0;
   if (typeof value === "number" && Number.isFinite(value)) return Math.round(value * 100);
   const cleaned = String(value).replace(/[£,\s]/g, "").trim();
   if (!cleaned || cleaned === "-" || cleaned === "—") return 0;
   const number = Number(cleaned);
   return Number.isFinite(number) ? Math.round(number * 100) : 0;
+}
+
+function hasRecordedMoney(value) {
+  if (value == null || value === "") return false;
+  if (typeof value === "boolean") return false;
+  if (isExcelError(value)) return false;
+  return true;
 }
 
 function truthy(value) {
@@ -71,10 +99,17 @@ function asDate(value) {
   return "";
 }
 
-function headerIndex(row, ...aliases) {
-  const cells = (row || []).map((cell) => text(cell).toLowerCase());
-  for (const alias of aliases) {
-    const index = cells.findIndex((cell) => cell === alias.toLowerCase() || cell.includes(alias.toLowerCase()));
+function headerIndex(row, aliases, options = {}) {
+  const { from = 0, to = Infinity } = options;
+  const cells = (row || []).map((cell) => text(cell).toLowerCase().replace(/\s+/g, " "));
+  const end = Math.min(cells.length, to);
+  const wanted = (Array.isArray(aliases) ? aliases : [aliases]).map((alias) => alias.toLowerCase());
+  for (const alias of wanted) {
+    const index = cells.findIndex((cell, index) => index >= from && index < end && cell === alias);
+    if (index >= 0) return index;
+  }
+  for (const alias of wanted) {
+    const index = cells.findIndex((cell, index) => index >= from && index < end && cell.includes(alias));
     if (index >= 0) return index;
   }
   return -1;
@@ -109,6 +144,11 @@ function personIdFor(household, name) {
   return person.id;
 }
 
+function personFromIncomeLabel(household, name) {
+  const cleaned = text(name).replace(/\s+(take-?home|salary|income|pay|net)$/i, "").trim();
+  return personIdFor(household, cleaned || name);
+}
+
 function skipRowName(name) {
   const value = text(name).toLowerCase();
   if (!value) return true;
@@ -116,6 +156,8 @@ function skipRowName(name) {
     value.startsWith("total")
     || value === "what"
     || value === "item"
+    || value === "expected"
+    || value === "main table"
     || value === "post 1st"
     || value === "table 1"
     || value.includes("index")
@@ -123,21 +165,39 @@ function skipRowName(name) {
   );
 }
 
+function markSkipped(report, why) {
+  report.skipped += 1;
+  if (why && !report.skippedWhy.includes(why)) report.skippedWhy.push(why);
+}
+
+function isSinkingFundLine(name, annualBills) {
+  const value = text(name).toLowerCase();
+  if (!value) return false;
+  if (value.includes("insurance saving") || value.includes("sinking fund") || value.includes("annual reserve")) {
+    return true;
+  }
+  return (annualBills || []).some((bill) => {
+    const billName = text(bill.name).toLowerCase();
+    return billName && value.includes(billName) && /(saving|reserve|sinking)/.test(value);
+  });
+}
+
 function importExpected(grid, household, report) {
   const header = findRow(grid, "item", "purchased");
   if (header < 0) return;
   const row = grid[header];
-  const itemCol = headerIndex(row, "item");
-  const monthCol = headerIndex(row, "month");
-  const costCol = headerIndex(row, "cost", "amount");
-  const boughtCol = headerIndex(row, "purchased");
+  const itemCol = headerIndex(row, ["item"]);
+  const monthCol = headerIndex(row, ["month"]);
+  const costCol = headerIndex(row, ["cost", "amount"]);
+  const boughtCol = headerIndex(row, ["purchased"]);
   const year = new Date().getFullYear();
   for (let index = header + 1; index < Math.min(grid.length, header + 18); index += 1) {
     const cells = grid[index] || [];
     const name = text(cells[itemCol]);
     if (skipRowName(name) || name.toLowerCase() === "expected") break;
+    if (!name) continue;
     const month = asMonth(cells[monthCol], year);
-    if (!month && !moneyToPence(cells[costCol])) continue;
+    if (!month && !hasRecordedMoney(cells[costCol])) continue;
     household.oneOffs.push({
       id: uid(),
       name,
@@ -155,40 +215,50 @@ function importMainTable(grid, household, report) {
     : findRow(grid, "what");
   if (header < 0) return;
   const row = grid[header];
-  const what = headerIndex(row, "what");
-  const amount = headerIndex(row, "in and out", "allowed expenses");
-  const cardCol = headerIndex(row, "credit card");
-  const dayCol = headerIndex(row, "planned day of month", "planned day", "due");
-  const tickCol = Math.max(
-    (row || []).findIndex((_, index) => index >= 16 && index <= 16),
-    headerIndex(row, "happened", "paid"),
-  );
-  const sectionCol = headerIndex(row, "section", "category");
+  const what = headerIndex(row, ["what"]);
+  const amount = headerIndex(row, ["in and out"]);
+  const allowed = headerIndex(row, ["allowed expenses"]);
+  const cardCol = headerIndex(row, ["credit card"]);
+  const dayCol = headerIndex(row, ["planned day of month", "planned day", "due"]);
+  const labelledTick = headerIndex(row, ["happened", "paid", "tick"]);
+  const labelledSection = headerIndex(row, ["section", "category"]);
+  const tickCol = labelledTick >= 0 ? labelledTick : MAIN_TICK_COL;
+  const sectionCol = labelledSection >= 0 ? labelledSection : MAIN_SECTION_COL;
   const expectedNames = new Set(household.oneOffs.map((item) => item.name.toLowerCase()));
+  const annualBills = household.annualBills || [];
   let section = "";
-  const year = new Date().getFullYear();
   const month = monthKey();
 
   for (let index = header + 1; index < grid.length; index += 1) {
     const cells = grid[index] || [];
     const name = text(cells[what] ?? cells[0]);
-    const sectionHint = sectionCol >= 0 ? text(cells[sectionCol]) : "";
+    const sectionHint = text(cells[sectionCol]);
     if (sectionHint) section = sectionHint;
-    const sectionLike = ["income", "cash out", "cash in reserve", "credit card out", "weekly expenses", "monthly expenses", "exceptions", "pending", "credit card"].includes(name.toLowerCase());
+    const sectionLike = SECTION_NAMES.includes(name.toLowerCase());
     if (sectionLike) {
       section = name;
       continue;
     }
-    if (skipRowName(name)) continue;
-    const pence = moneyToPence(cells[amount] !== "" && cells[amount] != null ? cells[amount] : cells[cardCol]);
-    const dueDay = Number(cells[dayCol]) || 1;
-    const ticked = tickCol >= 0 ? truthy(cells[tickCol]) : false;
+    if (skipRowName(name)) {
+      if (name) markSkipped(report, "scratch");
+      continue;
+    }
     const bucket = section.toLowerCase();
+    const amountCell = hasRecordedMoney(cells[amount]) ? cells[amount] : cells[allowed];
+    const pence = bucket === "credit card" && !bucket.includes("out") && hasRecordedMoney(cells[cardCol])
+      ? moneyToPence(cells[cardCol])
+      : moneyToPence(hasRecordedMoney(amountCell) ? amountCell : cells[cardCol]);
+    if (!name || (!pence && !hasRecordedMoney(amountCell) && !hasRecordedMoney(cells[cardCol]))) {
+      if (name) markSkipped(report, "empty template");
+      continue;
+    }
+    const dueDay = Number(cells[dayCol]) || 1;
+    const ticked = truthy(cells[tickCol]);
 
     if (bucket.includes("income")) {
       household.incomes.push({
         id: uid(),
-        personId: household.people[household.incomes.length % Math.max(household.people.length, 1)]?.id || personIdFor(household, "You"),
+        personId: personFromIncomeLabel(household, name),
         label: name,
         amountPence: pence,
       });
@@ -216,12 +286,12 @@ function importMainTable(grid, household, report) {
       report.cardSubs += 1;
       continue;
     }
-    if (bucket === "pending" || bucket.includes("pending")) {
+    if (bucket.includes("pending")) {
       household.pendings.push({ id: uid(), name, amountPence: pence });
       report.pendings += 1;
       continue;
     }
-    if (bucket === "credit card" && !bucket.includes("out")) {
+    if (bucket === "credit card") {
       household.cards.push({
         id: uid(),
         name,
@@ -232,12 +302,12 @@ function importMainTable(grid, household, report) {
       report.cards += 1;
       continue;
     }
-    if (bucket.includes("cash in reserve") || bucket.includes("exceptions")) {
-      report.skipped += 1;
+    if (bucket.includes("cash in reserve") || bucket.includes("exceptions") || isSinkingFundLine(name, annualBills)) {
+      markSkipped(report, bucket.includes("exceptions") ? "exceptions" : "annual reserve");
       continue;
     }
     if (bucket.includes("monthly") && expectedNames.has(name.toLowerCase())) {
-      report.skipped += 1;
+      markSkipped(report, "Expected lookups");
       continue;
     }
     if (bucket.includes("cash out") || bucket.includes("monthly")) {
@@ -251,7 +321,6 @@ function importMainTable(grid, household, report) {
       report.bills += 1;
     }
   }
-  void year;
 }
 
 function importPayslips(grid, household, report) {
@@ -259,34 +328,53 @@ function importPayslips(grid, household, report) {
   const header = findRow(grid, "name", "tax year");
   if (header < 0) return;
   const row = grid[header];
+  const inLedger = { to: PAYSLIP_SOURCE_COLS };
   const col = {
-    name: headerIndex(row, "name"),
-    taxYear: headerIndex(row, "tax year"),
-    period: headerIndex(row, "pay period", "month"),
-    start: headerIndex(row, "start date"),
-    taxCode: headerIndex(row, "tax code"),
-    salary: headerIndex(row, "salary"),
-    gross: headerIndex(row, "gross per month", "gross"),
-    bonus: headerIndex(row, "bonus"),
-    benefits: headerIndex(row, "benefits"),
-    sacrifice: headerIndex(row, "salary sacrifice pension"),
-    tax: headerIndex(row, "tax"),
-    ni: headerIndex(row, "ni"),
-    net: headerIndex(row, "net"),
-    note: headerIndex(row, "note"),
-    lands: headerIndex(row, "month of money", "month the money"),
+    name: headerIndex(row, ["name"], inLedger),
+    taxYear: headerIndex(row, ["tax year"], inLedger),
+    period: headerIndex(row, ["pay period", "month"], inLedger),
+    start: headerIndex(row, ["start date"], inLedger),
+    taxCode: headerIndex(row, ["tax code"], inLedger),
+    salary: headerIndex(row, ["salary"], inLedger),
+    gross: headerIndex(row, ["gross per month", "gross"], inLedger),
+    bonus: headerIndex(row, ["bonus"], inLedger),
+    benefits: headerIndex(row, ["benefits"], inLedger),
+    sacrifice: headerIndex(row, ["salary sacrifice pension"], inLedger),
+    tax: headerIndex(row, ["tax"], inLedger),
+    ni: headerIndex(row, ["ni"], inLedger),
+    net: headerIndex(row, ["net"], inLedger),
+    note: headerIndex(row, ["note"], inLedger),
+    lands: headerIndex(row, ["month of money", "month the money"], inLedger),
   };
-  const deductionHeaders = ["will writing", "critical illness ee", "critical illness dp", "payroll giving", "gym flex", "dental", "cycle scheme", "jury service", "smp", "enhanced maternity", "enhanced paternity", "ospp", "non salary sacrifice pension"];
-  const deductionCols = deductionHeaders.map((label) => ({ label, index: headerIndex(row, label) })).filter((item) => item.index >= 0);
+  const deductionHeaders = [
+    "will writing",
+    "critical illness ee",
+    "critical illness dp",
+    "payroll giving",
+    "gym flex",
+    "dental",
+    "cycle scheme",
+    "jury service",
+    "smp",
+    "enhanced maternity",
+    "enhanced paternity",
+    "ospp",
+    "non salary sacrifice pension",
+  ];
+  const deductionCols = deductionHeaders
+    .map((label) => ({ label, index: headerIndex(row, [label], inLedger) }))
+    .filter((item) => item.index >= 0 && item.index < PAYSLIP_SOURCE_COLS);
 
   for (let index = header + 1; index < grid.length; index += 1) {
     const cells = grid[index] || [];
     const name = text(cells[col.name]);
     if (!name || skipRowName(name)) continue;
-    if (!moneyToPence(cells[col.gross]) && !moneyToPence(cells[col.salary]) && !moneyToPence(cells[col.net])) continue;
+    if (!moneyToPence(cells[col.gross]) && !moneyToPence(cells[col.salary]) && !moneyToPence(cells[col.net])) {
+      continue;
+    }
     const periodMonth = asMonth(cells[col.period] || cells[col.start]) || monthKey();
     const note = text(cells[col.note]);
-    const forecast = /temp|forecast|future/i.test(note);
+    const forecast = /temp|forecast|future\s+leave|future leave/i.test(note);
     const otherDeductions = deductionCols.map((item) => ({
       id: uid(),
       label: item.label.replace(/\b\w/g, (char) => char.toUpperCase()),
@@ -320,9 +408,9 @@ function importAnnually(grid, household, report) {
   const header = findRow(grid, "for what") >= 0 ? findRow(grid, "for what") : findRow(grid, "what");
   if (header < 0) return;
   const row = grid[header];
-  const nameCol = headerIndex(row, "for what", "what");
-  const amountCol = headerIndex(row, "how much", "amount");
-  const whenCol = headerIndex(row, "renewal time", "month");
+  const nameCol = headerIndex(row, ["for what", "what"]);
+  const amountCol = headerIndex(row, ["how much", "amount"]);
+  const whenCol = headerIndex(row, ["renewal time", "month"]);
   for (let index = header + 1; index < grid.length; index += 1) {
     const cells = grid[index] || [];
     const name = text(cells[nameCol]);
@@ -337,10 +425,17 @@ function importAnnually(grid, household, report) {
   }
 }
 
+function looksLikeIdentifierHeader(label) {
+  const value = text(label).toLowerCase();
+  return /policy|ni number|nino|national insurance/.test(value);
+}
+
 function importPots(grid, household, report) {
   if (!grid?.length) return;
   const header = grid[0] || [];
-  const dates = header.map((cell, index) => ({ index, date: asDate(cell) || (asMonth(cell) ? `${asMonth(cell)}-01` : "") })).filter((item) => item.index > 0 && item.date);
+  const dates = header
+    .map((cell, index) => ({ index, date: asDate(cell) || (asMonth(cell) ? `${asMonth(cell)}-01` : "") }))
+    .filter((item) => item.index > 0 && item.date);
   if (dates.length) {
     for (let index = 1; index < grid.length; index += 1) {
       const cells = grid[index] || [];
@@ -348,9 +443,8 @@ function importPots(grid, household, report) {
       if (skipRowName(name) || /pension|policy|ni number|nino/i.test(name)) break;
       let latest = null;
       for (const date of dates) {
-        const pence = moneyToPence(cells[date.index]);
-        if (cells[date.index] === "" || cells[date.index] == null) continue;
-        latest = { amountPence: pence, updatedOn: date.date };
+        if (!hasRecordedMoney(cells[date.index])) continue;
+        latest = { amountPence: moneyToPence(cells[date.index]), updatedOn: date.date };
       }
       if (!latest) continue;
       household.pots.push({ id: uid(), name, ...latest });
@@ -361,19 +455,24 @@ function importPots(grid, household, report) {
   const pensionHeader = findRow(grid, "pension") >= 0 ? findRow(grid, "pension") : findRow(grid, "status");
   if (pensionHeader < 0) return;
   const row = grid[pensionHeader];
-  const nameCol = headerIndex(row, "pension", "name");
-  const statusCol = headerIndex(row, "status");
-  const valueCol = headerIndex(row, "value", "last value", "amount");
-  const dateCol = headerIndex(row, "date", "as at");
-  const personCol = headerIndex(row, "person", "who");
+  const nameCol = headerIndex(row, ["pension"]);
+  const statusCol = headerIndex(row, ["status"]);
+  const valueCol = headerIndex(row, ["last value", "value", "amount"]);
+  const dateCol = headerIndex(row, ["date", "as at"]);
+  const personCol = headerIndex(row, ["person", "who"]);
   for (let index = pensionHeader + 1; index < grid.length; index += 1) {
     const cells = grid[index] || [];
-    const name = text(cells[nameCol] ?? cells[0]);
+    const name = text(nameCol >= 0 ? cells[nameCol] : cells[0]);
     if (skipRowName(name)) continue;
-    if (/policy|ni number|nino|national insurance number/i.test(name)) continue;
+    if (looksLikeIdentifierHeader(name)) continue;
     const statusRaw = text(cells[statusCol]).toLowerCase();
     const status = ["active", "deferred", "drawing"].includes(statusRaw) ? statusRaw : "other";
-    const noteBits = [personCol >= 0 ? text(cells[personCol]) : "", valueCol >= 0 && moneyToPence(cells[valueCol]) ? `${moneyToPence(cells[valueCol]) / 100}` : "", dateCol >= 0 ? asDate(cells[dateCol]) : ""].filter(Boolean);
+    const noteBits = [];
+    if (personCol >= 0 && text(cells[personCol])) noteBits.push(text(cells[personCol]));
+    if (dateCol >= 0 && asDate(cells[dateCol])) noteBits.push(asDate(cells[dateCol]));
+    if (valueCol >= 0 && hasRecordedMoney(cells[valueCol])) {
+      noteBits.push(`£${(moneyToPence(cells[valueCol]) / 100).toFixed(2)}`);
+    }
     household.pensions.push({
       id: uid(),
       name,
@@ -389,24 +488,30 @@ function importCharity(grid, household, report) {
   const header = findRow(grid, "who") >= 0 ? findRow(grid, "who") : findRow(grid, "donation");
   if (header < 0) return;
   const row = grid[header];
-  const whoCol = headerIndex(row, "who gave", "who");
-  const charityCol = headerIndex(row, "donation", "charity");
-  const dateCol = headerIndex(row, "date");
-  const amountCol = headerIndex(row, "amount");
-  const giftCol = headerIndex(row, "gift aid");
+  const whoCol = headerIndex(row, ["who gave", "who"]);
+  const charityCol = headerIndex(row, ["donation", "charity"]);
+  const dateCol = headerIndex(row, ["date"]);
+  const amountCol = headerIndex(row, ["amount"]);
+  const giftCol = headerIndex(row, ["gift aid"]);
   for (let index = header + 1; index < grid.length; index += 1) {
     const cells = grid[index] || [];
     const who = text(cells[whoCol]);
     const charity = text(cells[charityCol]);
-    const amountPence = moneyToPence(cells[amountCol]);
-    if (!who || !charity || !amountPence) continue;
-    if (amountPence < 0) continue;
+    const rawAmount = cells[amountCol];
+    if (!who || !charity) {
+      if (who || charity) markSkipped(report, "empty template");
+      continue;
+    }
+    if (!hasRecordedMoney(rawAmount) || isExcelError(rawAmount) || moneyToPence(rawAmount) <= 0) {
+      markSkipped(report, "charity leftover");
+      continue;
+    }
     household.donations.push({
       id: uid(),
       who,
       charity,
       date: asDate(cells[dateCol]) || isoDate(),
-      amountPence,
+      amountPence: moneyToPence(rawAmount),
       giftAid: truthy(cells[giftCol]),
     });
     report.donations += 1;
@@ -428,6 +533,7 @@ export function emptyImportReport() {
     payslips: 0,
     donations: 0,
     skipped: 0,
+    skippedWhy: [],
     sheets: [],
   };
 }
@@ -439,15 +545,15 @@ export function householdFromWorkbook(workbook) {
   const sheets = workbook?.sheets || {};
   report.sheets = Object.keys(sheets);
 
+  const payslips = findSheet(sheets, "Payslips");
+  if (payslips) importPayslips(payslips.grid, household, report);
+  const annually = findSheet(sheets, "Annually");
+  if (annually) importAnnually(annually.grid, household, report);
   const main = findSheet(sheets, "Main");
   if (main) {
     importExpected(main.grid, household, report);
     importMainTable(main.grid, household, report);
   }
-  const payslips = findSheet(sheets, "Payslips");
-  if (payslips) importPayslips(payslips.grid, household, report);
-  const annually = findSheet(sheets, "Annually");
-  if (annually) importAnnually(annually.grid, household, report);
   const pots = findSheet(sheets, "Where's the money", "Wheres the money", "Where the money");
   if (pots) importPots(pots.grid, household, report);
   const charity = findSheet(sheets, "Charity");
@@ -468,13 +574,12 @@ export function householdFromWorkbook(workbook) {
 }
 
 export function applyHouseholdImport(store, household, { overwrite = true } = {}) {
-  const next = {
+  return {
     version: 1,
     friends: store.friends,
     transactions: store.transactions,
     household: overwrite ? household : store.household,
   };
-  return next;
 }
 
 export function importHasData(report) {
@@ -512,6 +617,7 @@ export function reportLines(report) {
   return {
     landed,
     skipped: report.skipped,
+    skippedWhy: report.skippedWhy || [],
     sheets: report.sheets,
   };
 }

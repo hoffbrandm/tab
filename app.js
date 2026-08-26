@@ -857,21 +857,39 @@ function deleteForm() {
     <div class="confirm-actions"><button class="secondary" data-action="close-modal">Keep it</button><button class="${modal.target === "reset-month" ? "primary" : "danger"}" data-action="delete-confirmed">${modal.target === "reset-month" ? "Reset ticks" : "Delete"}</button></div></div>`;
 }
 
+function importReportCopy(report) {
+  const lines = reportLines(report);
+  const landed = lines.landed.length ? lines.landed.map(([label, count]) => `${label}: ${count}`).join(" · ") : "Nothing landed.";
+  const skipped = lines.skipped
+    ? ` · Skipped ${lines.skipped}${lines.skippedWhy.length ? ` (${lines.skippedWhy.join(", ")})` : ""}`
+    : "";
+  return `${landed}${skipped}`;
+}
+
 function importWorkbookForm() {
   const report = modal.report;
   if (report) {
-    const lines = reportLines(report);
     return `<div class="delete-confirm">${modalHead("Imported", "It’s in the gist.")}
-      <p>${lines.landed.length ? lines.landed.map(([label, count]) => `${label}: ${count}`).join(" · ") : "Nothing landed."}${lines.skipped ? ` · Skipped ${lines.skipped}` : ""}</p>
+      <p>${esc(importReportCopy(report))}</p>
       <button class="primary wide" type="button" data-action="close-modal">Done</button>
+    </div>`;
+  }
+  if (modal.pending) {
+    return `<div class="delete-confirm">${modalHead("Replace household?", "Friend tabs stay.")}
+      <p>This gist already has household lines. Replace them with the workbook, or keep what is there?</p>
+      <p class="helper">${esc(importReportCopy(modal.pending.report))}</p>
+      <div class="confirm-actions">
+        <button class="secondary" type="button" data-action="import-keep">Keep existing</button>
+        <button class="danger" type="button" data-action="import-replace">Replace household</button>
+      </div>
     </div>`;
   }
   return `<form id="import-form">${modalHead("Spreadsheet", "Import household lines")}
     <p>Upload the .xlsx export. Household lines are written to the same private gist. Friend tabs are not removed.</p>
-    ${householdHasData(household()) ? `<p class="helper">This household already has lines. Importing will replace them.</p>` : ""}
+    ${householdHasData(household()) ? `<p class="helper">If this household already has lines, you will be asked before they are replaced.</p>` : ""}
     <label>Workbook<input required type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>
     <p class="form-error" id="form-error"></p>
-    <button class="primary wide" type="submit">${householdHasData(household()) ? "Replace household lines" : "Import"}</button>
+    <button class="primary wide" type="submit">Import</button>
   </form>`;
 }
 
@@ -1341,6 +1359,15 @@ document.addEventListener("click", async (event) => {
     if (saved) { clearLocalStore(); closeModal(); showToast("Imported from this browser"); }
     else showToast(sync.message || "Could not import");
   }
+  if (action === "import-keep") {
+    closeModal();
+    showToast("Kept the existing household");
+  }
+  if (action === "import-replace") {
+    const pending = modal.pending;
+    if (!pending) return;
+    await commitWorkbookImport(pending.household, pending.report);
+  }
 });
 
 document.addEventListener("change", async (event) => {
@@ -1744,6 +1771,22 @@ async function savePayslip(event) {
   showToast(editing ? "Payslip updated" : "Payslip added");
 }
 
+async function commitWorkbookImport(imported, report) {
+  const saved = await withStoreUpdate(() => {
+    store = applyHouseholdImport(store, imported, { overwrite: true });
+  });
+  if (!saved) {
+    const message = sync.message || "Could not save the import.";
+    showFormError(message);
+    showToast(message);
+    return false;
+  }
+  modal = { kind: "import", report };
+  renderModal();
+  showToast("Imported");
+  return true;
+}
+
 async function importWorkbook(event) {
   event.preventDefault();
   const file = event.target.elements.file?.files?.[0];
@@ -1755,17 +1798,13 @@ async function importWorkbook(event) {
     if (!importHasData(report)) {
       throw new Error("Nothing from that workbook mapped. Check it is the .xlsx export with Main, Payslips, Annually, Where’s the money, and Charity.");
     }
-    const saved = await withStoreUpdate(() => {
-      store = applyHouseholdImport(store, imported, { overwrite: true });
-    });
-    if (!saved) {
-      showFormError(sync.message || "Could not save the import.");
-      setBusy(event.target, false);
+    if (householdHasData(household())) {
+      modal = { kind: "import", pending: { household: imported, report } };
+      renderModal();
       return;
     }
-    modal = { kind: "import", report };
-    renderModal();
-    showToast("Imported");
+    const saved = await commitWorkbookImport(imported, report);
+    if (!saved) setBusy(event.target, false);
   } catch (error) {
     showFormError(error.message || "Could not read that workbook.");
     setBusy(event.target, false);

@@ -98,4 +98,4 @@ Then open `http://127.0.0.1:4173`. On that local address you can open a session-
 npm test
 ```
 
-`test/calculations.test.mjs` covers friend-tab splits and balances. `test/household.test.mjs` covers cashflow totals, the daily pro-rate, UK tax years, Gift Aid, and the £100k remaining-sacrifice helper. The other tests cover store validation, the session credential, and the private-gist persistence layer.
+`test/calculations.test.mjs` covers friend-tab splits and balances. `test/household.test.mjs` covers cashflow totals, the daily pro-rate, UK tax years, Gift Aid, and the £100k remaining-sacrifice helper. `test/workbook-import.test.mjs` maps a synthetic workbook that looks like the Numbers layout — fake names and round figures only, never a real export. The other tests cover store validation, the session credential, and the private-gist persistence layer.
