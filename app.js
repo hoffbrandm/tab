@@ -24,7 +24,7 @@ import {
   taxYearOptions,
   ukTaxYearFromDate,
 } from "./household.js";
-import { applyHouseholdImport, householdFromWorkbook, reportLines } from "./workbook-import.js";
+import { applyHouseholdImport, householdFromWorkbook, importHasData, reportLines } from "./workbook-import.js";
 import { createSession } from "./session.js";
 import { emptyStore, parseStore } from "./store.js";
 import { readXlsx } from "./xlsx.js";
@@ -952,7 +952,7 @@ function envelopeForm() {
 function cardForm() {
   const item = modal.item || {};
   return `<form id="card-form">${modalHead(item.id ? "Card" : "New card", item.id ? "Update card" : "Add a card")}
-    <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Card one" /></label>
+    <label>Name<input required maxlength="80" name="name" value="${esc(item.name || "Card one")}" placeholder="Card one" /></label>
     ${moneyLabel("Balance", "amount", item.balancePence)}
     ${moneyLabel("Pending", "pending", item.pendingPence)}
     <p class="helper">Saving sets the snapshot date to today.</p>
@@ -1771,6 +1771,9 @@ async function importWorkbook(event) {
   try {
     const workbook = await readXlsx(await file.arrayBuffer());
     const { household: imported, report } = householdFromWorkbook(workbook);
+    if (!importHasData(report)) {
+      throw new Error("Nothing from that workbook mapped. Check it is the .xlsx export with Main, Payslips, Annually, Where’s the money, and Charity.");
+    }
     const saved = await withStoreUpdate(() => {
       store = applyHouseholdImport(store, imported, { overwrite: true });
     });

@@ -12,27 +12,61 @@ export async function inflateRaw(bytes) {
   return zlib.inflateRawSync(Buffer.from(bytes));
 }
 
+function findEndOfCentral(view, bytes) {
+  for (let index = bytes.length - 22; index >= 0 && index >= bytes.length - 0x10016; index -= 1) {
+    if (view.getUint32(index, true) === 0x06054b50) return index;
+  }
+  return -1;
+}
+
 export async function unzip(buffer) {
   const view = new DataView(buffer);
   const bytes = new Uint8Array(buffer);
   const files = {};
-  let offset = 0;
-  while (offset + 4 <= bytes.length) {
-    const sig = view.getUint32(offset, true);
-    if (sig === CENTRAL_SIG || sig === 0x06054b50) break;
-    if (sig !== LOCAL_SIG) break;
-    const method = view.getUint16(offset + 8, true);
-    const compressed = view.getUint32(offset + 18, true);
-    const nameLen = view.getUint16(offset + 26, true);
-    const extraLen = view.getUint16(offset + 28, true);
-    const name = decoder.decode(bytes.subarray(offset + 30, offset + 30 + nameLen));
-    const start = offset + 30 + nameLen + extraLen;
+  const end = findEndOfCentral(view, bytes);
+  const entries = [];
+  if (end >= 0) {
+    const count = view.getUint16(end + 10, true);
+    let offset = view.getUint32(end + 16, true);
+    for (let index = 0; index < count && offset + 46 <= bytes.length; index += 1) {
+      if (view.getUint32(offset, true) !== CENTRAL_SIG) break;
+      const method = view.getUint16(offset + 10, true);
+      const compressed = view.getUint32(offset + 20, true);
+      const nameLen = view.getUint16(offset + 28, true);
+      const extraLen = view.getUint16(offset + 30, true);
+      const commentLen = view.getUint16(offset + 32, true);
+      const localOffset = view.getUint32(offset + 42, true);
+      const name = decoder.decode(bytes.subarray(offset + 46, offset + 46 + nameLen));
+      entries.push({ name, method, compressed, localOffset });
+      offset += 46 + nameLen + extraLen + commentLen;
+    }
+  }
+  if (!entries.length) {
+    let offset = 0;
+    while (offset + 30 <= bytes.length && view.getUint32(offset, true) === LOCAL_SIG) {
+      const method = view.getUint16(offset + 8, true);
+      const compressed = view.getUint32(offset + 18, true);
+      const nameLen = view.getUint16(offset + 26, true);
+      const extraLen = view.getUint16(offset + 28, true);
+      const name = decoder.decode(bytes.subarray(offset + 30, offset + 30 + nameLen));
+      entries.push({ name, method, compressed, localOffset: offset });
+      offset += 30 + nameLen + extraLen + compressed;
+    }
+  }
+  for (const entry of entries) {
+    if (view.getUint32(entry.localOffset, true) !== LOCAL_SIG) continue;
+    const method = view.getUint16(entry.localOffset + 8, true);
+    const flags = view.getUint16(entry.localOffset + 6, true);
+    const nameLen = view.getUint16(entry.localOffset + 26, true);
+    const extraLen = view.getUint16(entry.localOffset + 28, true);
+    let compressed = view.getUint32(entry.localOffset + 18, true);
+    if (!compressed || flags & 0x8) compressed = entry.compressed;
+    const start = entry.localOffset + 30 + nameLen + extraLen;
     const payload = bytes.subarray(start, start + compressed);
     let content = payload;
     if (method === 8) content = await inflateRaw(payload);
-    else if (method !== 0) throw new Error(`Unsupported zip method ${method}.`);
-    files[name] = decoder.decode(content);
-    offset = start + compressed;
+    else if (method !== 0) throw new Error("That workbook uses an unsupported zip method.");
+    files[entry.name] = decoder.decode(content);
   }
   return files;
 }

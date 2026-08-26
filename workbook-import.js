@@ -477,6 +477,23 @@ export function applyHouseholdImport(store, household, { overwrite = true } = {}
   return next;
 }
 
+export function importHasData(report) {
+  return Boolean(
+    report.incomes
+    || report.bills
+    || report.envelopes
+    || report.cardSubs
+    || report.cards
+    || report.pendings
+    || report.oneOffs
+    || report.annualBills
+    || report.pots
+    || report.pensions
+    || report.payslips
+    || report.donations,
+  );
+}
+
 export function reportLines(report) {
   const landed = [
     ["Income", report.incomes],

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyHouseholdImport, householdFromWorkbook, reportLines } from "../workbook-import.js";
+import { applyHouseholdImport, householdFromWorkbook, importHasData, reportLines } from "../workbook-import.js";
 import { cashflowForMonth } from "../household.js";
 import { parseStore } from "../store.js";
 import { readXlsx } from "../xlsx.js";
@@ -71,4 +71,9 @@ test("a synthetic workbook maps into household lines and keeps friend tabs", asy
   assert.ok(flow.pendingPence >= 6000);
   const summary = reportLines(report);
   assert.ok(summary.landed.some((item) => item[0] === "Income" && item[1] === 2));
+  assert.equal(importHasData(report), true);
+  assert.equal(importHasData({
+    incomes: 0, bills: 0, envelopes: 0, cardSubs: 0, cards: 0, pendings: 0,
+    oneOffs: 0, annualBills: 0, pots: 0, pensions: 0, payslips: 0, donations: 0, skipped: 2,
+  }), false);
 });
