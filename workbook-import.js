@@ -2,7 +2,9 @@ import {
   emptyHousehold,
   isoDate,
   monthKey,
+  rememberPayslipCategories,
   ukTaxYearFromDate,
+  upsertMonthSnapshot,
 } from "./household.js";
 
 const MONTH_NAMES = {
@@ -401,6 +403,13 @@ function importPayslips(grid, household, report) {
     });
     report.payslips += 1;
   }
+  rememberPayslipCategories(household, [
+    ...deductionCols.map((item) => ({
+      id: `deduction-${item.label.toLowerCase().replace(/\s+/g, "-")}`,
+      label: item.label.replace(/\b\w/g, (char) => char.toUpperCase()),
+      kind: "deduction",
+    })),
+  ]);
 }
 
 function importAnnually(grid, household, report) {
@@ -442,12 +451,20 @@ function importPots(grid, household, report) {
       const name = text(cells[0]);
       if (skipRowName(name) || /pension|policy|ni number|nino/i.test(name)) break;
       let latest = null;
+      let snapshots = [];
       for (const date of dates) {
         if (!hasRecordedMoney(cells[date.index])) continue;
-        latest = { amountPence: moneyToPence(cells[date.index]), updatedOn: date.date };
+        const amountPence = moneyToPence(cells[date.index]);
+        const updatedOn = date.date;
+        latest = { amountPence, updatedOn };
+        snapshots = upsertMonthSnapshot(snapshots, {
+          month: updatedOn.slice(0, 7),
+          amountPence,
+          updatedOn,
+        });
       }
       if (!latest) continue;
-      household.pots.push({ id: uid(), name, ...latest });
+      household.pots.push({ id: uid(), name, ...latest, snapshots });
       report.pots += 1;
     }
   }
@@ -562,6 +579,7 @@ export function householdFromWorkbook(workbook) {
   if (!household.people.length) {
     household.people = emptyHousehold().people;
   }
+  rememberPayslipCategories(household);
   if (household.incomes.length && household.people.length) {
     household.incomes.forEach((item, index) => {
       if (!household.people.some((person) => person.id === item.personId)) {

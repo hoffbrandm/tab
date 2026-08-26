@@ -1,10 +1,15 @@
 import { splitExpense } from "./calculations.js";
 import {
+  BUILTIN_PAYSLIP_CATEGORIES,
+  DUE_ROLLS,
   emptyHousehold,
   isIsoDate,
   isMonthKey,
   isTaxYearLabel,
+  PAYSLIP_CATEGORY_KINDS,
   PENSION_STATUSES,
+  payslipCategoriesOf,
+  seedSnapshotsFromUpdatedOn,
   tickedKeysFromHappenedDates,
 } from "./household.js";
 
@@ -175,6 +180,10 @@ function parseHousehold(value) {
   const pots = list(value.pots).map(parsePot);
   const pensions = list(value.pensions).map(parsePension);
   const payslips = list(value.payslips).map((item) => parsePayslip(item, personIds));
+  const payslipCategories = payslipCategoriesOf({
+    payslipCategories: list(value.payslipCategories).map(parsePayslipCategory),
+    payslips,
+  });
   const donations = list(value.donations).map(parseDonation);
 
   uniqueIds(incomes, "Income");
@@ -209,6 +218,7 @@ function parseHousehold(value) {
     pots,
     pensions,
     payslips,
+    payslipCategories,
     donations,
     includeGiftAidInAni: Boolean(value.includeGiftAidInAni),
   };
@@ -275,13 +285,19 @@ function parseCard(card) {
   if (!card || typeof card !== "object" || Array.isArray(card)) {
     throw new StoreError("Each card must be an object.");
   }
-  return {
+  const parsed = {
     id: requiredId(card.id, "Card"),
     name: requiredName(card.name, "Card"),
     balancePence: moneyPence(card.balancePence, "Card"),
     pendingPence: moneyPence(card.pendingPence, "Card pending"),
     updatedOn: optionalDate(card.updatedOn, "Card"),
   };
+  parsed.snapshots = snapshotList(
+    card.snapshots?.length ? card.snapshots : seedSnapshotsFromUpdatedOn(parsed, { includePending: true }),
+    "Card",
+    { includePending: true },
+  );
+  return parsed;
 }
 
 function parsePending(item) {
@@ -300,11 +316,13 @@ function parseMonthly(item) {
     throw new StoreError("Each monthly expected must be an object.");
   }
   const paidFrom = item.paidFrom === "cash" ? "cash" : "card";
+  const dueRoll = DUE_ROLLS.includes(item.dueRoll) ? item.dueRoll : "calendar";
   return {
     id: requiredId(item.id, "Monthly"),
     name: requiredName(item.name, "Monthly"),
     amountPence: moneyPence(item.amountPence, "Monthly"),
-    dueDay: dueDay(item.dueDay, "Monthly"),
+    dueDay: dueRoll === "firstWorking" ? dueDay(item.dueDay || 1, "Monthly") : dueDay(item.dueDay, "Monthly"),
+    dueRoll,
     paidMonths: monthList(item.paidMonths, "Monthly"),
     paidFrom,
   };
@@ -415,12 +433,49 @@ function parsePot(pot) {
   if (!pot || typeof pot !== "object" || Array.isArray(pot)) {
     throw new StoreError("Each pot must be an object.");
   }
-  return {
+  const parsed = {
     id: requiredId(pot.id, "Pot"),
     name: requiredName(pot.name, "Pot"),
     amountPence: moneyPence(pot.amountPence, "Pot"),
     updatedOn: optionalDate(pot.updatedOn, "Pot"),
   };
+  parsed.snapshots = snapshotList(
+    pot.snapshots?.length ? pot.snapshots : seedSnapshotsFromUpdatedOn(parsed),
+    "Pot",
+  );
+  return parsed;
+}
+
+function parsePayslipCategory(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new StoreError("Each payslip category must be an object.");
+  }
+  const kind = PAYSLIP_CATEGORY_KINDS.includes(item.kind) ? item.kind : "deduction";
+  const builtin = BUILTIN_PAYSLIP_CATEGORIES.find((entry) => entry.kind === kind && kind !== "deduction");
+  return {
+    id: requiredId(item.id || builtin?.id || `cat-${kind}`, "Payslip category"),
+    label: requiredName(item.label || builtin?.label, "Payslip category"),
+    kind,
+  };
+}
+
+function snapshotList(value, label, { includePending = false } = {}) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new StoreError(`${label} snapshots must be an array.`);
+  const byMonth = new Map();
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new StoreError(`${label} snapshot must be an object.`);
+    }
+    if (!isMonthKey(item.month)) throw new StoreError(`${label} snapshot month must be YYYY-MM.`);
+    byMonth.set(item.month, {
+      month: item.month,
+      amountPence: moneyPence(item.amountPence, `${label} snapshot`),
+      ...(includePending ? { pendingPence: moneyPence(item.pendingPence, `${label} snapshot pending`) } : {}),
+      updatedOn: optionalDate(item.updatedOn, `${label} snapshot`),
+    });
+  }
+  return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
 }
 
 function parsePension(pension) {

@@ -4,6 +4,8 @@ import {
   addMonths,
   aniFromHousehold,
   ANI_LIMIT_PENCE,
+  BUILTIN_PAYSLIP_CATEGORIES,
+  cardsForMonth,
   cashflowForMonth,
   currentPeriodHint,
   currentUkTaxYear,
@@ -13,12 +15,17 @@ import {
   isCurrentMonth,
   monthKey,
   monthLabel,
+  monthlyDueLabel,
   monthlyIsAllowed,
   monthliesOf,
-  ordinalDay,
   paidInMonth,
+  payslipAmountForCategory,
+  payslipCategoriesOf,
   payslipIsConfirmed,
   payslipRecordLabels,
+  potHistorySeries,
+  potsNeedCurrentMonthLog,
+  rememberPayslipCategories,
   resetMonthTicks,
   savingLine,
   PENSION_STATUSES,
@@ -26,6 +33,8 @@ import {
   taxYearOptionsFor,
   toggleWeeklySlotTick,
   ukTaxYearFromDate,
+  unusedBuiltinPayslipCategories,
+  upsertMonthSnapshot,
   WEEKDAYS,
   weeklyCadenceLabel,
   weeklyRulesOf,
@@ -112,6 +121,12 @@ function signedBalanceClass(pence) { return pence > 0 ? "positive" : pence < 0 ?
 function moneyFieldValue(pence) {
   if (!pence) return "";
   return (pence / 100).toFixed(2).replace(/\.00$/, "");
+}
+
+function formatExtraPercent(result) {
+  const ratio = Number(result?.extraSacrificeOfRemaining) || 0;
+  if (ratio <= 0) return "";
+  return ` (${(ratio * 100).toFixed(1)}% of remaining pay)`;
 }
 
 function parseMoneyAllowZero(value) {
@@ -277,7 +292,7 @@ function signInScreen() {
       ${reason ? `<p class="form-error">${esc(reason)}</p>` : ""}
       <form id="login-form">
         <label class="visually-hidden" for="github-user">GitHub user</label>
-        <input id="github-user" name="username" value="hoffbrandm" autocomplete="username" class="visually-hidden" />
+        <input id="github-user" name="username" value="tab" autocomplete="username" class="visually-hidden" />
         <label>GitHub token
           <input type="password" name="token" required autocomplete="current-password" spellcheck="false" />
         </label>
@@ -344,7 +359,7 @@ function sectionHead(title, action, addLabel) {
 
 function lineRow({ edit, id, title, detail, amount, tickAction, ticked, tickLabel, tickId }) {
   return `<article class="line">
-    ${tickAction ? `<button class="tick${ticked ? " on" : ""}" type="button" data-action="${tickAction}" data-id="${esc(tickId || id)}" aria-pressed="${ticked ? "true" : "false"}" aria-label="${esc(tickLabel || (ticked ? "Done" : "Not done"))}">${ticked ? "✓" : ""}</button>` : ""}
+    ${tickAction ? `<button class="tick${ticked ? " on" : ""}" type="button" data-action="${tickAction}" data-id="${esc(tickId || id)}" aria-pressed="${ticked ? "true" : "false"}" aria-label="${esc(tickLabel || (ticked ? "Done" : "Not done"))}"><span class="tick-box" aria-hidden="true">${ticked ? "✓" : ""}</span></button>` : ""}
     <button class="line-main" type="button" data-action="${edit}" data-id="${esc(id)}">
       <span class="line-copy"><strong>${esc(title)}</strong>${detail ? `<small>${esc(detail)}</small>` : ""}</span>
       <span class="line-amount">${amount}</span>
@@ -400,7 +415,7 @@ function cashflowScreen() {
           tickId: slot.id,
           ticked: slot.ticked,
           tickLabel: slot.ticked ? `Happened in ${period}` : `Not yet in ${period}`,
-        })).join("") : emptyLines(`Rules live under Weeklies. ${period} gets one slot per weekday or count — not five pasted copies.`, "go-weeklies", "Open Weeklies")}
+        })).join("") : emptyLines(`Rules live under Weeklies. ${period} gets one slot per weekday in that month — not five pasted copies.`, "go-weeklies", "Open Weeklies")}
         <button class="text-button" type="button" data-action="add-weekly-extra">Add extra this month</button>
       </section>
       <section class="block">
@@ -409,7 +424,7 @@ function cashflowScreen() {
           edit: "edit-monthly",
           id: item.id,
           title: item.name,
-          detail: `${item.paidFrom === "cash" ? "Cash" : "Card"} · due ${ordinalDay(item.dueDay)}${monthlyIsAllowed(item, viewMonth, flow.dayOfMonth) ? " · allowed" : ""}`,
+          detail: `${item.paidFrom === "cash" ? "Cash" : "Card"} · ${monthlyDueLabel(item, viewMonth)}${monthlyIsAllowed(item, viewMonth, flow.dayOfMonth) ? " · allowed" : ""}`,
           amount: formatMoney(item.amountPence),
           tickAction: "toggle-monthly",
           ticked: paidInMonth(item, viewMonth),
@@ -418,11 +433,13 @@ function cashflowScreen() {
       </section>
       <section class="block">
         ${sectionHead("Cards", "add-card", "Add")}
-        ${hh.cards.map((item) => lineRow({
+        ${cardsForMonth(hh, viewMonth, now).map((item) => lineRow({
           edit: "edit-card",
           id: item.id,
           title: item.name,
-          detail: item.pendingPence ? `Pending ${formatMoney(item.pendingPence)}` : "Balance",
+          detail: item.missingSnapshot
+            ? `No card snapshot for ${period}`
+            : (item.pendingPence ? `Pending ${formatMoney(item.pendingPence)}` : `Balance · ${period}`),
           amount: formatMoney(item.balancePence),
         })).join("")}
         ${hh.pendings.map((item) => lineRow({
@@ -464,7 +481,7 @@ function weekliesScreen() {
   return shell({
     eyebrow: "Weeklies",
     title: "Weekly rules.",
-    lede: "Enter a food shop once. Cashflow makes one tick slot for each Tuesday (or Friday) in the month on screen. A four-Tuesday month gets four slots — not five pasted copies.",
+    lede: "Enter a food shop once. Every week on a chosen weekday — four Tuesdays in the month on screen means four slots. Ticks stay on that month. A new month starts unticked.",
     month: true,
     body: `
       <section class="block">
@@ -475,7 +492,7 @@ function weekliesScreen() {
           title: rule.name,
           detail: weeklyCadenceLabel(rule),
           amount: formatMoney(rule.amountPence),
-        })).join("") : emptyLines("Food shop every Tuesday. Amazon every Friday. Cat litter once a month.", "add-weekly-rule", "Add a weekly rule")}
+        })).join("") : emptyLines("Food shop every week on Tuesday. Amazon every week on Friday. Cat litter once a month.", "add-weekly-rule", "Add a weekly rule")}
       </section>
       <section class="block">
         ${sectionHead(`${period} slots`, "add-weekly-extra", "Add extra")}
@@ -503,7 +520,7 @@ function monthliesScreen() {
   return shell({
     eyebrow: "Monthlies",
     title: "Expected dues.",
-    lede: "Name, amount, day of month. Once that day arrives — or you tick it — cashflow treats the amount as allowed against the cards.",
+    lede: "Name, amount, and due day. Use the calendar day, roll a weekend to the next working day, or the first working day of the month. Allowed-from uses the effective date in the month on screen.",
     month: true,
     extra: items.length ? `<div class="dash single"><div class="stat"><span>Allowed in ${monthLabel(viewMonth)}</span><strong>${formatMoney(flow.allowedPence)}</strong></div></div>` : "",
     body: `
@@ -513,7 +530,7 @@ function monthliesScreen() {
           edit: "edit-monthly",
           id: item.id,
           title: item.name,
-          detail: `${item.paidFrom === "cash" ? "Cash" : "Card"} · due ${ordinalDay(item.dueDay)}`,
+          detail: `${item.paidFrom === "cash" ? "Cash" : "Card"} · ${monthlyDueLabel(item, viewMonth)}`,
           amount: formatMoney(item.amountPence),
           tickAction: "toggle-monthly",
           ticked: paidInMonth(item, viewMonth),
@@ -584,12 +601,15 @@ function annualScreen() {
 function potsScreen() {
   const hh = household();
   const total = hh.pots.reduce((sum, pot) => sum + pot.amountPence, 0);
+  const reminder = potsNeedCurrentMonthLog(hh.pots)
+    ? `<p class="helper pot-reminder">Log this month’s figures when you have them.</p>`
+    : "";
   return shell({
     eyebrow: "Where’s the money",
     title: "Pots.",
     lede: "Named pots and today’s figure. Pensions are names and status only — no policy or NI numbers.",
     back: "",
-    extra: hh.pots.length ? `<div class="dash single"><div class="stat"><span>Pots total</span><strong>${formatMoney(total)}</strong></div></div>` : "",
+    extra: hh.pots.length ? `<div class="dash single"><div class="stat"><span>Pots total</span><strong>${formatMoney(total)}</strong></div></div>${potHistoryGraphic(hh.pots)}${reminder}` : "",
     body: `
       <section class="block">
         ${sectionHead("Pots", "add-pot", "Add")}
@@ -617,6 +637,39 @@ function potsScreen() {
 
 function pensionLabel(status) {
   return { active: "Active", deferred: "Deferred", drawing: "Drawing", other: "Other" }[status] || status;
+}
+
+function potHistoryGraphic(pots) {
+  const series = potHistorySeries(pots);
+  const months = series[0]?.points.map((point) => point.month) || [];
+  if (months.length < 2) {
+    return `<p class="helper">A line appears here once a pot has more than one month logged.</p>`;
+  }
+  const values = series.flatMap((item) => item.points.map((point) => point.amountPence).filter((value) => value != null));
+  const max = Math.max(1, ...values);
+  const width = 320;
+  const height = 120;
+  const pad = { left: 8, right: 8, top: 10, bottom: 22 };
+  const innerW = width - pad.left - pad.right;
+  const innerH = height - pad.top - pad.bottom;
+  const xFor = (index) => pad.left + (months.length === 1 ? innerW / 2 : (index / (months.length - 1)) * innerW);
+  const yFor = (value) => pad.top + innerH - ((value || 0) / max) * innerH;
+  const colors = ["#16715c", "#ad4e42", "#3d4f8c", "#8a5a1f", "#5b4b8a", "#2f6f7a"];
+  const polylines = series.map((item, seriesIndex) => {
+    const points = item.points
+      .map((point, index) => `${xFor(index).toFixed(1)},${yFor(point.amountPence).toFixed(1)}`)
+      .join(" ");
+    return `<polyline fill="none" stroke="${colors[seriesIndex % colors.length]}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" points="${points}"></polyline>`;
+  }).join("");
+  const first = months[0];
+  const last = months[months.length - 1];
+  return `<figure class="pot-chart">
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Pot values over time">${polylines}
+      <text x="${pad.left}" y="${height - 6}" class="pot-chart-label">${esc(monthLabel(first))}</text>
+      <text x="${width - pad.right}" y="${height - 6}" text-anchor="end" class="pot-chart-label">${esc(monthLabel(last))}</text>
+    </svg>
+    <figcaption class="helper">Increase and decrease across logged months.</figcaption>
+  </figure>`;
 }
 
 function payslipsScreen() {
@@ -687,7 +740,7 @@ function aniScreen() {
         ${result.confirmedCount === 0
           ? "<p>Add a confirmed payslip to project the rest of the tax year.</p>"
           : result.overLimit
-            ? `<p>Sacrifice another ${formatMoney(result.extraSacrificePence)} this tax year to stay at £100k.${result.remainingMonths ? ` That’s ${formatMoney(result.extraPerRemainingMonthPence)} in each of the ${result.remainingMonths} remaining months.` : ""}</p>`
+            ? `<p>Sacrifice another ${formatMoney(result.extraSacrificePence)} this tax year${formatExtraPercent(result)} to stay at £100k.${result.remainingMonths ? ` That’s ${formatMoney(result.extraPerRemainingMonthPence)} in each of the ${result.remainingMonths} remaining months.` : ""}</p>`
             : `<p>On this projection you’re ${formatMoney(result.underByPence)} under the £100k cliff.</p>`}
         <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Gift Aid from giving ${formatMoney(result.giftAidAddBackPence)}.</p>
       </section>
@@ -724,8 +777,8 @@ function givingScreen() {
 function moreScreen() {
   const links = [
     ["home", "Cashflow", "Leftover, generated weeklies, allowed monthlies, cards"],
-    ["weeklies", "Weeklies", "Rules — one row, not five pasted copies"],
-    ["monthlies", "Monthlies", "Expected dues. Allowed from the due day"],
+    ["weeklies", "Weeklies", "Rules — every week on a weekday, or a monthly count"],
+    ["monthlies", "Monthlies", "Expected dues. Calendar day or next working day"],
     ["planned", "Planned", "One-offs by the month on the record"],
     ["annual", "Annual", "Renewals. Total ÷ 12 is the cashflow reserve"],
     ["pots", "Pots", "Where the money is, plus pension names"],
@@ -950,15 +1003,21 @@ function billForm() {
 
 function monthlyForm() {
   const item = modal.item || {};
+  const dueRoll = item.dueRoll || "calendar";
   return `<form id="monthly-form">${modalHead(item.id ? "Monthly" : "New monthly", item.id ? "Edit monthly" : "Add a monthly")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Phone, mortgage…" /></label>
     ${moneyLabel("Expected amount", "amount", item.amountPence)}
-    <label>Day of month<input required type="number" name="dueDay" min="1" max="31" value="${item.dueDay || 1}" /></label>
+    <label>Due<select name="dueRoll" data-action="monthly-due-roll">
+      <option value="calendar" ${dueRoll === "calendar" ? "selected" : ""}>On this calendar day</option>
+      <option value="nextWorking" ${dueRoll === "nextWorking" ? "selected" : ""}>This day, or the next working day if it is a weekend</option>
+      <option value="firstWorking" ${dueRoll === "firstWorking" ? "selected" : ""}>First working day of the month</option>
+    </select></label>
+    <label data-due-day class="${dueRoll === "firstWorking" ? "hidden" : ""}">Day of month<input type="number" name="dueDay" min="1" max="31" value="${item.dueDay || 1}" /></label>
     <label>Paid from<select name="paidFrom">
       <option value="card" ${item.paidFrom !== "cash" ? "selected" : ""}>Card — allowed against the balance from this day</option>
       <option value="cash" ${item.paidFrom === "cash" ? "selected" : ""}>Cash — comes out of leftover</option>
     </select></label>
-    <p class="helper">From the due day, or when you tick it, a card line counts as allowed. If the card balance rises by this amount, you are not over.</p>
+    <p class="helper">UK weekdays are Monday to Friday. Allowed-from uses the effective date in the month on screen, or when you tick it.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save monthly" : "Add monthly"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-monthly">Delete monthly</button>' : ""}
@@ -976,13 +1035,13 @@ function weeklyRuleForm() {
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Food shop, Amazon, cat litter…" /></label>
     ${moneyLabel("Typical amount", "amount", item.amountPence)}
     <label>Cadence<select name="cadence" data-action="weekly-cadence">
-      <option value="weekday" ${cadence === "weekday" ? "selected" : ""}>Every weekday</option>
       <option value="once" ${cadence === "once" ? "selected" : ""}>Once a month</option>
       <option value="times" ${cadence === "times" ? "selected" : ""}>N times a month</option>
+      <option value="weekday" ${cadence === "weekday" ? "selected" : ""}>Every week on a chosen weekday</option>
     </select></label>
     <label data-weekly-field="weekday" class="${cadence === "weekday" ? "" : "hidden"}">Weekday<select name="weekday">${WEEKDAYS.map((day) => `<option value="${day.value}" ${Number(item.weekday || 2) === day.value ? "selected" : ""}>${day.label}</option>`).join("")}</select></label>
     <label data-weekly-field="times" class="${cadence === "times" ? "" : "hidden"}">Times a month<input type="number" name="timesPerMonth" min="1" max="12" value="${item.timesPerMonth || 2}" /></label>
-    <p class="helper">Cashflow builds this month’s slots from the real calendar. Ticks do not carry forward.</p>
+    <p class="helper">Slots are the count of that weekday in the month you are viewing. Ticks stay on that month. A new month starts unticked.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save rule" : "Add rule"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-weekly-rule">Delete rule</button>' : ""}
@@ -1007,7 +1066,7 @@ function cardForm() {
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name || "Card one")}" placeholder="Card one" /></label>
     ${moneyLabel("Balance", "amount", item.balancePence)}
     ${moneyLabel("Pending", "pending", item.pendingPence)}
-    <p class="helper">Saving sets the snapshot date to today.</p>
+    <p class="helper">Saves the card picture for ${monthLabel(viewMonth)}.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Update figure" : "Add card"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-card">Delete card</button>' : ""}
@@ -1096,12 +1155,8 @@ function pensionForm() {
 
 function payslipForm() {
   const item = modal.payslip || {};
-  const show = {
-    bonus: Boolean(item.bonusPence),
-    benefits: Boolean(item.benefitsPence),
-    sacrifice: Boolean(item.salarySacrificePensionPence),
-  };
-  const deductions = item.otherDeductions || [];
+  const categories = payslipFormCategories(item);
+  const unusedBuiltins = unusedBuiltinPayslipCategories(categories);
   return `<form id="payslip-form">${modalHead(item.id ? "Payslip" : "New payslip", item.id ? "Edit payslip" : "Add a payslip")}
     <label>Person<select name="personId" required>${household().people.map((person) => `<option value="${person.id}" ${person.id === (item.personId || household().people[0]?.id) ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select></label>
     <label>Tax year<select name="taxYear">${taxYearOptionsFor(item.taxYear).map((year) => `<option value="${year}" ${year === (item.taxYear || currentUkTaxYear()) ? "selected" : ""}>${year}</option>`).join("")}</select></label>
@@ -1109,19 +1164,22 @@ function payslipForm() {
     <label>Month the money lands<input required type="month" name="moneyLandsMonth" value="${item.moneyLandsMonth || item.periodMonth || viewMonth}" /></label>
     ${moneyLabel("Salary", "salary", item.salaryPence)}
     ${moneyLabel("Gross", "gross", item.grossPence)}
-    <div class="extra-actions">
-      ${show.bonus ? "" : `<button type="button" class="text-button" data-action="show-extra" data-extra="bonus">Add bonus</button>`}
-      ${show.benefits ? "" : `<button type="button" class="text-button" data-action="show-extra" data-extra="benefits">Add benefits</button>`}
-      ${show.sacrifice ? "" : `<button type="button" class="text-button" data-action="show-extra" data-extra="sacrifice">Add salary-sacrifice pension</button>`}
-    </div>
-    <label data-extra-field="bonus" class="${show.bonus ? "" : "hidden"}">Bonus<div class="money-input"><span>£</span><input inputmode="decimal" name="bonus" value="${moneyFieldValue(item.bonusPence)}" placeholder="0.00" autocomplete="off" /></div></label>
-    <label data-extra-field="benefits" class="${show.benefits ? "" : "hidden"}">Benefits<div class="money-input"><span>£</span><input inputmode="decimal" name="benefits" value="${moneyFieldValue(item.benefitsPence)}" placeholder="0.00" autocomplete="off" /></div></label>
-    <label data-extra-field="sacrifice" class="${show.sacrifice ? "" : "hidden"}">Salary-sacrifice pension<div class="money-input"><span>£</span><input inputmode="decimal" name="sacrifice" value="${moneyFieldValue(item.salarySacrificePensionPence)}" placeholder="0.00" autocomplete="off" /></div></label>
-    <div class="deduction-block">
-      <p class="helper">Add a deduction type when a new column appears on a slip — cycle scheme, student loan, and so on. Do not leave empty columns sitting here.</p>
-      <div id="deduction-rows">${deductions.map((row) => deductionRowMarkup(row.id, row.label, row.amountPence)).join("")}</div>
-      <button type="button" class="text-button" data-action="add-deduction-row">Add a deduction type</button>
-    </div>
+    <details class="adjustment extra-fields" ${categories.length ? "open" : ""}>
+      <summary>Extra fields / Categories</summary>
+      <p>Add a bonus, benefit, salary-sacrifice, or any deduction type. Once added it stays available on later slips, even if this slip leaves it at zero.</p>
+      ${categories.map((category) => payslipCategoryField(category, item)).join("")}
+      <label>Add a category
+        <select data-action="add-payslip-category">
+          <option value="">Choose…</option>
+          ${unusedBuiltins.map((category) => `<option value="${esc(category.kind)}">${esc(category.label)}</option>`).join("")}
+          <option value="deduction">New deduction or extra line</option>
+        </select>
+      </label>
+      <div data-new-deduction class="hidden">
+        <label>Name<input maxlength="80" data-new-deduction-name placeholder="Cycle scheme, dental…" autocomplete="off" /></label>
+        <button type="button" class="text-button" data-action="confirm-new-deduction">Add this category</button>
+      </div>
+    </details>
     ${moneyLabel("Tax", "tax", item.taxPence)}
     ${moneyLabel("National Insurance", "ni", item.niPence)}
     ${moneyLabel("Net", "net", item.netPence)}
@@ -1132,6 +1190,24 @@ function payslipForm() {
     <button class="primary wide" type="submit">${item.id ? "Save payslip" : "Add payslip"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-payslip">Delete payslip</button>' : ""}
   </form>`;
+}
+
+function payslipFormCategories(slip) {
+  return payslipCategoriesOf({
+    payslipCategories: [...payslipCategoriesOf(household()), ...(modal.extraCategories || [])],
+    payslips: slip?.id || slip?.otherDeductions || slip?.bonusPence || slip?.benefitsPence || slip?.salarySacrificePensionPence
+      ? [slip]
+      : [],
+  });
+}
+
+function payslipCategoryField(category, slip) {
+  const amount = payslipAmountForCategory(slip, category);
+  if (category.kind === "deduction") {
+    return deductionRowMarkup(category.id, category.label, amount);
+  }
+  const name = category.kind === "bonus" ? "bonus" : category.kind === "benefits" ? "benefits" : "sacrifice";
+  return `<label>${esc(category.label)}<div class="money-input"><span>£</span><input inputmode="decimal" name="${name}" value="${moneyFieldValue(amount)}" placeholder="0.00" autocomplete="off" /></div></label>`;
 }
 
 function deductionRowMarkup(id, label = "", amountPence = 0) {
@@ -1319,7 +1395,7 @@ document.addEventListener("click", async (event) => {
       kind: "delete",
       target: "reset-month",
       label: `${monthLabel(viewMonth)} ticks`,
-      copy: `Clears ticks on weeklies and monthlies for ${monthLabel(viewMonth)}. Rules stay. Next month gets fresh slots from the rules.`,
+      copy: `Clears ticks on weeklies and monthlies for ${monthLabel(viewMonth)} only. Other months stay as they were. Rules stay.`,
     };
     renderModal();
   }
@@ -1346,6 +1422,16 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "remove-deduction-row") {
     target.closest("[data-deduction]")?.remove();
+  }
+  if (action === "confirm-new-deduction") {
+    const name = document.querySelector("[data-new-deduction-name]")?.value.trim();
+    if (!name) {
+      showFormError("Name the deduction or extra line.");
+      return;
+    }
+    snapshotPayslipForm();
+    modal.extraCategories = [...(modal.extraCategories || []), { id: uid(), label: name, kind: "deduction" }];
+    renderModal();
   }
 
   if (action === "close-modal") closeModal();
@@ -1433,6 +1519,24 @@ document.addEventListener("change", async (event) => {
     const cadence = event.target.value;
     document.querySelector("[data-weekly-field=weekday]")?.classList.toggle("hidden", cadence !== "weekday");
     document.querySelector("[data-weekly-field=times]")?.classList.toggle("hidden", cadence !== "times");
+  }
+  if (action === "monthly-due-roll") {
+    document.querySelector("[data-due-day]")?.classList.toggle("hidden", event.target.value === "firstWorking");
+  }
+  if (action === "add-payslip-category") {
+    const value = event.target.value;
+    if (!value) return;
+    if (value === "deduction") {
+      document.querySelector("[data-new-deduction]")?.classList.remove("hidden");
+      document.querySelector("[data-new-deduction-name]")?.focus();
+      event.target.value = "";
+      return;
+    }
+    const builtin = BUILTIN_PAYSLIP_CATEGORIES.find((item) => item.kind === value);
+    if (!builtin) return;
+    snapshotPayslipForm();
+    modal.extraCategories = [...(modal.extraCategories || []), builtin];
+    renderModal();
   }
 });
 
@@ -1626,13 +1730,19 @@ async function saveMonthly(event) {
     list: "monthlies",
     toastAdd: "Monthly added",
     toastEdit: "Monthly updated",
-    build: (data) => ({
-      name: requireName(data.get("name"), "name"),
-      amountPence: requireMoney(data.get("amount"), "amount"),
-      dueDay: requireDueDay(data.get("dueDay")),
-      paidFrom: data.get("paidFrom") === "cash" ? "cash" : "card",
-      paidMonths: modal.item?.paidMonths || [],
-    }),
+    build: (data) => {
+      const dueRoll = ["calendar", "nextWorking", "firstWorking"].includes(data.get("dueRoll"))
+        ? data.get("dueRoll")
+        : "calendar";
+      return {
+        name: requireName(data.get("name"), "name"),
+        amountPence: requireMoney(data.get("amount"), "amount"),
+        dueDay: dueRoll === "firstWorking" ? (Number(data.get("dueDay")) || 1) : requireDueDay(data.get("dueDay")),
+        dueRoll,
+        paidFrom: data.get("paidFrom") === "cash" ? "cash" : "card",
+        paidMonths: modal.item?.paidMonths || [],
+      };
+    },
   });
 }
 
@@ -1683,12 +1793,33 @@ async function saveCard(event) {
     list: "cards",
     toastAdd: "Card added",
     toastEdit: "Card updated",
-    build: (data) => ({
-      name: requireName(data.get("name"), "name"),
-      balancePence: requireMoney(data.get("amount"), "balance"),
-      pendingPence: requireMoney(data.get("pending"), "pending"),
-      updatedOn: today(),
-    }),
+    build: (data) => {
+      const amountPence = requireMoney(data.get("amount"), "balance");
+      const pendingPence = requireMoney(data.get("pending"), "pending");
+      const existing = modal.item || {};
+      const snapshots = upsertMonthSnapshot(existing.snapshots || [], {
+        month: viewMonth,
+        amountPence,
+        pendingPence,
+        updatedOn: today(),
+      });
+      if (!existing.id || viewMonth === monthKey()) {
+        return {
+          name: requireName(data.get("name"), "name"),
+          balancePence: amountPence,
+          pendingPence,
+          updatedOn: today(),
+          snapshots,
+        };
+      }
+      return {
+        name: requireName(data.get("name"), "name"),
+        balancePence: existing.balancePence || 0,
+        pendingPence: existing.pendingPence || 0,
+        updatedOn: existing.updatedOn || today(),
+        snapshots,
+      };
+    },
   });
 }
 
@@ -1757,11 +1888,20 @@ async function savePot(event) {
     list: "pots",
     toastAdd: "Pot added",
     toastEdit: "Pot updated",
-    build: (data) => ({
-      name: requireName(data.get("name"), "name"),
-      amountPence: requireMoney(data.get("amount"), "amount"),
-      updatedOn: today(),
-    }),
+    build: (data) => {
+      const amountPence = requireMoney(data.get("amount"), "amount");
+      const updatedOn = today();
+      return {
+        name: requireName(data.get("name"), "name"),
+        amountPence,
+        updatedOn,
+        snapshots: upsertMonthSnapshot(modal.item?.snapshots || [], {
+          month: monthKey(),
+          amountPence,
+          updatedOn,
+        }),
+      };
+    },
   });
 }
 
@@ -1830,9 +1970,17 @@ async function savePayslip(event) {
   const editing = Boolean(modal.payslip?.id);
   const existingId = modal.payslip?.id;
   setBusy(event.target, true);
+  const extras = [
+    ...(modal.extraCategories || []),
+    ...otherDeductions.filter((row) => row.label).map((row) => ({ id: row.id, label: row.label, kind: "deduction" })),
+  ];
+  if (event.target.elements.bonus) extras.push(BUILTIN_PAYSLIP_CATEGORIES[0]);
+  if (event.target.elements.benefits) extras.push(BUILTIN_PAYSLIP_CATEGORIES[1]);
+  if (event.target.elements.sacrifice) extras.push(BUILTIN_PAYSLIP_CATEGORIES[2]);
   const saved = await withStoreUpdate(() => {
     if (editing) Object.assign(household().payslips.find((item) => item.id === existingId), payload);
     else household().payslips.push({ id: uid(), ...payload });
+    rememberPayslipCategories(household(), extras);
   });
   if (!saved) {
     showFormError(sync.message || "Could not save this payslip.");
@@ -1856,6 +2004,39 @@ async function saveDonation(event) {
       giftAid: data.get("giftAid") === "on",
     }),
   });
+}
+
+function snapshotPayslipForm() {
+  const form = document.querySelector("#payslip-form");
+  if (!form || !modal || modal.kind !== "payslip") return;
+  const data = new FormData(form);
+  const readMoney = (name) => {
+    const value = parseMoneyAllowZero(data.get(name));
+    return value == null ? 0 : value;
+  };
+  modal.payslip = {
+    ...(modal.payslip || {}),
+    personId: data.get("personId"),
+    taxYear: data.get("taxYear"),
+    periodMonth: data.get("periodMonth"),
+    moneyLandsMonth: data.get("moneyLandsMonth"),
+    salaryPence: readMoney("salary"),
+    grossPence: readMoney("gross"),
+    bonusPence: readMoney("bonus"),
+    benefitsPence: readMoney("benefits"),
+    salarySacrificePensionPence: readMoney("sacrifice"),
+    taxPence: readMoney("tax"),
+    niPence: readMoney("ni"),
+    netPence: readMoney("net"),
+    note: String(data.get("note") || "").trim(),
+    taxCode: String(data.get("taxCode") || "").trim(),
+    forecast: data.get("forecast") === "on",
+    otherDeductions: [...form.querySelectorAll("[data-deduction]")].map((row) => ({
+      id: row.dataset.id || uid(),
+      label: row.querySelector("[name=deductionLabel]")?.value.trim() || "",
+      amountPence: parseMoneyAllowZero(row.querySelector("[name=deductionAmount]")?.value) || 0,
+    })),
+  };
 }
 
 function updateLiveSplit() {

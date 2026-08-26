@@ -10,20 +10,27 @@ import {
   currentPeriodHint,
   currentUkTaxYear,
   datesOfWeekdayInMonth,
+  effectiveDueDate,
   emptyHousehold,
+  extraSacrificeRatio,
   giftAidGrossPence,
   householdHasData,
   incomeFromPayslipsPence,
   monthlyIsAllowed,
   payslipAniPence,
+  payslipCategoriesOf,
   payslipIsConfirmed,
   payslipRecordLabels,
+  potsNeedCurrentMonthLog,
+  rememberPayslipCategories,
   resetMonthTicks,
   savingLine,
   spendVerdict,
+  toggleWeeklySlotTick,
   ukTaxYearFromDate,
   viewPeriodLabel,
   weekliesForMonth,
+  weeklyCadenceLabel,
   weeklySlotKeysForRule,
   weeklySlotsForMonth,
 } from "../household.js";
@@ -133,6 +140,30 @@ test("a monthly due on the 21st counts as allowed on or after the 21st", () => {
   assert.equal(onDay.overUnderPence, 0);
 });
 
+test("a weekend due day can roll to the next UK working day", () => {
+  const item = { id: "m-1", name: "Card due", amountPence: 5000, dueDay: 21, dueRoll: "nextWorking", paidMonths: [], paidFrom: "card" };
+  assert.equal(effectiveDueDate(item, "2026-02"), "2026-02-23");
+  assert.equal(monthlyIsAllowed(item, "2026-02", 21), false);
+  assert.equal(monthlyIsAllowed(item, "2026-02", 22), false);
+  assert.equal(monthlyIsAllowed(item, "2026-02", 23), true);
+  const calendar = { ...item, dueRoll: "calendar" };
+  assert.equal(effectiveDueDate(calendar, "2026-02"), "2026-02-21");
+  assert.equal(monthlyIsAllowed(calendar, "2026-02", 21), true);
+  const sundayEnd = { ...item, dueDay: 31 };
+  assert.equal(effectiveDueDate(sundayEnd, "2026-05"), "2026-06-01");
+  assert.equal(monthlyIsAllowed(sundayEnd, "2026-05", 31), false);
+});
+
+test("first working day skips a weekend 1st", () => {
+  const item = { id: "m-1", name: "Mortgage", amountPence: 1000, dueDay: 1, dueRoll: "firstWorking", paidMonths: [], paidFrom: "card" };
+  assert.equal(effectiveDueDate(item, "2026-08"), "2026-08-03");
+  assert.equal(monthlyIsAllowed(item, "2026-08", 1), false);
+  assert.equal(monthlyIsAllowed(item, "2026-08", 2), false);
+  assert.equal(monthlyIsAllowed(item, "2026-08", 3), true);
+  assert.equal(effectiveDueDate(item, "2026-05"), "2026-05-01");
+  assert.equal(monthlyIsAllowed(item, "2026-05", 1), true);
+});
+
 test("a ticked card sub counts as allowed before its due day", () => {
   const ticked = {
     ...household,
@@ -175,6 +206,66 @@ test("a new-month reset clears ticks for that month only", () => {
   assert.equal(savingLine(covered, today), "On track to save.");
 });
 
+test("viewing the current month leaves previous-month ticks and the card picture alone", () => {
+  const hh = {
+    ...emptyHousehold(),
+    weeklyRules: [{
+      id: "food",
+      name: "Food shop",
+      amountPence: 7000,
+      cadence: "weekday",
+      weekday: 2,
+      tickedKeys: ["2026-07:2026-07-07", "2026-07:2026-07-14"],
+    }],
+    monthlies: [{
+      id: "phone",
+      name: "Phone",
+      amountPence: 2000,
+      dueDay: 21,
+      dueRoll: "calendar",
+      paidMonths: ["2026-07"],
+      paidFrom: "card",
+    }],
+    cards: [{
+      id: "c-1",
+      name: "Card",
+      balancePence: 9000,
+      pendingPence: 0,
+      updatedOn: "2026-08-10",
+      snapshots: [
+        { month: "2026-07", amountPence: 2000, pendingPence: 0, updatedOn: "2026-07-31" },
+        { month: "2026-08", amountPence: 9000, pendingPence: 0, updatedOn: "2026-08-10" },
+      ],
+    }],
+  };
+  const julyTicks = [...hh.weeklyRules[0].tickedKeys];
+  const today = new Date("2026-08-10T12:00:00Z");
+  const august = cashflowForMonth(hh, "2026-08", today);
+  const july = cashflowForMonth(hh, "2026-07", today);
+
+  assert.deepEqual(hh.weeklyRules[0].tickedKeys, julyTicks);
+  assert.deepEqual(hh.monthlies[0].paidMonths, ["2026-07"]);
+  assert.equal(july.weeklySlots.filter((slot) => slot.ticked).length, 2);
+  assert.equal(august.weeklySlots.filter((slot) => slot.ticked).length, 0);
+  assert.ok(august.weeklySlots.length > 0);
+  assert.ok(august.weeklySlots.every((slot) => slot.ticked === false));
+  assert.equal(july.allowedPence, 2000);
+  assert.equal(july.cardBalancesPence, 2000);
+  assert.equal(july.overUnderPence, 0);
+  assert.equal(august.cardBalancesPence, 9000);
+  assert.equal(august.allowedPence, 0);
+  assert.ok(august.overUnderPence < 0);
+
+  toggleWeeklySlotTick(hh, august.weeklySlots[0].id, "2026-08");
+  assert.deepEqual(
+    hh.weeklyRules[0].tickedKeys.filter((key) => String(key).startsWith("2026-07:")),
+    julyTicks,
+  );
+  assert.ok(hh.weeklyRules[0].tickedKeys.some((key) => String(key).startsWith("2026-08:")));
+  const julyAgain = cashflowForMonth(hh, "2026-07", today);
+  assert.equal(julyAgain.weeklySlots.filter((slot) => slot.ticked).length, 2);
+});
+
 test("a Tuesday rule makes one slot per Tuesday in the cashflow month", () => {
   const rule = { id: "food", name: "Food shop", amountPence: 7000, cadence: "weekday", weekday: 2, tickedKeys: [] };
   assert.deepEqual(datesOfWeekdayInMonth("2026-08", 2), ["2026-08-04", "2026-08-11", "2026-08-18", "2026-08-25"]);
@@ -183,6 +274,17 @@ test("a Tuesday rule makes one slot per Tuesday in the cashflow month", () => {
   const slots = weeklySlotsForMonth({ weeklyRules: [rule], weeklyExtras: [] }, "2026-08");
   assert.equal(slots.length, 4);
   assert.ok(slots.every((slot) => slot.name === "Food shop" && slot.ticked === false));
+});
+
+test("every week on a weekday uses that weekday’s count in the viewed month", () => {
+  const rule = { id: "food", name: "Food shop", amountPence: 7000, cadence: "weekday", weekday: 2, tickedKeys: [] };
+  assert.equal(weeklyCadenceLabel(rule), "Every week on Tuesday");
+  assert.equal(weeklySlotKeysForRule(rule, "2026-08").length, 4);
+  assert.deepEqual(datesOfWeekdayInMonth("2026-09", 2), [
+    "2026-09-01", "2026-09-08", "2026-09-15", "2026-09-22", "2026-09-29",
+  ]);
+  assert.equal(weeklySlotKeysForRule(rule, "2026-09").length, 5);
+  assert.equal(weeklySlotsForMonth({ weeklyRules: [rule], weeklyExtras: [] }, "2026-09").length, 5);
 });
 
 test("a Friday rule in a five-Friday month makes five slots", () => {
@@ -322,6 +424,8 @@ test("£100k helper projects remaining months and extra salary sacrifice", () =>
   assert.equal(result.projectedPence, 10800000);
   assert.equal(result.extraSacrificePence, 800000);
   assert.equal(result.extraPerRemainingMonthPence, Math.round(800000 / 7));
+  assert.equal(result.extraSacrificeOfRemaining, 800000 / 6300000);
+  assert.equal(extraSacrificeRatio(result), 800000 / 6300000);
   assert.equal(result.overLimit, true);
   assert.ok(result.projectedPence > ANI_LIMIT_PENCE);
 });
@@ -409,6 +513,48 @@ test("Gift Aid add-back is off unless the planner asks for it", () => {
   });
   assert.equal(off.giftAidAddBackPence, 0);
   assert.equal(on.giftAidAddBackPence, 20000);
+});
+
+test("pots remind quietly when this calendar month has no snapshot", () => {
+  const pots = [{
+    id: "p-1",
+    name: "Emergency",
+    amountPence: 100000,
+    updatedOn: "2026-07-02",
+    snapshots: [{ month: "2026-07", amountPence: 100000, updatedOn: "2026-07-02" }],
+  }];
+  assert.equal(potsNeedCurrentMonthLog(pots, new Date("2026-08-26T12:00:00Z")), true);
+  assert.equal(potsNeedCurrentMonthLog(pots, new Date("2026-07-26T12:00:00Z")), false);
+  assert.equal(potsNeedCurrentMonthLog([], new Date("2026-08-26T12:00:00Z")), false);
+  const logged = [{
+    ...pots[0],
+    snapshots: [
+      ...pots[0].snapshots,
+      { month: "2026-08", amountPence: 110000, updatedOn: "2026-08-10" },
+    ],
+  }];
+  assert.equal(potsNeedCurrentMonthLog(logged, new Date("2026-08-26T12:00:00Z")), false);
+});
+
+test("payslip categories stay available after a later slip leaves them unused", () => {
+  const hh = {
+    payslips: [{
+      bonusPence: 25000,
+      benefitsPence: 0,
+      salarySacrificePensionPence: 0,
+      otherDeductions: [{ id: "d-1", label: "Cycle scheme", amountPence: 4000 }],
+    }],
+    payslipCategories: [],
+  };
+  rememberPayslipCategories(hh, payslipCategoriesOf(hh));
+  assert.ok(hh.payslipCategories.some((item) => item.kind === "bonus"));
+  assert.ok(hh.payslipCategories.some((item) => item.label === "Cycle scheme"));
+  const later = payslipCategoriesOf({
+    payslipCategories: hh.payslipCategories,
+    payslips: [{ bonusPence: 0, otherDeductions: [] }],
+  });
+  assert.ok(later.some((item) => item.kind === "bonus"));
+  assert.ok(later.some((item) => item.label === "Cycle scheme"));
 });
 
 test("payslip ANI is gross plus benefits minus salary sacrifice", () => {
