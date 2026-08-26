@@ -229,6 +229,7 @@ async function withStoreUpdate(mutator) {
   const previous = structuredClone(store);
   try {
     mutator();
+    storeGeneration += 1;
     await persist();
     return true;
   } catch {
@@ -317,7 +318,7 @@ function signInScreen() {
         <button class="primary wide" type="submit">Sign in</button>
       </form>
       <a class="text-button token-link" href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noreferrer">Create a token on GitHub</a>
-      ${isLocalHost() ? `<button class="secondary wide" type="button" data-action="local-workbook">Open a local workbook</button><p class="helper">This machine only. Nothing is written to a gist or to localStorage. Close the tab and it is gone.</p>` : ""}
+      ${isLocalHost() ? `<button class="secondary wide" type="button" form="" data-action="local-workbook">Open a local workbook</button><p class="helper">This machine only. Nothing is written to a gist or to localStorage. Close the tab and it is gone.</p>` : ""}
     </div>
   </section>`;
 }
@@ -1607,7 +1608,11 @@ document.addEventListener("click", async (event) => {
     else showToast(sync.message || "Could not delete");
   }
   if (action === "sign-out") signOut();
-  if (action === "local-workbook") openLocalWorkbook();
+  if (action === "local-workbook") {
+    event.preventDefault();
+    event.stopPropagation();
+    openLocalWorkbook();
+  }
   if (action === "reload") bootApp();
   if (action === "retry-sync") persist().catch(() => {});
   if (action === "discard-local") { clearLocalStore(); closeModal(); }
