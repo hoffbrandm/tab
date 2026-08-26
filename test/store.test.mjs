@@ -169,6 +169,42 @@ test("older envelopes become weekly rules, not five cloned rows", () => {
   assert.deepEqual(parsed.household.weeklyRules[0].tickedKeys, ["2026-08:1"]);
 });
 
+test("monthlies keep a working-day due roll and pots keep snapshots", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      monthlies: [{
+        id: "m-1",
+        name: "Card",
+        amountPence: 5000,
+        dueDay: 21,
+        dueRoll: "nextWorking",
+        paidMonths: ["2026-07"],
+        paidFrom: "card",
+      }],
+      pots: [{
+        id: "p-1",
+        name: "Emergency",
+        amountPence: 120000,
+        updatedOn: "2026-08-01",
+        snapshots: [
+          { month: "2026-07", amountPence: 100000, updatedOn: "2026-07-02" },
+          { month: "2026-08", amountPence: 120000, updatedOn: "2026-08-01" },
+        ],
+      }],
+      payslipCategories: [{ id: "bonus", label: "Bonus", kind: "bonus" }],
+    },
+  });
+  assert.equal(parsed.household.monthlies[0].dueRoll, "nextWorking");
+  assert.deepEqual(parsed.household.monthlies[0].paidMonths, ["2026-07"]);
+  assert.equal(parsed.household.pots[0].snapshots.length, 2);
+  assert.equal(parsed.household.pots[0].snapshots[0].amountPence, 100000);
+  assert.ok(parsed.household.payslipCategories.some((item) => item.kind === "bonus"));
+});
+
 test("weekday weekly rules keep their calendar cadence", () => {
   const parsed = parseStore({
     version: 1,

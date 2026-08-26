@@ -17,6 +17,13 @@ export const WEEKDAYS = [
   { value: 7, label: "Sunday" },
 ];
 export const MONTHLY_PAID_FROM = ["card", "cash"];
+export const DUE_ROLLS = ["calendar", "nextWorking", "firstWorking"];
+export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "sacrifice", "deduction"];
+export const BUILTIN_PAYSLIP_CATEGORIES = [
+  { id: "bonus", label: "Bonus", kind: "bonus" },
+  { id: "benefits", label: "Benefits", kind: "benefits" },
+  { id: "sacrifice", label: "Salary-sacrifice pension", kind: "sacrifice" },
+];
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH = /^\d{4}-\d{2}$/;
@@ -39,6 +46,7 @@ export function emptyHousehold() {
     pots: [],
     pensions: [],
     payslips: [],
+    payslipCategories: [],
     donations: [],
     includeGiftAidInAni: true,
   };
@@ -61,6 +69,7 @@ export function householdHasData(household) {
     "pots",
     "pensions",
     "payslips",
+    "payslipCategories",
     "donations",
   ];
   if (lists.some((key) => Array.isArray(household[key]) && household[key].length > 0)) return true;
@@ -332,7 +341,10 @@ export function weeklySlotsForMonth(household, month) {
 }
 
 export function weeklyCadenceLabel(rule) {
-  if (rule?.cadence === "weekday") return `Every ${weekdayLabel(rule.weekday) || "weekday"}`;
+  if (rule?.cadence === "weekday") {
+    const day = weekdayLabel(rule.weekday);
+    return day ? `Every week on ${day}` : "Every week on a weekday";
+  }
   if (rule?.cadence === "times") {
     const times = Number(rule.timesPerMonth) || 1;
     return times === 1 ? "Once a month" : `${times} times a month`;
@@ -340,9 +352,79 @@ export function weeklyCadenceLabel(rule) {
   return "Once a month";
 }
 
+export function isUkWeekend(dateStr) {
+  if (!DATE.test(String(dateStr || ""))) return false;
+  const [year, month, day] = String(dateStr).split("-").map(Number);
+  return jsWeekdayToIso(new Date(year, month - 1, day).getDay()) >= 6;
+}
+
+export function addDaysIso(dateStr, delta) {
+  if (!DATE.test(String(dateStr || ""))) return "";
+  const [year, month, day] = String(dateStr).split("-").map(Number);
+  return isoDate(new Date(year, month - 1, day + Number(delta || 0)));
+}
+
+export function nextWorkingDate(dateStr) {
+  let current = String(dateStr || "");
+  if (!DATE.test(current)) return "";
+  while (isUkWeekend(current)) current = addDaysIso(current, 1);
+  return current;
+}
+
+export function firstWorkingDate(month) {
+  const parsed = parseMonthKey(month);
+  if (!parsed) return "";
+  return nextWorkingDate(`${month}-01`);
+}
+
+export function calendarDueDate(month, dueDay) {
+  const days = daysInMonthKey(month);
+  if (!days) return "";
+  const day = Number(dueDay);
+  const clamped = Number.isInteger(day) && day > 0 ? Math.min(day, days) : 1;
+  return `${month}-${String(clamped).padStart(2, "0")}`;
+}
+
+export function effectiveDueDate(item, month) {
+  const roll = DUE_ROLLS.includes(item?.dueRoll) ? item.dueRoll : "calendar";
+  if (roll === "firstWorking") return firstWorkingDate(month);
+  const calendar = calendarDueDate(month, item?.dueDay);
+  if (roll === "nextWorking") return nextWorkingDate(calendar);
+  return calendar;
+}
+
+export function effectiveDueDay(item, month) {
+  const date = effectiveDueDate(item, month);
+  if (!date) return 0;
+  if (date.slice(0, 7) !== month) return daysInMonthKey(month) + 1;
+  return Number(date.slice(8));
+}
+
+export function monthlyDueLabel(item, month) {
+  const roll = DUE_ROLLS.includes(item?.dueRoll) ? item.dueRoll : "calendar";
+  if (roll === "firstWorking") {
+    const date = firstWorkingDate(month);
+    return date && date.slice(0, 7) === month
+      ? `First working day · ${ordinalDay(Number(date.slice(8)))}`
+      : "First working day";
+  }
+  const day = ordinalDay(item?.dueDay);
+  if (roll === "nextWorking") {
+    const effective = effectiveDueDate(item, month);
+    const rolled = effective && effective !== calendarDueDate(month, item?.dueDay);
+    if (rolled && effective.slice(0, 7) === month) {
+      return `${day} · next working day ${ordinalDay(Number(effective.slice(8)))}`;
+    }
+    if (rolled) return `${day} · next working day (after this month)`;
+    return `${day} · next working day if weekend`;
+  }
+  return day ? `Due ${day}` : "Due";
+}
+
 export function monthlyIsAllowed(item, month, dayOfMonth) {
   if (paidInMonth(item, month)) return true;
-  return Number(item?.dueDay) > 0 && Number(item.dueDay) <= dayOfMonth;
+  const due = effectiveDueDay(item, month);
+  return due > 0 && due <= dayOfMonth;
 }
 
 export function toggleWeeklySlotTick(household, slotId, month) {
@@ -428,7 +510,7 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const cashMonthlies = monthlies.filter((item) => item.paidFrom === "cash");
   const cardMonthlies = monthlies.filter((item) => item.paidFrom !== "cash");
   const weeklySlots = weeklySlotsForMonth(household, month);
-  const cards = household?.cards || [];
+  const cards = cardsForMonth(household, month, today);
   const oneOffs = (household?.oneOffs || []).filter((item) => item.month === month);
   const annualBills = household?.annualBills || [];
   const days = daysInMonthKey(month);
@@ -449,7 +531,7 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const allowedWithSubsPence = allowedPence;
   const cardBalancesPence = sumPence(cards, (item) => item.balancePence);
   const pendingPence = sumPence(cards, (item) => item.pendingPence || 0)
-    + sumPence(household?.pendings || [], (item) => item.amountPence);
+    + (isCurrentMonth(month, today) ? sumPence(household?.pendings || [], (item) => item.amountPence) : 0);
   const cardSidePence = cardBalancesPence + pendingPence;
   const overUnderPence = allowedPence - cardSidePence;
 
@@ -495,6 +577,149 @@ export function savingLine(flow, today = new Date()) {
   if (flow.potPence < 0) return `${when} does not balance yet.`;
   if (flow.overUnderPence >= 0) return "On track to save.";
   return "Spending ahead of the pot.";
+}
+
+export function upsertMonthSnapshot(list, snapshot) {
+  const month = String(snapshot?.month || "");
+  if (!MONTH.test(month)) return [...(list || [])];
+  const next = (list || []).filter((item) => item.month !== month);
+  next.push({
+    month,
+    amountPence: Number.isInteger(snapshot.amountPence) ? snapshot.amountPence : 0,
+    ...(Number.isInteger(snapshot.pendingPence) ? { pendingPence: snapshot.pendingPence } : {}),
+    ...(snapshot.updatedOn ? { updatedOn: snapshot.updatedOn } : {}),
+  });
+  return next.sort((a, b) => a.month.localeCompare(b.month));
+}
+
+export function snapshotForMonth(list, month) {
+  return (list || []).find((item) => item.month === month) || null;
+}
+
+export function seedSnapshotsFromUpdatedOn(item, { includePending = false } = {}) {
+  if (Array.isArray(item?.snapshots) && item.snapshots.length) return item.snapshots;
+  const month = String(item?.updatedOn || "").slice(0, 7);
+  if (!MONTH.test(month)) return [];
+  const amountPence = Number.isInteger(item.amountPence)
+    ? item.amountPence
+    : (Number.isInteger(item.balancePence) ? item.balancePence : 0);
+  return upsertMonthSnapshot([], {
+    month,
+    amountPence,
+    ...(includePending ? { pendingPence: item.pendingPence || 0 } : {}),
+    updatedOn: item.updatedOn,
+  });
+}
+
+export function cardsForMonth(household, month, today = new Date()) {
+  const live = isCurrentMonth(month, today);
+  return (household?.cards || []).map((card) => {
+    const snapshots = seedSnapshotsFromUpdatedOn(card, { includePending: true });
+    const snap = snapshotForMonth(snapshots, month);
+    if (snap) {
+      return {
+        ...card,
+        snapshots,
+        balancePence: snap.amountPence,
+        pendingPence: snap.pendingPence || 0,
+        missingSnapshot: false,
+      };
+    }
+    if (live) return { ...card, snapshots, missingSnapshot: false };
+    return { ...card, snapshots, balancePence: 0, pendingPence: 0, missingSnapshot: true };
+  });
+}
+
+export function potSnapshotsOf(pot) {
+  return seedSnapshotsFromUpdatedOn(pot);
+}
+
+export function potHasSnapshotForMonth(pot, month) {
+  return Boolean(snapshotForMonth(potSnapshotsOf(pot), month));
+}
+
+export function potsNeedCurrentMonthLog(pots, today = new Date()) {
+  const month = monthKey(today);
+  if (!pots?.length) return false;
+  return pots.some((pot) => !potHasSnapshotForMonth(pot, month));
+}
+
+export function potHistoryMonths(pots) {
+  const months = new Set();
+  for (const pot of pots || []) {
+    for (const snap of potSnapshotsOf(pot)) months.add(snap.month);
+  }
+  return [...months].sort();
+}
+
+export function potHistorySeries(pots) {
+  const months = potHistoryMonths(pots);
+  return (pots || []).map((pot) => {
+    const snaps = potSnapshotsOf(pot);
+    let last = null;
+    const points = months.map((month) => {
+      const snap = snapshotForMonth(snaps, month);
+      if (snap) last = snap.amountPence;
+      return { month, amountPence: last, recorded: Boolean(snap) };
+    });
+    return { id: pot.id, name: pot.name, points };
+  });
+}
+
+export function payslipCategoriesOf(household) {
+  const seen = new Map();
+  const remember = (category) => {
+    const kind = PAYSLIP_CATEGORY_KINDS.includes(category?.kind) ? category.kind : "deduction";
+    const label = String(category?.label || "").trim();
+    if (!label) return;
+    const id = String(category?.id || "").trim()
+      || (kind === "deduction" ? `deduction-${label.toLowerCase()}` : kind);
+    const key = kind === "deduction" ? `deduction:${label.toLowerCase()}` : kind;
+    if (seen.has(key)) return;
+    seen.set(key, { id, label, kind });
+  };
+  for (const item of household?.payslipCategories || []) remember(item);
+  for (const slip of household?.payslips || []) {
+    if (slip.bonusPence) remember(BUILTIN_PAYSLIP_CATEGORIES[0]);
+    if (slip.benefitsPence) remember(BUILTIN_PAYSLIP_CATEGORIES[1]);
+    if (slip.salarySacrificePensionPence) remember(BUILTIN_PAYSLIP_CATEGORIES[2]);
+    for (const row of slip.otherDeductions || []) {
+      if (row.label) remember({ id: row.id, label: row.label, kind: "deduction" });
+    }
+  }
+  return [...seen.values()];
+}
+
+export function rememberPayslipCategories(household, extras = []) {
+  const next = payslipCategoriesOf({
+    payslipCategories: [...(household.payslipCategories || []), ...extras],
+    payslips: household.payslips || [],
+  });
+  household.payslipCategories = next;
+  return household;
+}
+
+export function unusedBuiltinPayslipCategories(categories) {
+  const used = new Set((categories || []).map((item) => item.kind));
+  return BUILTIN_PAYSLIP_CATEGORIES.filter((item) => !used.has(item.kind));
+}
+
+export function payslipAmountForCategory(slip, category) {
+  if (!slip || !category) return 0;
+  if (category.kind === "bonus") return slip.bonusPence || 0;
+  if (category.kind === "benefits") return slip.benefitsPence || 0;
+  if (category.kind === "sacrifice") return slip.salarySacrificePensionPence || 0;
+  const label = String(category.label || "").trim().toLowerCase();
+  const row = (slip.otherDeductions || []).find((item) => String(item.label || "").trim().toLowerCase() === label);
+  return row?.amountPence || 0;
+}
+
+export function extraSacrificeRatio(projection) {
+  const remaining = Number(projection?.projectedRestPence) || 0;
+  const extra = Number(projection?.extraSacrificePence) || 0;
+  if (extra <= 0) return 0;
+  if (remaining <= 0) return 0;
+  return extra / remaining;
 }
 
 export function resetMonthTicks(household, month) {
@@ -573,6 +798,10 @@ export function aniProjection({
   const extraPerRemainingMonthPence = remainingMonths > 0
     ? Math.round(extraSacrificePence / remainingMonths)
     : extraSacrificePence;
+  const extraSacrificeOfRemaining = extraSacrificeRatio({
+    extraSacrificePence,
+    projectedRestPence,
+  });
 
   return {
     taxYear,
@@ -586,6 +815,7 @@ export function aniProjection({
     projectedPence,
     extraSacrificePence,
     extraPerRemainingMonthPence,
+    extraSacrificeOfRemaining,
     underByPence: Math.max(0, ANI_LIMIT_PENCE - projectedPence),
     overLimit: projectedPence > ANI_LIMIT_PENCE,
   };

@@ -61,6 +61,7 @@ One versioned JSON document in `tab.json`:
     "pots": [],
     "pensions": [],
     "payslips": [],
+    "payslipCategories": [],
     "donations": [],
     "includeGiftAidInAni": true
   }
@@ -71,14 +72,14 @@ An older gist with only `friends` and `transactions` still loads. The household 
 
 ## Product
 
-- **Home cashflow** — income is net pay from payslips whose money lands in the month on screen. It *consumes* weeklies and monthlies; you do not edit five cloned rows here. Card balance + pending versus the sum of allowed monthly expecteds is the under / over figure. **Reset ticks** clears ticks for the month on screen; rules stay.
-- **Weeklies** — each rule is entered once: name, typical amount, and cadence (once a month, N times a month, or every weekday). Cashflow builds one tick slot per matching weekday in the real calendar month (four Tuesdays → four slots). An extra occurrence can be added for that month only. Ticks do not carry forward.
-- **Monthlies** — name, expected amount, day of month, cash or card. A card line becomes *allowed* on that day (or when ticked), so a matching rise on the card is not over budget.
+- **Home cashflow** — the month on screen is the source of truth. Income is net pay from payslips whose money lands in that month. Weeklies and monthlies are consumed, not cloned. Card balance + pending versus that month’s allowed expecteds is the under / over figure. Previous months keep their ticks and card snapshots. **Reset ticks** clears ticks for the month on screen only; rules stay.
+- **Weeklies** — each rule is entered once: name, typical amount, and cadence (once a month, N times a month, or every week on a chosen weekday). Slots are the count of that weekday in the month being viewed (four Tuesdays → four slots). An extra occurrence can be added for that month only. A new month starts unticked; old months keep their ticks.
+- **Monthlies** — name, expected amount, due day, cash or card. Due can be a calendar day, that day rolled to the next UK working day if it falls on a weekend, or the first working day of the month. A card line becomes *allowed* on the effective date in the viewed month (or when ticked).
 - **Planned** — item, month, estimate, purchased. The month on the record is the month shown. Rows for the month on screen appear on Home.
 - **Annual** — yearly bills. Total ÷ 12 is the monthly reserve on cashflow. Edit here; do not type it twice.
-- **Pots** — named pots with a dated snapshot. Optional pension *names and status* only.
-- **Payslips** — per person, per UK tax year: pay period, salary, gross, addable bonus/benefits/salary-sacrifice/other deduction types, tax, NI amount, net, note, month the money lands. Forecast rows are labelled and not treated as confirmed for the £100k helper. Adding or editing a slip updates cashflow for the landing month.
-- **£100k helper** — YTD from confirmed payslips, remaining months at the last confirmed run-rate, extra salary-sacrifice needed to stay at or under £100,000 adjusted net income. Gift Aid from giving in that tax year is included automatically. There is no separate planner to re-type.
+- **Pots** — named pots with dated monthly snapshots and a simple graphic of values over time. A quiet line reminds you to log this calendar month if it is missing. Optional pension *names and status* only.
+- **Payslips** — per person, per UK tax year: pay period, salary, gross, tax, NI, net, note, month the money lands. Extra fields / categories (bonus, benefits, salary-sacrifice, named deductions) live in one accordion. Once a category is added it stays as an option on later slips. Forecast rows are labelled and not treated as confirmed for the £100k helper.
+- **£100k helper** — YTD from confirmed payslips, remaining months at the last confirmed run-rate, extra salary-sacrifice needed to stay at or under £100,000 adjusted net income — as a pounds amount and as a percentage of remaining projected pay. Gift Aid from giving in that tax year is included automatically.
 - **Giving** — who, charity, date, amount, Gift Aid, gross, tax year.
 - **Friend tabs** — friends, 50/50 expenses with an optional share adjustment, transfers, running balances.
 
@@ -103,4 +104,4 @@ Then open `http://127.0.0.1:4173`. On that local address you can open a session-
 npm test
 ```
 
-`test/calculations.test.mjs` covers friend-tab splits and balances. `test/household.test.mjs` covers cashflow totals, income from payslips, annual reserve, weekday weekly slots (4 Tuesdays / 5 Fridays / once-a-month), new-month unticked slots, monthly due-day allowed, historical month labels, UK tax years, Gift Aid into the £100k helper, and the remaining-sacrifice projection. `test/workbook-import.test.mjs` keeps a synthetic workbook mapper for tests only — there is no import button in the app. The other tests cover store validation, the session credential, and the private-gist persistence layer.
+`test/calculations.test.mjs` covers friend-tab splits and balances. `test/household.test.mjs` covers cashflow totals, income from payslips, annual reserve, weekday weekly slots (4 Tuesdays / 5 Fridays / once-a-month), previous-month ticks left unchanged when viewing the current month, working-day due rolls, pot missing-this-month reminder logic, historical month labels, UK tax years, Gift Aid into the £100k helper, and extra salary-sacrifice as pounds and as a percent of remaining pay. `test/workbook-import.test.mjs` keeps a synthetic workbook mapper for tests only — there is no import button in the app. The other tests cover store validation, the session credential, and the private-gist persistence layer.
