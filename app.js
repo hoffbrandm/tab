@@ -13,6 +13,8 @@ import {
   isCurrentMonth,
   monthKey,
   monthLabel,
+  monthlyIsAllowed,
+  monthliesOf,
   ordinalDay,
   paidInMonth,
   payslipIsConfirmed,
@@ -22,14 +24,18 @@ import {
   PENSION_STATUSES,
   spendVerdict,
   taxYearOptionsFor,
+  toggleWeeklySlotTick,
   ukTaxYearFromDate,
-  weekliesForMonth,
+  WEEKDAYS,
+  weeklyCadenceLabel,
+  weeklyRulesOf,
+  weeklySlotsForMonth,
 } from "./household.js";
 import { createSession } from "./session.js";
 import { emptyStore, parseStore } from "./store.js";
 
 const LOCAL_KEY = "tab.personal.v1";
-const SCREENS = ["home", "planned", "annual", "pots", "payslips", "ani", "giving", "more", "tabs"];
+const SCREENS = ["home", "weeklies", "monthlies", "planned", "annual", "pots", "payslips", "ani", "giving", "more", "tabs"];
 const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
 const sessionStore = createSession({ storage: window.sessionStorage });
@@ -219,6 +225,8 @@ function render() {
 
 function readyScreen() {
   if (screen.name === "friend") return friendScreen(byId(screen.friendId));
+  if (screen.name === "weeklies") return weekliesScreen();
+  if (screen.name === "monthlies") return monthliesScreen();
   if (screen.name === "planned") return plannedScreen();
   if (screen.name === "annual") return annualScreen();
   if (screen.name === "pots") return potsScreen();
@@ -317,6 +325,8 @@ function dock() {
     `<a class="dock-item${active ? " active" : ""}" href="#/${name}" data-action="go" data-screen="${name}">${label}</a>`;
   return `<nav class="dock" aria-label="App">
     ${item("home", "Cashflow", screen.name === "home")}
+    ${item("weeklies", "Weeklies", screen.name === "weeklies")}
+    ${item("monthlies", "Monthlies", screen.name === "monthlies")}
     ${item("planned", "Planned", screen.name === "planned")}
     ${item("annual", "Annual", screen.name === "annual")}
     ${item("pots", "Pots", screen.name === "pots")}
@@ -332,10 +342,10 @@ function sectionHead(title, action, addLabel) {
   return `<div class="section-heading"><h2>${esc(title)}</h2>${action ? `<button class="text-button" type="button" data-action="${action}">${esc(addLabel)}</button>` : ""}</div>`;
 }
 
-function lineRow({ edit, id, title, detail, amount, tickAction, ticked, tickLabel }) {
+function lineRow({ edit, id, title, detail, amount, tickAction, ticked, tickLabel, tickId }) {
   return `<article class="line">
-    ${tickAction ? `<button class="tick${ticked ? " on" : ""}" type="button" data-action="${tickAction}" data-id="${id}" aria-pressed="${ticked ? "true" : "false"}" aria-label="${esc(tickLabel || (ticked ? "Done" : "Not done"))}">${ticked ? "✓" : ""}</button>` : ""}
-    <button class="line-main" type="button" data-action="${edit}" data-id="${id}">
+    ${tickAction ? `<button class="tick${ticked ? " on" : ""}" type="button" data-action="${tickAction}" data-id="${esc(tickId || id)}" aria-pressed="${ticked ? "true" : "false"}" aria-label="${esc(tickLabel || (ticked ? "Done" : "Not done"))}">${ticked ? "✓" : ""}</button>` : ""}
+    <button class="line-main" type="button" data-action="${edit}" data-id="${esc(id)}">
       <span class="line-copy"><strong>${esc(title)}</strong>${detail ? `<small>${esc(detail)}</small>` : ""}</span>
       <span class="line-amount">${amount}</span>
     </button>
@@ -353,7 +363,8 @@ function cashflowScreen() {
   const leftoverClass = flow.potPence < 0 ? "negative" : "neutral";
   const verdictClass = flow.overUnderPence < 0 ? "negative" : flow.overUnderPence > 0 ? "positive" : "neutral";
   const period = monthLabel(viewMonth);
-  const weeklies = weekliesForMonth(hh, viewMonth);
+  const weeklySlots = flow.weeklySlots || weeklySlotsForMonth(hh, viewMonth);
+  const monthlies = flow.monthlies || monthliesOf(hh);
 
   return shell({
     eyebrow: currentPeriodHint(viewMonth, now),
@@ -362,9 +373,9 @@ function cashflowScreen() {
     extra: `<section class="friend-hero cash-hero">
         <p class="eyebrow">${esc(currentPeriodHint(viewMonth, now))}</p>
         <h1 class="${leftoverClass}">${formatMoney(flow.potPence)}</h1>
-        <p class="balance-label">Left after monthly out · ${esc(period)}</p>
+        <p class="balance-label">Left after cash out · ${esc(period)}</p>
         <p class="balance-value ${verdictClass}">${esc(spendVerdict(flow.overUnderPence, formatMoney))}</p>
-        <p class="helper">${esc(savingLine(flow, now))} In ${formatMoney(flow.incomePence)} · Out ${formatMoney(flow.committedOutPence)} · Cards ${formatMoney(flow.cardBalancesPence)}${flow.pendingPence ? ` + pending ${formatMoney(flow.pendingPence)}` : ""}.</p>
+        <p class="helper">${esc(savingLine(flow, now))} In ${formatMoney(flow.incomePence)} · Out ${formatMoney(flow.committedOutPence)} · Allowed ${formatMoney(flow.allowedPence)} · Cards ${formatMoney(flow.cardBalancesPence)}${flow.pendingPence ? ` + pending ${formatMoney(flow.pendingPence)}` : ""}.</p>
       </section>`,
     body: `
       <section class="block">
@@ -378,36 +389,32 @@ function cashflowScreen() {
         })).join("") : emptyLines(`Net pay from payslips that land in ${period}.`, "add-payslip", "Add a payslip")}
       </section>
       <section class="block">
-        ${sectionHead("Monthly", "add-bill", "Add")}
-        ${hh.bills.map((item) => lineRow({
-          edit: "edit-bill",
-          id: item.id,
-          title: item.name,
-          detail: `Due ${ordinalDay(item.dueDay)}`,
-          amount: formatMoney(item.amountPence),
-          tickAction: "toggle-bill",
-          ticked: paidInMonth(item, viewMonth),
-          tickLabel: paidInMonth(item, viewMonth) ? "Paid" : "Not paid",
-        })).join("")}
+        ${sectionHead("Weeklies", "go-weeklies", "Rules")}
+        ${weeklySlots.length ? weeklySlots.map((slot) => lineRow({
+          edit: slot.adHoc ? "edit-weekly-extra" : "edit-weekly-rule",
+          id: slot.adHoc ? slot.extraId : slot.ruleId,
+          title: slot.name,
+          detail: slot.adHoc ? `Extra in ${period}` : (slot.date ? dateLabel(slot.date) : weeklyCadenceLabel(weeklyRulesOf(hh).find((rule) => rule.id === slot.ruleId) || {})),
+          amount: formatMoney(slot.amountPence),
+          tickAction: "tick-weekly-slot",
+          tickId: slot.id,
+          ticked: slot.ticked,
+          tickLabel: slot.ticked ? `Happened in ${period}` : `Not yet in ${period}`,
+        })).join("") : emptyLines(`Rules live under Weeklies. ${period} gets one slot per weekday or count — not five pasted copies.`, "go-weeklies", "Open Weeklies")}
+        <button class="text-button" type="button" data-action="add-weekly-extra">Add extra this month</button>
       </section>
       <section class="block">
-        ${sectionHead("Weekly", "add-envelope", "Add")}
-        ${weeklies.map((item) => {
-          const happened = item.happenedDates;
-          const tickedNow = isCurrentMonth(viewMonth, now)
-            ? happened.includes(today())
-            : happened.includes(`${viewMonth}-01`);
-          return lineRow({
-            edit: "edit-envelope",
-            id: item.id,
-            title: item.name,
-            detail: happened.length ? `${happened.length} in ${period}` : `Tick in ${period}`,
-            amount: formatMoney(item.weeklyPence),
-            tickAction: "tick-envelope",
-            ticked: tickedNow,
-            tickLabel: `Happened in ${period}`,
-          });
-        }).join("")}
+        ${sectionHead("Monthlies", "go-monthlies", "Edit")}
+        ${monthlies.length ? monthlies.map((item) => lineRow({
+          edit: "edit-monthly",
+          id: item.id,
+          title: item.name,
+          detail: `${item.paidFrom === "cash" ? "Cash" : "Card"} · due ${ordinalDay(item.dueDay)}${monthlyIsAllowed(item, viewMonth, flow.dayOfMonth) ? " · allowed" : ""}`,
+          amount: formatMoney(item.amountPence),
+          tickAction: "toggle-monthly",
+          ticked: paidInMonth(item, viewMonth),
+          tickLabel: paidInMonth(item, viewMonth) ? "Allowed" : "Not ticked",
+        })).join("") : emptyLines("Expected card-due and cash bills live under Monthlies.", "go-monthlies", "Open Monthlies")}
       </section>
       <section class="block">
         ${sectionHead("Cards", "add-card", "Add")}
@@ -427,19 +434,6 @@ function cashflowScreen() {
         })).join("")}
         ${hh.cards.length || hh.pendings.length ? `<button class="text-button" type="button" data-action="add-pending">Add pending</button>` : ""}
       </section>
-      ${hh.cardSubs.length ? `<section class="block">
-        ${sectionHead("Card subs", "add-sub", "Add")}
-        ${hh.cardSubs.map((item) => lineRow({
-          edit: "edit-sub",
-          id: item.id,
-          title: item.name,
-          detail: `Due ${ordinalDay(item.dueDay)}`,
-          amount: formatMoney(item.amountPence),
-          tickAction: "toggle-sub",
-          ticked: paidInMonth(item, viewMonth),
-          tickLabel: paidInMonth(item, viewMonth) ? "Allowed" : "Not yet",
-        })).join("")}
-      </section>` : `<section class="block">${sectionHead("Card subs", "add-sub", "Add")}</section>`}
       ${flow.oneOffs.length ? `<section class="block">
         ${sectionHead(period, "add-oneoff", "Add")}
         ${flow.oneOffs.map((item) => lineRow({
@@ -458,6 +452,73 @@ function cashflowScreen() {
         ${hh.annualBills.length
           ? `<article class="line"><div class="line-main static"><span class="line-copy"><strong>Annual reserve</strong><small>From Annual · total ÷ 12</small></span><span class="line-amount">${formatMoney(flow.annualReservePence)}</span></div></article>`
           : emptyLines("Insurance and renewals live under Annual. The monthly reserve appears here.", "go-annual", "Open Annual")}
+      </section>
+    `,
+  });
+}
+
+function weekliesScreen() {
+  const hh = household();
+  const period = monthLabel(viewMonth);
+  const slots = weeklySlotsForMonth(hh, viewMonth);
+  return shell({
+    eyebrow: "Weeklies",
+    title: "Weekly rules.",
+    lede: "Enter a food shop once. Cashflow makes one tick slot for each Tuesday (or Friday) in the month on screen. A four-Tuesday month gets four slots — not five pasted copies.",
+    month: true,
+    body: `
+      <section class="block">
+        ${sectionHead("Rules", "add-weekly-rule", "Add")}
+        ${weeklyRulesOf(hh).length ? weeklyRulesOf(hh).map((rule) => lineRow({
+          edit: "edit-weekly-rule",
+          id: rule.id,
+          title: rule.name,
+          detail: weeklyCadenceLabel(rule),
+          amount: formatMoney(rule.amountPence),
+        })).join("") : emptyLines("Food shop every Tuesday. Amazon every Friday. Cat litter once a month.", "add-weekly-rule", "Add a weekly rule")}
+      </section>
+      <section class="block">
+        ${sectionHead(`${period} slots`, "add-weekly-extra", "Add extra")}
+        ${slots.length ? slots.map((slot) => lineRow({
+          edit: slot.adHoc ? "edit-weekly-extra" : "edit-weekly-rule",
+          id: slot.adHoc ? slot.extraId : slot.ruleId,
+          title: slot.name,
+          detail: slot.adHoc ? "Extra this month only" : (slot.date ? dateLabel(slot.date) : weeklyCadenceLabel(weeklyRulesOf(hh).find((rule) => rule.id === slot.ruleId) || {})),
+          amount: formatMoney(slot.amountPence),
+          tickAction: "tick-weekly-slot",
+          tickId: slot.id,
+          ticked: slot.ticked,
+          tickLabel: slot.ticked ? "Happened" : "Not yet",
+        })).join("") : emptyLines(`No slots in ${period} yet.`, "add-weekly-rule", "Add a rule")}
+      </section>
+    `,
+  });
+}
+
+function monthliesScreen() {
+  const hh = household();
+  const now = new Date();
+  const flow = cashflowForMonth(hh, viewMonth, now);
+  const items = monthliesOf(hh);
+  return shell({
+    eyebrow: "Monthlies",
+    title: "Expected dues.",
+    lede: "Name, amount, day of month. Once that day arrives — or you tick it — cashflow treats the amount as allowed against the cards.",
+    month: true,
+    extra: items.length ? `<div class="dash single"><div class="stat"><span>Allowed in ${monthLabel(viewMonth)}</span><strong>${formatMoney(flow.allowedPence)}</strong></div></div>` : "",
+    body: `
+      <section class="block">
+        ${sectionHead("Monthlies", "add-monthly", "Add")}
+        ${items.length ? items.map((item) => lineRow({
+          edit: "edit-monthly",
+          id: item.id,
+          title: item.name,
+          detail: `${item.paidFrom === "cash" ? "Cash" : "Card"} · due ${ordinalDay(item.dueDay)}`,
+          amount: formatMoney(item.amountPence),
+          tickAction: "toggle-monthly",
+          ticked: paidInMonth(item, viewMonth),
+          tickLabel: paidInMonth(item, viewMonth) ? "Allowed" : "Not ticked",
+        })).join("") : emptyLines("Phone on the 21st. Mortgage on the 1st.", "add-monthly", "Add a monthly")}
       </section>
     `,
   });
@@ -662,7 +723,9 @@ function givingScreen() {
 
 function moreScreen() {
   const links = [
-    ["home", "Cashflow", "This month’s leftover, bills, weeklies, cards"],
+    ["home", "Cashflow", "Leftover, generated weeklies, allowed monthlies, cards"],
+    ["weeklies", "Weeklies", "Rules — one row, not five pasted copies"],
+    ["monthlies", "Monthlies", "Expected dues. Allowed from the due day"],
     ["planned", "Planned", "One-offs by the month on the record"],
     ["annual", "Annual", "Renewals. Total ÷ 12 is the cashflow reserve"],
     ["pots", "Pots", "Where the money is, plus pension names"],
@@ -796,7 +859,10 @@ function modalMarkup() {
     "import-local": importForm,
     person: personForm,
     bill: billForm,
+    monthly: monthlyForm,
     envelope: envelopeForm,
+    "weekly-rule": weeklyRuleForm,
+    "weekly-extra": weeklyExtraForm,
     card: cardForm,
     sub: subForm,
     pending: pendingForm,
@@ -879,26 +945,59 @@ function personForm() {
 }
 
 function billForm() {
+  return monthlyForm();
+}
+
+function monthlyForm() {
   const item = modal.item || {};
-  return `<form id="bill-form">${modalHead(item.id ? "Cash bill" : "New bill", item.id ? "Edit bill" : "Add a bill")}
-    <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Mortgage, council tax, energy…" /></label>
-    ${moneyLabel("Amount", "amount", item.amountPence)}
-    <label>Due day<input required type="number" name="dueDay" min="1" max="31" value="${item.dueDay || 1}" /></label>
+  return `<form id="monthly-form">${modalHead(item.id ? "Monthly" : "New monthly", item.id ? "Edit monthly" : "Add a monthly")}
+    <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Phone, mortgage…" /></label>
+    ${moneyLabel("Expected amount", "amount", item.amountPence)}
+    <label>Day of month<input required type="number" name="dueDay" min="1" max="31" value="${item.dueDay || 1}" /></label>
+    <label>Paid from<select name="paidFrom">
+      <option value="card" ${item.paidFrom !== "cash" ? "selected" : ""}>Card — allowed against the balance from this day</option>
+      <option value="cash" ${item.paidFrom === "cash" ? "selected" : ""}>Cash — comes out of leftover</option>
+    </select></label>
+    <p class="helper">From the due day, or when you tick it, a card line counts as allowed. If the card balance rises by this amount, you are not over.</p>
     <p class="form-error" id="form-error"></p>
-    <button class="primary wide" type="submit">${item.id ? "Save bill" : "Add bill"}</button>
-    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-bill">Delete bill</button>' : ""}
+    <button class="primary wide" type="submit">${item.id ? "Save monthly" : "Add monthly"}</button>
+    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-monthly">Delete monthly</button>' : ""}
   </form>`;
 }
 
 function envelopeForm() {
+  return weeklyRuleForm();
+}
+
+function weeklyRuleForm() {
   const item = modal.item || {};
-  return `<form id="envelope-form">${modalHead(item.id ? "Weekly slot" : "New weekly slot", item.id ? "Edit weekly slot" : "Add a weekly slot")}
-    <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Food shop, Amazon…" /></label>
-    ${moneyLabel("Weekly amount", "amount", item.weeklyPence)}
-    <p class="helper">This slot is on every month. Ticks do not carry forward.</p>
+  const cadence = item.cadence || "weekday";
+  return `<form id="weekly-rule-form">${modalHead(item.id ? "Weekly rule" : "New weekly rule", item.id ? "Edit rule" : "Add a rule")}
+    <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Food shop, Amazon, cat litter…" /></label>
+    ${moneyLabel("Typical amount", "amount", item.amountPence)}
+    <label>Cadence<select name="cadence" data-action="weekly-cadence">
+      <option value="weekday" ${cadence === "weekday" ? "selected" : ""}>Every weekday</option>
+      <option value="once" ${cadence === "once" ? "selected" : ""}>Once a month</option>
+      <option value="times" ${cadence === "times" ? "selected" : ""}>N times a month</option>
+    </select></label>
+    <label data-weekly-field="weekday" class="${cadence === "weekday" ? "" : "hidden"}">Weekday<select name="weekday">${WEEKDAYS.map((day) => `<option value="${day.value}" ${Number(item.weekday || 2) === day.value ? "selected" : ""}>${day.label}</option>`).join("")}</select></label>
+    <label data-weekly-field="times" class="${cadence === "times" ? "" : "hidden"}">Times a month<input type="number" name="timesPerMonth" min="1" max="12" value="${item.timesPerMonth || 2}" /></label>
+    <p class="helper">Cashflow builds this month’s slots from the real calendar. Ticks do not carry forward.</p>
     <p class="form-error" id="form-error"></p>
-    <button class="primary wide" type="submit">${item.id ? "Save slot" : "Add slot"}</button>
-    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-envelope">Delete slot</button>' : ""}
+    <button class="primary wide" type="submit">${item.id ? "Save rule" : "Add rule"}</button>
+    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-weekly-rule">Delete rule</button>' : ""}
+  </form>`;
+}
+
+function weeklyExtraForm() {
+  const item = modal.item || {};
+  return `<form id="weekly-extra-form">${modalHead(item.id ? "Extra weekly" : "Extra this month", item.id ? "Edit extra" : "Add an extra")}
+    <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Extra food shop…" /></label>
+    ${moneyLabel("Amount", "amount", item.amountPence)}
+    <p class="helper">This is only for ${monthLabel(item.month || viewMonth)}. It does not change the rule.</p>
+    <p class="form-error" id="form-error"></p>
+    <button class="primary wide" type="submit">${item.id ? "Save extra" : "Add extra"}</button>
+    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-weekly-extra">Delete extra</button>' : ""}
   </form>`;
 }
 
@@ -1090,11 +1189,11 @@ function openFriendForm(friend) { modal = { kind: "friend", friend }; renderModa
 function closeModal() { modal = null; render(); }
 
 function findIn(list, id) {
-  return household()[list].find((item) => item.id === id);
+  return (household()[list] || []).find((item) => item.id === id);
 }
 
 function openItem(kind, list, id) {
-  modal = { kind, item: id ? findIn(list, id) : {} };
+  modal = { kind, item: id ? findIn(list, id) : (kind === "weekly-extra" ? { month: viewMonth } : {}) };
   if (kind === "payslip") modal = { kind, payslip: id ? findIn("payslips", id) : {} };
   if (kind === "person") modal = { kind, person: id ? personById(id) : {} };
   renderModal();
@@ -1157,6 +1256,8 @@ document.addEventListener("click", async (event) => {
     else setScreen({ name: nextScreen || "home" });
   }
   if (action === "go-planned") setScreen({ name: "planned" });
+  if (action === "go-weeklies") setScreen({ name: "weeklies" });
+  if (action === "go-monthlies") setScreen({ name: "monthlies" });
   if (action === "go-annual") setScreen({ name: "annual" });
   if (action === "home") { event.preventDefault(); setScreen({ name: "home" }); closeModal(); }
   if (action === "open-friend") setScreen({ name: "friend", friendId: id });
@@ -1174,10 +1275,16 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "add-person") openItem("person");
   if (action === "edit-person") openItem("person", "people", id);
-  if (action === "add-bill") openItem("bill");
-  if (action === "edit-bill") openItem("bill", "bills", id);
-  if (action === "add-envelope") openItem("envelope");
-  if (action === "edit-envelope") openItem("envelope", "envelopes", id);
+  if (action === "add-bill") openItem("monthly");
+  if (action === "edit-bill") openItem("monthly", "monthlies", id);
+  if (action === "add-monthly") openItem("monthly");
+  if (action === "edit-monthly") openItem("monthly", "monthlies", id);
+  if (action === "add-envelope") openItem("weekly-rule");
+  if (action === "edit-envelope") openItem("weekly-rule", "weeklyRules", id);
+  if (action === "add-weekly-rule") openItem("weekly-rule");
+  if (action === "edit-weekly-rule") openItem("weekly-rule", "weeklyRules", id);
+  if (action === "add-weekly-extra") openItem("weekly-extra");
+  if (action === "edit-weekly-extra") openItem("weekly-extra", "weeklyExtras", id);
   if (action === "add-card") openItem("card");
   if (action === "edit-card") openItem("card", "cards", id);
   if (action === "add-pending") openItem("pending");
@@ -1212,21 +1319,22 @@ document.addEventListener("click", async (event) => {
       kind: "delete",
       target: "reset-month",
       label: `${monthLabel(viewMonth)} ticks`,
-      copy: `Clears ticks on weeklies, bills, and card subs for ${monthLabel(viewMonth)}. The template lines stay.`,
+      copy: `Clears ticks on weeklies and monthlies for ${monthLabel(viewMonth)}. Rules stay. Next month gets fresh slots from the rules.`,
     };
     renderModal();
   }
-  if (action === "tick-envelope") {
+  if (action === "tick-envelope" || action === "tick-weekly-slot") {
     event.preventDefault();
     await withStoreUpdate(() => {
-      const item = findIn("envelopes", id);
-      if (!item) return;
-      const stamp = viewMonth === monthKey() ? today() : `${viewMonth}-01`;
-      const dates = new Set(item.happenedDates || []);
-      if (dates.has(stamp)) dates.delete(stamp);
-      else dates.add(stamp);
-      item.happenedDates = [...dates].sort();
+      if (!household().weeklyRules) household().weeklyRules = [];
+      if (!household().weeklyExtras) household().weeklyExtras = [];
+      toggleWeeklySlotTick(household(), id, viewMonth);
     });
+    render();
+  }
+  if (action === "toggle-monthly") {
+    event.preventDefault();
+    await togglePaid("monthlies", id);
     render();
   }
   if (action === "show-extra") {
@@ -1244,8 +1352,11 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-delete-transaction") askDelete("transaction", modal.transaction.id, "this entry");
   if (action === "confirm-delete-friend") askDelete("friend", modal.friend.id, "friend and history");
   if (action === "confirm-delete-person") askDelete("person", modal.person.id, "this person", "Their income and payslip rows will be removed. Donations keep the typed name.");
-  if (action === "confirm-delete-bill") askDelete("bill", modal.item.id, "this bill");
-  if (action === "confirm-delete-envelope") askDelete("envelope", modal.item.id, "this weekly slot");
+  if (action === "confirm-delete-bill") askDelete("monthly", modal.item.id, "this monthly");
+  if (action === "confirm-delete-monthly") askDelete("monthly", modal.item.id, "this monthly");
+  if (action === "confirm-delete-envelope") askDelete("weekly-rule", modal.item.id, "this weekly rule");
+  if (action === "confirm-delete-weekly-rule") askDelete("weekly-rule", modal.item.id, "this weekly rule");
+  if (action === "confirm-delete-weekly-extra") askDelete("weekly-extra", modal.item.id, "this extra");
   if (action === "confirm-delete-card") askDelete("card", modal.item.id, "this card");
   if (action === "confirm-delete-pending") askDelete("pending", modal.item.id, "this pending amount");
   if (action === "confirm-delete-sub") askDelete("sub", modal.item.id, "this subscription");
@@ -1279,7 +1390,10 @@ document.addEventListener("click", async (event) => {
         hh.payslips = hh.payslips.filter((item) => item.personId !== targetModal.id);
       }
       if (targetModal.target === "bill") hh.bills = hh.bills.filter((item) => item.id !== targetModal.id);
+      if (targetModal.target === "monthly") hh.monthlies = (hh.monthlies || []).filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "envelope") hh.envelopes = hh.envelopes.filter((item) => item.id !== targetModal.id);
+      if (targetModal.target === "weekly-rule") hh.weeklyRules = (hh.weeklyRules || []).filter((item) => item.id !== targetModal.id);
+      if (targetModal.target === "weekly-extra") hh.weeklyExtras = (hh.weeklyExtras || []).filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "card") {
         hh.cards = hh.cards.filter((item) => item.id !== targetModal.id);
         hh.cardSubs = hh.cardSubs.map((item) => (item.cardId === targetModal.id ? { ...item, cardId: undefined } : item));
@@ -1315,6 +1429,11 @@ document.addEventListener("change", async (event) => {
   if (action === "payslip-year") { payslipTaxYear = event.target.value; render(); }
   if (action === "ani-person") { aniPersonId = event.target.value; render(); }
   if (action === "ani-year") { aniTaxYear = event.target.value; render(); }
+  if (action === "weekly-cadence") {
+    const cadence = event.target.value;
+    document.querySelector("[data-weekly-field=weekday]")?.classList.toggle("hidden", cadence !== "weekday");
+    document.querySelector("[data-weekly-field=times]")?.classList.toggle("hidden", cadence !== "times");
+  }
 });
 
 document.addEventListener("submit", (event) => {
@@ -1323,8 +1442,11 @@ document.addEventListener("submit", (event) => {
     "transaction-form": saveTransaction,
     "login-form": signIn,
     "person-form": savePerson,
-    "bill-form": saveBill,
-    "envelope-form": saveEnvelope,
+    "bill-form": saveMonthly,
+    "monthly-form": saveMonthly,
+    "envelope-form": saveWeeklyRule,
+    "weekly-rule-form": saveWeeklyRule,
+    "weekly-extra-form": saveWeeklyExtra,
     "card-form": saveCard,
     "sub-form": saveSub,
     "pending-form": savePending,
@@ -1453,6 +1575,7 @@ async function saveNamedMoney(event, { list, build, toastAdd, toastEdit }) {
   const editing = Boolean(existingId);
   setBusy(event.target, true);
   const saved = await withStoreUpdate(() => {
+    if (!household()[list]) household()[list] = [];
     const collection = household()[list];
     if (editing) {
       const current = collection.find((item) => item.id === existingId);
@@ -1498,29 +1621,59 @@ async function savePerson(event) {
   });
 }
 
-async function saveBill(event) {
+async function saveMonthly(event) {
   return saveNamedMoney(event, {
-    list: "bills",
-    toastAdd: "Bill added",
-    toastEdit: "Bill updated",
+    list: "monthlies",
+    toastAdd: "Monthly added",
+    toastEdit: "Monthly updated",
     build: (data) => ({
       name: requireName(data.get("name"), "name"),
       amountPence: requireMoney(data.get("amount"), "amount"),
       dueDay: requireDueDay(data.get("dueDay")),
+      paidFrom: data.get("paidFrom") === "cash" ? "cash" : "card",
       paidMonths: modal.item?.paidMonths || [],
     }),
   });
 }
 
-async function saveEnvelope(event) {
+async function saveWeeklyRule(event) {
   return saveNamedMoney(event, {
-    list: "envelopes",
-    toastAdd: "Weekly slot added",
-    toastEdit: "Weekly slot updated",
+    list: "weeklyRules",
+    toastAdd: "Weekly rule added",
+    toastEdit: "Weekly rule updated",
+    build: (data) => {
+      const cadence = ["once", "times", "weekday"].includes(data.get("cadence")) ? data.get("cadence") : "once";
+      const payload = {
+        name: requireName(data.get("name"), "name"),
+        amountPence: requireMoney(data.get("amount"), "amount"),
+        cadence,
+        tickedKeys: modal.item?.tickedKeys || [],
+      };
+      if (cadence === "times") {
+        const times = Number(data.get("timesPerMonth"));
+        if (!Number.isInteger(times) || times < 1 || times > 12) throw new Error("Times a month must be 1 to 12.");
+        payload.timesPerMonth = times;
+      }
+      if (cadence === "weekday") {
+        const weekday = Number(data.get("weekday"));
+        if (!Number.isInteger(weekday) || weekday < 1 || weekday > 7) throw new Error("Pick a weekday.");
+        payload.weekday = weekday;
+      }
+      return payload;
+    },
+  });
+}
+
+async function saveWeeklyExtra(event) {
+  return saveNamedMoney(event, {
+    list: "weeklyExtras",
+    toastAdd: "Extra added",
+    toastEdit: "Extra updated",
     build: (data) => ({
       name: requireName(data.get("name"), "name"),
-      weeklyPence: requireMoney(data.get("amount"), "amount"),
-      happenedDates: modal.item?.happenedDates || [],
+      amountPence: requireMoney(data.get("amount"), "amount"),
+      month: modal.item?.month || viewMonth,
+      happened: Boolean(modal.item?.happened),
     }),
   });
 }

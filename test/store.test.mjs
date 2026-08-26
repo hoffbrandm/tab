@@ -134,3 +134,58 @@ test("repayments do not keep a share adjustment", () => {
   });
   assert.equal("myShareAdjustmentPence" in parsed.transactions[0], false);
 });
+
+test("older bills and card subs become monthlies with unique ids", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      bills: [{ id: "1", name: "Mortgage", amountPence: 120000, dueDay: 1, paidMonths: [] }],
+      cardSubs: [{ id: "1", name: "Phone", amountPence: 2000, dueDay: 21, paidMonths: [] }],
+    },
+  });
+  assert.equal(parsed.household.monthlies.length, 2);
+  assert.equal(parsed.household.monthlies[0].paidFrom, "cash");
+  assert.equal(parsed.household.monthlies[1].paidFrom, "card");
+  assert.equal(parsed.household.monthlies[1].dueDay, 21);
+  assert.notEqual(parsed.household.monthlies[0].id, parsed.household.monthlies[1].id);
+});
+
+test("older envelopes become weekly rules, not five cloned rows", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      envelopes: [{ id: "e-1", name: "Food shop", weeklyPence: 7000, happenedDates: ["2026-08-04"] }],
+    },
+  });
+  assert.equal(parsed.household.weeklyRules.length, 1);
+  assert.equal(parsed.household.weeklyRules[0].cadence, "times");
+  assert.equal(parsed.household.weeklyRules[0].timesPerMonth, 4);
+  assert.deepEqual(parsed.household.weeklyRules[0].tickedKeys, ["2026-08:1"]);
+});
+
+test("weekday weekly rules keep their calendar cadence", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      weeklyRules: [{
+        id: "food",
+        name: "Food shop",
+        amountPence: 7000,
+        cadence: "weekday",
+        weekday: 2,
+        tickedKeys: ["2026-08:2026-08-04"],
+      }],
+    },
+  });
+  assert.equal(parsed.household.weeklyRules[0].weekday, 2);
+  assert.deepEqual(parsed.household.weeklyRules[0].tickedKeys, ["2026-08:2026-08-04"]);
+});

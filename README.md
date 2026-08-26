@@ -51,6 +51,9 @@ One versioned JSON document in `tab.json`:
     "incomes": [],
     "bills": [],
     "envelopes": [],
+    "monthlies": [],
+    "weeklyRules": [],
+    "weeklyExtras": [],
     "cards": [],
     "cardSubs": [],
     "oneOffs": [],
@@ -68,7 +71,9 @@ An older gist with only `friends` and `transactions` still loads. The household 
 
 ## Product
 
-- **Home cashflow** — income is net pay from payslips whose money lands in the month on screen (two slips in one month add together). Monthly bills and weekly slots you can add and tick, card balances plus pending amounts, card subscriptions, that month’s planned one-offs, and the annual reserve (Annual total ÷ 12). In / out / left, then one line for under or over and whether you are saving. **Reset ticks** clears paid/happened marks for the month on screen; template lines stay. Weeklies are a template: a new month shows the same slots, all unticked.
+- **Home cashflow** — income is net pay from payslips whose money lands in the month on screen. It *consumes* weeklies and monthlies; you do not edit five cloned rows here. Card balance + pending versus the sum of allowed monthly expecteds is the under / over figure. **Reset ticks** clears ticks for the month on screen; rules stay.
+- **Weeklies** — each rule is entered once: name, typical amount, and cadence (once a month, N times a month, or every weekday). Cashflow builds one tick slot per matching weekday in the real calendar month (four Tuesdays → four slots). An extra occurrence can be added for that month only. Ticks do not carry forward.
+- **Monthlies** — name, expected amount, day of month, cash or card. A card line becomes *allowed* on that day (or when ticked), so a matching rise on the card is not over budget.
 - **Planned** — item, month, estimate, purchased. The month on the record is the month shown. Rows for the month on screen appear on Home.
 - **Annual** — yearly bills. Total ÷ 12 is the monthly reserve on cashflow. Edit here; do not type it twice.
 - **Pots** — named pots with a dated snapshot. Optional pension *names and status* only.
@@ -77,7 +82,7 @@ An older gist with only `friends` and `transactions` still loads. The household 
 - **Giving** — who, charity, date, amount, Gift Aid, gross, tax year.
 - **Friend tabs** — friends, 50/50 expenses with an optional share adjustment, transfers, running balances.
 
-Hash routes keep refresh and Back in the same place (`#/home`, `#/planned`, `#/annual`, `#/pots`, `#/payslips`, `#/ani`, `#/giving`, `#/tabs`, `#/friend/<id>`, `#/more`). The bar lists every destination. Account holds people and sign out.
+Hash routes keep refresh and Back in the same place (`#/home`, `#/weeklies`, `#/monthlies`, `#/planned`, `#/annual`, `#/pots`, `#/payslips`, `#/ani`, `#/giving`, `#/tabs`, `#/friend/<id>`, `#/more`). The bar lists every destination. Account holds people and sign out.
 
 Month labels use the month or tax year on the record. “This month” is only for the current calendar month. The public repo never contains a real workbook or personal figures. A teammate can seed the private gist separately.
 
@@ -98,4 +103,4 @@ Then open `http://127.0.0.1:4173`. On that local address you can open a session-
 npm test
 ```
 
-`test/calculations.test.mjs` covers friend-tab splits and balances. `test/household.test.mjs` covers cashflow totals, income from payslips, annual reserve, weekly template carry-forward, historical month labels, UK tax years, Gift Aid into the £100k helper, and the remaining-sacrifice projection. `test/workbook-import.test.mjs` keeps a synthetic workbook mapper for tests only — there is no import button in the app. The other tests cover store validation, the session credential, and the private-gist persistence layer.
+`test/calculations.test.mjs` covers friend-tab splits and balances. `test/household.test.mjs` covers cashflow totals, income from payslips, annual reserve, weekday weekly slots (4 Tuesdays / 5 Fridays / once-a-month), new-month unticked slots, monthly due-day allowed, historical month labels, UK tax years, Gift Aid into the £100k helper, and the remaining-sacrifice projection. `test/workbook-import.test.mjs` keeps a synthetic workbook mapper for tests only — there is no import button in the app. The other tests cover store validation, the session credential, and the private-gist persistence layer.
