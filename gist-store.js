@@ -12,10 +12,19 @@ export class GistError extends Error {
   }
 }
 
-export function pickGist(gists, { description = GIST_DESCRIPTION, filename = GIST_FILENAME } = {}) {
+export function matchingGists(gists, { description = GIST_DESCRIPTION, filename = GIST_FILENAME } = {}) {
   const matches = (gists || []).filter((gist) => gist && gist.description === description);
   matches.sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
-  return matches.find((gist) => gist.files && gist.files[filename]) || matches[0] || null;
+  const withFile = matches.filter((gist) => gist.files && gist.files[filename]);
+  return withFile.length ? withFile : matches;
+}
+
+export function pickGist(gists, options) {
+  return matchingGists(gists, options)[0] || null;
+}
+
+export function storeHasTabData(store) {
+  return Boolean(store?.friends?.length || store?.transactions?.length);
 }
 
 export function storeToGistContent(store) {
@@ -30,6 +39,10 @@ export function parseGistContent(text) {
     if (error instanceof StoreError) throw error;
     throw new GistError("The private gist is not valid JSON.");
   }
+}
+
+function hasInlineContent(file) {
+  return Boolean(file) && typeof file.content === "string" && !file.truncated;
 }
 
 export function createGistStore({
@@ -92,35 +105,75 @@ export function createGistStore({
     });
   }
 
-  async function ensure() {
-    const found = pickGist(await listGists(), { description, filename });
-    if (found) return found;
-    return createGist();
+  async function downloadRaw(rawUrl) {
+    const response = await fetchImpl(rawUrl, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.raw" },
+    });
+    if (!response.ok) {
+      throw new GistError("The private gist could not be downloaded.", response.status);
+    }
+    return response.text();
   }
 
+  // GET /gists (the list) returns file metadata only: filename, raw_url, size.
+  // File bodies live on GET /gists/{id}. If that payload is truncated, use raw_url.
+  // Never treat a missing list `content` field as an empty tab.
   async function readFileText(gist) {
+    const file = gist?.files?.[filename];
+    if (!file) throw new GistError("The private gist is missing tab.json.");
+    if (hasInlineContent(file)) return file.content;
+    if (file.raw_url) return downloadRaw(file.raw_url);
+    throw new GistError("The private gist could not be read.");
+  }
+
+  async function loadFromGist(gist) {
+    if (!gist?.id) throw new GistError("The private gist could not be read.");
     const file = gist.files?.[filename];
-    if (!file) return "";
-    if (file.truncated && file.raw_url) {
-      const response = await fetchImpl(file.raw_url, {
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.raw" },
-      });
-      if (!response.ok) throw new GistError("The private gist could not be downloaded.");
-      return response.text();
+    const hydrated = hasInlineContent(file) ? gist : await github(`/gists/${gist.id}`);
+    return { gist: hydrated, store: parseGistContent(await readFileText(hydrated)) };
+  }
+
+  async function privatize(gist) {
+    if (!gist.public) return gist;
+    await github(`/gists/${gist.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ public: false }),
+    });
+    return { ...gist, public: false };
+  }
+
+  async function selectGist() {
+    const candidates = matchingGists(await listGists(), { description, filename });
+    if (candidates.length === 0) {
+      const created = await createGist();
+      return { gist: created, store: parseGistContent(await readFileText(created)) };
     }
-    return file.content || "";
+
+    let newestEmpty = null;
+    let firstError = null;
+    for (const candidate of candidates) {
+      try {
+        const loaded = await loadFromGist(candidate);
+        if (storeHasTabData(loaded.store)) {
+          return { ...loaded, gist: await privatize(loaded.gist) };
+        }
+        if (!newestEmpty) newestEmpty = loaded;
+      } catch (error) {
+        if (!firstError) firstError = error;
+      }
+    }
+    if (newestEmpty) return { ...newestEmpty, gist: await privatize(newestEmpty.gist) };
+    throw firstError || new GistError("The private gist could not be read.");
+  }
+
+  async function ensure() {
+    return (await selectGist()).gist;
   }
 
   async function read() {
-    const gist = await ensure();
-    if (gist.public) {
-      await github(`/gists/${gist.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ public: false }),
-      });
-    }
-    return { store: parseGistContent(await readFileText(gist)), gistId: gist.id };
+    const loaded = await selectGist();
+    return { store: loaded.store, gistId: loaded.gist.id };
   }
 
   async function write(store, gistId) {

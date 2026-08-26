@@ -27,7 +27,9 @@ The public site never sees a baked-in secret. Anyone can open the Pages URL; wit
 
 A password manager can store the token against this site, which is the comfortable option on a phone. The token is kept in `sessionStorage` for this browser session only. It is not the tab, and it is not written to `localStorage`.
 
-On first sign-in the app looks for a gist whose description is `tab.personal.v1`. If none exists it creates a private one. A fresh browser does not need a gist id.
+On first sign-in the app looks for a gist whose description is `tab.personal.v1`. If none exists it creates a private one. GitHub's gist list does not include file bodies, so after finding (or creating) that gist the app loads `tab.json` with `GET /gists/{id}` — or the file `raw_url` when the body is truncated. A fresh browser does not need a gist id.
+
+If more than one `tab.personal.v1` gist exists, the app uses the newest one that actually has friends or expenses.
 
 A classic personal access token with only the `gist` scope also works.
 
