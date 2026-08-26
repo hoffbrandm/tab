@@ -26,7 +26,7 @@ export function emptyHousehold() {
     pensions: [],
     payslips: [],
     donations: [],
-    includeGiftAidInAni: false,
+    includeGiftAidInAni: true,
   };
 }
 
@@ -133,6 +133,71 @@ export function taxYearOptions(today = new Date(), years = 6) {
   return Array.from({ length: years }, (_, index) => taxYearLabel(currentStart - index));
 }
 
+export function taxYearOptionsFor(selected, today = new Date(), years = 6) {
+  const options = taxYearOptions(today, years);
+  if (selected && isTaxYearLabel(selected) && !options.includes(selected)) options.push(selected);
+  return options.sort().reverse();
+}
+
+export function isCurrentMonth(month, today = new Date()) {
+  return month === monthKey(today);
+}
+
+export function viewPeriodLabel(month) {
+  return monthLabel(month);
+}
+
+export function currentPeriodHint(month, today = new Date()) {
+  return isCurrentMonth(month, today) ? "This month" : monthLabel(month);
+}
+
+export function payslipLandsMonth(payslip) {
+  return payslip?.moneyLandsMonth || payslip?.periodMonth || "";
+}
+
+export function payslipRecordLabels(payslip) {
+  return {
+    period: monthLabel(payslip?.periodMonth),
+    lands: monthLabel(payslipLandsMonth(payslip)),
+    taxYear: String(payslip?.taxYear || ""),
+  };
+}
+
+export function payslipsForCashflowMonth(payslips, month) {
+  return (payslips || []).filter((slip) => payslipLandsMonth(slip) === month);
+}
+
+export function incomeLinesFromPayslips(household, month) {
+  const people = household?.people || [];
+  return payslipsForCashflowMonth(household?.payslips, month).map((slip) => ({
+    id: slip.id,
+    personId: slip.personId,
+    personName: people.find((person) => person.id === slip.personId)?.name || "",
+    amountPence: Number.isInteger(slip.netPence) ? slip.netPence : 0,
+    forecast: Boolean(slip.forecast),
+    periodMonth: slip.periodMonth,
+    moneyLandsMonth: payslipLandsMonth(slip),
+    taxYear: slip.taxYear,
+  }));
+}
+
+export function incomeFromPayslipsPence(household, month) {
+  return sumPence(incomeLinesFromPayslips(household, month), (item) => item.amountPence);
+}
+
+export function weekliesForMonth(household, month) {
+  return (household?.envelopes || []).map((item) => {
+    const happenedDates = happenedInMonth(item, month);
+    return {
+      id: item.id,
+      name: item.name,
+      weeklyPence: item.weeklyPence,
+      happenedDates,
+      ticked: happenedDates.length > 0,
+    };
+  });
+}
+
 export function giftAidGrossPence(amountPence, giftAid) {
   if (!Number.isInteger(amountPence) || amountPence < 0) return 0;
   if (!giftAid) return amountPence;
@@ -180,7 +245,7 @@ export function proRateDay(viewMonth, today = new Date()) {
 
 export function cashflowForMonth(household, month, today = new Date()) {
   const people = household?.people || [];
-  const incomes = household?.incomes || [];
+  const incomeLines = incomeLinesFromPayslips(household, month);
   const bills = household?.bills || [];
   const envelopes = household?.envelopes || [];
   const cards = household?.cards || [];
@@ -190,7 +255,7 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const days = daysInMonthKey(month);
   const dayOfMonth = proRateDay(month, today);
 
-  const incomePence = sumPence(incomes, (item) => item.amountPence);
+  const incomePence = incomeFromPayslipsPence(household, month);
   const billsPence = sumPence(bills, (item) => item.amountPence);
   const annualReserve = annualReservePence(annualBills);
   const oneOffsPence = sumPence(oneOffs, (item) => item.estimatePence);
@@ -213,6 +278,7 @@ export function cashflowForMonth(household, month, today = new Date()) {
     daysInMonth: days,
     dayOfMonth,
     people,
+    incomeLines,
     incomePence,
     billsPence,
     annualReservePence: annualReserve,
@@ -238,8 +304,9 @@ export function spendVerdict(overUnderPence, formatMoney) {
   return `${formatMoney(-overUnderPence)} over the allowed-so-far.`;
 }
 
-export function savingLine(flow) {
-  if (flow.potPence < 0) return "This month does not balance yet.";
+export function savingLine(flow, today = new Date()) {
+  const when = isCurrentMonth(flow.month, today) ? "This month" : monthLabel(flow.month);
+  if (flow.potPence < 0) return `${when} does not balance yet.`;
   if (flow.overUnderPence >= 0) return "On track to save.";
   return "Spending ahead of the pot.";
 }
@@ -273,10 +340,11 @@ export function payslipAniPence(payslip) {
 }
 
 export function giftAidForTaxYear(donations, taxYear, { who } = {}) {
+  const wanted = String(who || "").trim().toLowerCase();
   return sumPence(
     (donations || []).filter((donation) => {
       if (ukTaxYearFromDate(donation.date) !== taxYear || !donation.giftAid) return false;
-      if (who && donation.who !== who) return false;
+      if (wanted && String(donation.who || "").trim().toLowerCase() !== wanted) return false;
       return true;
     }),
     (donation) => giftAidGrossPence(donation.amountPence, true) - donation.amountPence,
@@ -289,7 +357,7 @@ export function aniProjection({
   personId,
   personName,
   taxYear,
-  includeGiftAid = false,
+  includeGiftAid = true,
   today = new Date(),
 } = {}) {
   const slips = (payslips || [])
@@ -326,6 +394,19 @@ export function aniProjection({
     underByPence: Math.max(0, ANI_LIMIT_PENCE - projectedPence),
     overLimit: projectedPence > ANI_LIMIT_PENCE,
   };
+}
+
+export function aniFromHousehold(household, { personId, taxYear, today = new Date() } = {}) {
+  const person = (household?.people || []).find((item) => item.id === personId);
+  return aniProjection({
+    payslips: household?.payslips || [],
+    donations: household?.donations || [],
+    personId,
+    personName: person?.name,
+    taxYear,
+    includeGiftAid: true,
+    today,
+  });
 }
 
 export function isMonthKey(value) {

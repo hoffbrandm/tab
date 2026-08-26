@@ -3,20 +3,26 @@ import assert from "node:assert/strict";
 import { formatMoney } from "../calculations.js";
 import {
   ANI_LIMIT_PENCE,
+  aniFromHousehold,
   aniProjection,
   annualReservePence,
   cashflowForMonth,
+  currentPeriodHint,
   currentUkTaxYear,
   emptyHousehold,
   envelopeMonthlyPence,
   giftAidGrossPence,
   householdHasData,
+  incomeFromPayslipsPence,
   payslipAniPence,
   payslipIsConfirmed,
+  payslipRecordLabels,
   resetMonthTicks,
   savingLine,
   spendVerdict,
   ukTaxYearFromDate,
+  viewPeriodLabel,
+  weekliesForMonth,
 } from "../household.js";
 
 const household = {
@@ -26,8 +32,12 @@ const household = {
     { id: "partner", name: "Partner" },
   ],
   incomes: [
-    { id: "in-1", personId: "you", label: "Take-home", amountPence: 300000 },
-    { id: "in-2", personId: "partner", label: "Take-home", amountPence: 200000 },
+    { id: "in-1", personId: "you", label: "Stale typed income", amountPence: 999999 },
+    { id: "in-2", personId: "partner", label: "Stale typed income", amountPence: 888888 },
+  ],
+  payslips: [
+    slipFor("you", "2026-08", 300000),
+    slipFor("partner", "2026-08", 200000),
   ],
   bills: [
     { id: "b-1", name: "Mortgage", amountPence: 120000, dueDay: 1, paidMonths: ["2026-08"] },
@@ -56,6 +66,28 @@ const household = {
 test("empty household templates are not treated as live data", () => {
   assert.equal(householdHasData(emptyHousehold()), false);
   assert.equal(householdHasData(household), true);
+});
+
+test("cashflow income is net pay from payslips that land in the month", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const flow = cashflowForMonth(household, "2026-08", today);
+  assert.equal(flow.incomePence, 500000);
+  assert.equal(flow.incomeLines.length, 2);
+  assert.equal(incomeFromPayslipsPence(household, "2026-08"), 500000);
+
+  const twoForYou = {
+    ...household,
+    payslips: [
+      slipFor("you", "2026-08", 120000, { id: "s-a" }),
+      slipFor("you", "2026-08", 80000, { id: "s-b", periodMonth: "2026-07" }),
+      slipFor("partner", "2026-09", 200000),
+    ],
+  };
+  const august = cashflowForMonth(twoForYou, "2026-08", today);
+  assert.equal(august.incomePence, 200000);
+  assert.equal(august.incomeLines.length, 2);
+  const july = cashflowForMonth(twoForYou, "2026-07", today);
+  assert.equal(july.incomePence, 0);
 });
 
 test("cashflow totals use this month’s one-offs and annual reserve / 12", () => {
@@ -109,7 +141,54 @@ test("a new-month reset clears ticks for that month only", () => {
   resetMonthTicks(copy, "2026-08");
   assert.deepEqual(copy.bills[0].paidMonths, []);
   assert.deepEqual(copy.envelopes[0].happenedDates, []);
-  assert.equal(savingLine(cashflowForMonth(household, "2026-08", new Date("2026-08-10T12:00:00Z"))), "On track to save.");
+  assert.equal(copy.envelopes[0].name, "Food shop");
+  assert.equal(copy.envelopes[0].weeklyPence, 7000);
+  assert.equal(savingLine(cashflowForMonth(household, "2026-08", new Date("2026-08-10T12:00:00Z")), new Date("2026-08-10T12:00:00Z")), "On track to save.");
+});
+
+test("weekly lines are a template: a new month is the same lines, unticked", () => {
+  const august = weekliesForMonth(household, "2026-08");
+  const september = weekliesForMonth(household, "2026-09");
+  assert.equal(august.length, 1);
+  assert.equal(september.length, 1);
+  assert.equal(august[0].id, september[0].id);
+  assert.equal(august[0].name, september[0].name);
+  assert.equal(august[0].weeklyPence, september[0].weeklyPence);
+  assert.equal(august[0].ticked, true);
+  assert.equal(september[0].ticked, false);
+  assert.deepEqual(september[0].happenedDates, []);
+});
+
+test("historical month labels stay historical", () => {
+  const today = new Date("2026-08-26T12:00:00Z");
+  assert.equal(viewPeriodLabel("2026-03"), "March 2026");
+  assert.equal(currentPeriodHint("2026-03", today), "March 2026");
+  assert.equal(currentPeriodHint("2026-08", today), "This month");
+  const labels = payslipRecordLabels({
+    periodMonth: "2026-03",
+    moneyLandsMonth: "2026-04",
+    taxYear: "2025-26",
+  });
+  assert.equal(labels.period, "March 2026");
+  assert.equal(labels.lands, "April 2026");
+  assert.equal(labels.taxYear, "2025-26");
+  const past = cashflowForMonth({ ...emptyHousehold(), annualBills: [] }, "2026-03", today);
+  assert.equal(savingLine({ ...past, potPence: -100 }, today), "March 2026 does not balance yet.");
+});
+
+test("annual bills become the cashflow monthly reserve", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const one = cashflowForMonth({
+    ...emptyHousehold(),
+    annualBills: [{ id: "a-1", name: "Insurance", amountPence: 120000, month: 3 }],
+  }, "2026-08", today);
+  assert.equal(one.annualReservePence, 10000);
+  assert.equal(annualReservePence([{ amountPence: 120000 }]), 10000);
+  const edited = cashflowForMonth({
+    ...emptyHousehold(),
+    annualBills: [{ id: "a-1", name: "Insurance", amountPence: 240000, month: 3 }],
+  }, "2026-08", today);
+  assert.equal(edited.annualReservePence, 20000);
 });
 
 test("over and underspend are plain English", () => {
@@ -187,6 +266,29 @@ test("£100k helper ignores forecast rows and can stay under the cliff", () => {
   assert.equal(result.overLimit, false);
 });
 
+test("Gift Aid from giving in the tax year feeds the £100k helper", () => {
+  const donations = [{
+    id: "d-1",
+    who: "you",
+    charity: "Example",
+    date: "2026-05-01",
+    amountPence: 80000,
+    giftAid: true,
+  }];
+  const result = aniFromHousehold({
+    people: [{ id: "you", name: "You" }],
+    payslips: [slip("2026-04", 900000)],
+    donations,
+  }, {
+    personId: "you",
+    taxYear: "2026-27",
+    today: new Date("2026-08-26T12:00:00Z"),
+  });
+  assert.equal(result.giftAidAddBackPence, 20000);
+  assert.equal(result.ytdPence, 900000);
+  assert.equal(result.projectedPence, result.ytdPence + result.projectedRestPence + 20000);
+});
+
 test("Gift Aid add-back is off unless the planner asks for it", () => {
   const donations = [{
     id: "d-1",
@@ -237,9 +339,18 @@ test("payslip ANI is gross plus benefits minus salary sacrifice", () => {
   }, new Date("2026-08-26T12:00:00Z")), true);
 });
 
+function slipFor(personId, landsMonth, netPence, extra = {}) {
+  return slip(extra.periodMonth || landsMonth, netPence, {
+    personId,
+    netPence,
+    moneyLandsMonth: landsMonth,
+    ...extra,
+  });
+}
+
 function slip(periodMonth, aniPence, extra = {}) {
   return {
-    id: `slip-${periodMonth}`,
+    id: extra.id || `slip-${periodMonth}-${extra.personId || "you"}`,
     personId: "you",
     taxYear: "2026-27",
     periodMonth,

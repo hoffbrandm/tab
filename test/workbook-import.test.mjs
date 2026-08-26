@@ -95,8 +95,8 @@ test("a synthetic workbook maps into household lines and keeps friend tabs", asy
   assert.equal(kept.friends[0].name, "Ben");
   assert.equal(kept.household.bills[0].id, "keep-me");
 
-  const flow = cashflowForMonth(store.household, "2026-08", new Date("2026-08-10T12:00:00Z"));
-  assert.equal(flow.incomePence, 430000);
+  const flow = cashflowForMonth(store.household, "2026-04", new Date("2026-04-10T12:00:00Z"));
+  assert.equal(flow.incomePence, 242000);
   assert.ok(flow.pendingPence >= 6000);
   const summary = reportLines(report);
   assert.ok(summary.landed.some((item) => item[0] === "Income" && item[1] === 2));

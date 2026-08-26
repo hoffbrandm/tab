@@ -2,31 +2,31 @@ import { balanceFor, balanceText, formatMoney, parseMoneyToPence, runningBalance
 import { createGistStore, GistError } from "./gist-store.js";
 import {
   addMonths,
-  aniProjection,
+  aniFromHousehold,
   ANI_LIMIT_PENCE,
   cashflowForMonth,
+  currentPeriodHint,
   currentUkTaxYear,
-  householdHasData,
   donationGrossPence,
   emptyHousehold,
   giftAidGrossPence,
-  happenedInMonth,
+  isCurrentMonth,
   monthKey,
   monthLabel,
   ordinalDay,
   paidInMonth,
   payslipIsConfirmed,
+  payslipRecordLabels,
   resetMonthTicks,
   savingLine,
   PENSION_STATUSES,
   spendVerdict,
-  taxYearOptions,
+  taxYearOptionsFor,
   ukTaxYearFromDate,
+  weekliesForMonth,
 } from "./household.js";
-import { applyHouseholdImport, householdFromWorkbook, importHasData, reportLines } from "./workbook-import.js";
 import { createSession } from "./session.js";
 import { emptyStore, parseStore } from "./store.js";
-import { readXlsx } from "./xlsx.js";
 
 const LOCAL_KEY = "tab.personal.v1";
 const SCREENS = ["home", "planned", "annual", "pots", "payslips", "ani", "giving", "more", "tabs"];
@@ -304,22 +304,27 @@ function shell({ eyebrow, title, lede, extra = "", body, month = false, back = "
 }
 
 function monthSwitcher({ reset = false } = {}) {
+  const now = new Date();
   return `<div class="month-switch">
     <button type="button" class="month-nav" data-action="month-prev" aria-label="Previous month">‹</button>
-    <div><strong>${esc(monthLabel(viewMonth))}</strong>${viewMonth === monthKey() ? "" : `<button type="button" class="text-button" data-action="month-now">This month</button>`}${reset ? `<button type="button" class="text-button" data-action="reset-month">Reset ticks</button>` : ""}</div>
+    <div><strong>${esc(monthLabel(viewMonth))}</strong>${isCurrentMonth(viewMonth, now) ? "" : `<button type="button" class="text-button" data-action="month-now">This month</button>`}${reset ? `<button type="button" class="text-button" data-action="reset-month">Reset ticks</button>` : ""}</div>
     <button type="button" class="month-nav" data-action="month-next" aria-label="Next month">›</button>
   </div>`;
 }
 
 function dock() {
-  const more = ["more", "annual", "pots", "payslips", "ani", "giving"].includes(screen.name);
   const item = (name, label, active) =>
     `<a class="dock-item${active ? " active" : ""}" href="#/${name}" data-action="go" data-screen="${name}">${label}</a>`;
   return `<nav class="dock" aria-label="App">
-    ${item("home", "Home", screen.name === "home")}
+    ${item("home", "Cashflow", screen.name === "home")}
     ${item("planned", "Planned", screen.name === "planned")}
-    ${item("more", "More", more)}
+    ${item("annual", "Annual", screen.name === "annual")}
+    ${item("pots", "Pots", screen.name === "pots")}
+    ${item("payslips", "Payslips", screen.name === "payslips")}
+    ${item("ani", "£100k", screen.name === "ani")}
+    ${item("giving", "Giving", screen.name === "giving")}
     ${item("tabs", "Tabs", screen.name === "tabs" || screen.name === "friend")}
+    ${item("more", "Account", screen.name === "more")}
   </nav>`;
 }
 
@@ -343,31 +348,34 @@ function emptyLines(text, action, label) {
 
 function cashflowScreen() {
   const hh = household();
-  const flow = cashflowForMonth(hh, viewMonth, new Date());
+  const now = new Date();
+  const flow = cashflowForMonth(hh, viewMonth, now);
   const leftoverClass = flow.potPence < 0 ? "negative" : "neutral";
   const verdictClass = flow.overUnderPence < 0 ? "negative" : flow.overUnderPence > 0 ? "positive" : "neutral";
+  const period = monthLabel(viewMonth);
+  const weeklies = weekliesForMonth(hh, viewMonth);
 
   return shell({
-    eyebrow: "This month",
+    eyebrow: currentPeriodHint(viewMonth, now),
     title: "",
     month: "reset",
     extra: `<section class="friend-hero cash-hero">
-        <p class="eyebrow">This month</p>
+        <p class="eyebrow">${esc(currentPeriodHint(viewMonth, now))}</p>
         <h1 class="${leftoverClass}">${formatMoney(flow.potPence)}</h1>
-        <p class="balance-label">Left after monthly out</p>
+        <p class="balance-label">Left after monthly out · ${esc(period)}</p>
         <p class="balance-value ${verdictClass}">${esc(spendVerdict(flow.overUnderPence, formatMoney))}</p>
-        <p class="helper">${esc(savingLine(flow))} In ${formatMoney(flow.incomePence)} · Out ${formatMoney(flow.committedOutPence)} · Cards ${formatMoney(flow.cardBalancesPence)}${flow.pendingPence ? ` + pending ${formatMoney(flow.pendingPence)}` : ""}.</p>
+        <p class="helper">${esc(savingLine(flow, now))} In ${formatMoney(flow.incomePence)} · Out ${formatMoney(flow.committedOutPence)} · Cards ${formatMoney(flow.cardBalancesPence)}${flow.pendingPence ? ` + pending ${formatMoney(flow.pendingPence)}` : ""}.</p>
       </section>`,
     body: `
       <section class="block">
-        ${sectionHead("Income", "add-income", "Add")}
-        ${hh.incomes.length ? hh.incomes.map((item) => lineRow({
-          edit: "edit-income",
+        ${sectionHead("Income", "add-payslip", "Add payslip")}
+        ${flow.incomeLines.length ? flow.incomeLines.map((item) => lineRow({
+          edit: "edit-payslip",
           id: item.id,
-          title: item.label,
-          detail: personById(item.personId)?.name || "",
+          title: item.personName || "Payslip",
+          detail: `${item.forecast ? "Forecast · " : ""}Lands ${monthLabel(item.moneyLandsMonth)} · net`,
           amount: formatMoney(item.amountPence),
-        })).join("") : ""}
+        })).join("") : emptyLines(`Net pay from payslips that land in ${period}.`, "add-payslip", "Add a payslip")}
       </section>
       <section class="block">
         ${sectionHead("Monthly", "add-bill", "Add")}
@@ -384,17 +392,20 @@ function cashflowScreen() {
       </section>
       <section class="block">
         ${sectionHead("Weekly", "add-envelope", "Add")}
-        ${hh.envelopes.map((item) => {
-          const happened = happenedInMonth(item, viewMonth);
+        ${weeklies.map((item) => {
+          const happened = item.happenedDates;
+          const tickedNow = isCurrentMonth(viewMonth, now)
+            ? happened.includes(today())
+            : happened.includes(`${viewMonth}-01`);
           return lineRow({
             edit: "edit-envelope",
             id: item.id,
             title: item.name,
-            detail: happened.length ? `${happened.length} this month` : "Tick when it happened",
+            detail: happened.length ? `${happened.length} in ${period}` : `Tick in ${period}`,
             amount: formatMoney(item.weeklyPence),
             tickAction: "tick-envelope",
-            ticked: viewMonth === monthKey() ? happened.includes(today()) : happened.includes(`${viewMonth}-01`),
-            tickLabel: "This week happened",
+            ticked: tickedNow,
+            tickLabel: `Happened in ${period}`,
           });
         }).join("")}
       </section>
@@ -430,7 +441,7 @@ function cashflowScreen() {
         })).join("")}
       </section>` : `<section class="block">${sectionHead("Card subs", "add-sub", "Add")}</section>`}
       ${flow.oneOffs.length ? `<section class="block">
-        ${sectionHead("This month", "add-oneoff", "Add")}
+        ${sectionHead(period, "add-oneoff", "Add")}
         ${flow.oneOffs.map((item) => lineRow({
           edit: "edit-oneoff",
           id: item.id,
@@ -442,10 +453,12 @@ function cashflowScreen() {
           tickLabel: item.purchased ? "Purchased" : "Not purchased",
         })).join("")}
       </section>` : ""}
-      ${hh.annualBills.length ? `<section class="block">
+      <section class="block">
         ${sectionHead("Set aside", "go-annual", "Edit")}
-        <article class="line"><div class="line-main static"><span class="line-copy"><strong>Annual reserve</strong></span><span class="line-amount">${formatMoney(flow.annualReservePence)}</span></div></article>
-      </section>` : ""}
+        ${hh.annualBills.length
+          ? `<article class="line"><div class="line-main static"><span class="line-copy"><strong>Annual reserve</strong><small>From Annual · total ÷ 12</small></span><span class="line-amount">${formatMoney(flow.annualReservePence)}</span></div></article>`
+          : emptyLines("Insurance and renewals live under Annual. The monthly reserve appears here.", "go-annual", "Open Annual")}
+      </section>
     `,
   });
 }
@@ -457,12 +470,12 @@ function plannedScreen() {
   return shell({
     eyebrow: "Planned",
     title: "Planned.",
-    lede: "This month’s items show on Home.",
+    lede: `${monthLabel(viewMonth)} items show on Home.`,
     month: true,
     body: `
       <section class="block">
         ${sectionHead(monthLabel(viewMonth), "add-oneoff", "Add")}
-        ${thisMonth.length ? thisMonth.map(oneOffRow).join("") : emptyLines("Nothing planned this month.", "add-oneoff", "Add a one-off")}
+        ${thisMonth.length ? thisMonth.map(oneOffRow).join("") : emptyLines(`Nothing planned for ${monthLabel(viewMonth)}.`, "add-oneoff", "Add a one-off")}
       </section>
       ${later.length ? `<section class="block">${sectionHead("Other months", "", "")}${later.map(oneOffRow).join("")}</section>` : ""}
     `,
@@ -489,8 +502,8 @@ function annualScreen() {
   return shell({
     eyebrow: "Annual",
     title: "Sinking fund.",
-    lede: "Renewals and once-a-year bills. The cashflow reserve is the total divided by 12.",
-    back: "more",
+    lede: "Renewals and once-a-year bills. Cashflow sets aside the total divided by 12. Edit a line here and Home updates.",
+    back: "",
     extra: items.length ? `<div class="dash single"><div class="stat"><span>Monthly reserve</span><strong>${formatMoney(reserve)}</strong></div></div>` : "",
     body: `
       <section class="block">
@@ -514,7 +527,7 @@ function potsScreen() {
     eyebrow: "Where’s the money",
     title: "Pots.",
     lede: "Named pots and today’s figure. Pensions are names and status only — no policy or NI numbers.",
-    back: "more",
+    back: "",
     extra: hh.pots.length ? `<div class="dash single"><div class="stat"><span>Pots total</span><strong>${formatMoney(total)}</strong></div></div>` : "",
     body: `
       <section class="block">
@@ -554,21 +567,22 @@ function payslipsScreen() {
   return shell({
     eyebrow: "Pay",
     title: "Payslips.",
-    lede: "Per person, per month. Future rows stay marked as forecast until the money lands.",
-    back: "more",
+    lede: "Per person, per pay period. The month on the slip stays the month on the slip. Net pay that lands in a cashflow month is the income on Home.",
+    back: "",
     extra: `<label class="inline-label">Tax year
-      <select data-action="payslip-year">${taxYearOptions().map((item) => `<option value="${item}" ${item === year ? "selected" : ""}>${item}</option>`).join("")}</select>
+      <select data-action="payslip-year">${taxYearOptionsFor(year).map((item) => `<option value="${item}" ${item === year ? "selected" : ""}>${item}</option>`).join("")}</select>
     </label>`,
     body: `
       <section class="block">
         ${sectionHead(year, "add-payslip", "Add")}
         ${rows.length ? rows.map((slip) => {
           const confirmed = payslipIsConfirmed(slip);
+          const labels = payslipRecordLabels(slip);
           return lineRow({
             edit: "edit-payslip",
             id: slip.id,
-            title: `${personById(slip.personId)?.name || "Person"} · ${monthLabel(slip.periodMonth)}`,
-            detail: `${confirmed ? "Confirmed" : "Forecast"} · lands ${monthLabel(slip.moneyLandsMonth)} · net ${formatMoney(slip.netPence)}`,
+            title: `${personById(slip.personId)?.name || "Person"} · ${labels.period}`,
+            detail: `${confirmed ? "Confirmed" : "Forecast"} · ${labels.taxYear} · lands ${labels.lands} · net ${formatMoney(slip.netPence)}`,
             amount: formatMoney(slip.grossPence || slip.salaryPence),
           });
         }).join("") : emptyLines("Add a month when you have a slip — or a forecast row you do not treat as fact.", "add-payslip", "Add a payslip")}
@@ -581,34 +595,26 @@ function aniScreen() {
   const hh = household();
   const personId = aniPersonId || hh.people[0]?.id;
   const year = aniTaxYear || currentUkTaxYear();
-  const person = personById(personId);
-  const result = aniProjection({
-    payslips: hh.payslips,
-    donations: hh.donations,
+  const result = aniFromHousehold(hh, {
     personId,
-    personName: person?.name,
     taxYear: year,
-    includeGiftAid: hh.includeGiftAidInAni,
     today: new Date(),
   });
   return shell({
     eyebrow: "Childcare cliff",
     title: "£100k ANI.",
-    lede: "Stay at or under £100,000 adjusted net income. YTD from confirmed payslips, then the remaining months at the last confirmed month’s run-rate.",
-    back: "more",
+    lede: "Stay at or under £100,000 adjusted net income. YTD and the projection come from payslips. Gift Aid from giving in this tax year is included automatically.",
+    back: "",
     extra: `
       <div class="ani-controls">
         <label>Person
           <select data-action="ani-person">${hh.people.map((item) => `<option value="${item.id}" ${item.id === personId ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select>
         </label>
         <label>Tax year
-          <select data-action="ani-year">${taxYearOptions().map((item) => `<option value="${item}" ${item === year ? "selected" : ""}>${item}</option>`).join("")}</select>
+          <select data-action="ani-year">${taxYearOptionsFor(year).map((item) => `<option value="${item}" ${item === year ? "selected" : ""}>${item}</option>`).join("")}</select>
         </label>
       </div>
-      <label class="check-row">
-        <input type="checkbox" data-action="toggle-gift-aid-ani" ${hh.includeGiftAidInAni ? "checked" : ""} />
-        <span>Add Gift Aid from the giving log. Leave this off to treat Gift Aid as £0.</span>
-      </label>
+      <p class="helper">Giving and payslips feed this helper. There is nothing to re-type.</p>
     `,
     body: `
       <div class="dash">
@@ -622,7 +628,7 @@ function aniScreen() {
           : result.overLimit
             ? `<p>Sacrifice another ${formatMoney(result.extraSacrificePence)} this tax year to stay at £100k.${result.remainingMonths ? ` That’s ${formatMoney(result.extraPerRemainingMonthPence)} in each of the ${result.remainingMonths} remaining months.` : ""}</p>`
             : `<p>On this projection you’re ${formatMoney(result.underByPence)} under the £100k cliff.</p>`}
-        <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Gift Aid add-back ${formatMoney(result.giftAidAddBackPence)}.</p>
+        <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Gift Aid from giving ${formatMoney(result.giftAidAddBackPence)}.</p>
       </section>
     `,
   });
@@ -636,8 +642,8 @@ function givingScreen() {
   return shell({
     eyebrow: "Giving",
     title: "Charity.",
-    lede: "Who, charity, date, amount, Gift Aid. Gross is 25% extra when Gift Aid is on. Tax year follows 6 April.",
-    back: "more",
+    lede: "Who, charity, date, amount, Gift Aid. Gross is 25% extra when Gift Aid is on. Tax year follows 6 April. Gift Aid in a tax year feeds the £100k helper.",
+    back: "",
     extra: thisYear.length ? `<div class="dash single"><div class="stat"><span>Gross ${year}</span><strong>${formatMoney(gross)}</strong></div></div>` : "",
     body: `
       <section class="block">
@@ -656,27 +662,25 @@ function givingScreen() {
 
 function moreScreen() {
   const links = [
-    ["annual", "Annual sinking fund", "Insurance, MOT, memberships, monthly reserve"],
+    ["home", "Cashflow", "This month’s leftover, bills, weeklies, cards"],
+    ["planned", "Planned", "One-offs by the month on the record"],
+    ["annual", "Annual", "Renewals. Total ÷ 12 is the cashflow reserve"],
     ["pots", "Pots", "Where the money is, plus pension names"],
-    ["payslips", "Payslips", "Tax year, gross, NI amount, net, landing month"],
-    ["ani", "£100k childcare helper", "Adjusted net income vs the cliff"],
+    ["payslips", "Payslips", "Net pay here is the income on cashflow"],
+    ["ani", "£100k childcare helper", "Payslips and Gift Aid, not a separate planner"],
     ["giving", "Giving", "Donations and Gift Aid"],
+    ["tabs", "Friend tabs", "Shared expenses and running balances"],
   ];
   return shell({
-    eyebrow: "More",
-    title: "More.",
-    lede: "",
+    eyebrow: "Account",
+    title: "Account.",
+    lede: "Every destination is in the bar below. People and sign out live here.",
     body: `
       <section class="nav-grid">
         ${links.map(([name, title, detail]) => `<a class="friend-card" href="#/${name}" data-action="go" data-screen="${name}">
           <span class="friend-main"><strong>${esc(title)}</strong><small>${esc(detail)}</small></span>
           <span class="chevron">›</span>
         </a>`).join("")}
-      </section>
-      <section class="block">
-        ${sectionHead("Spreadsheet", "", "")}
-        <p class="helper">One-time upload of your Numbers/Excel export. Friend tabs stay. Nothing from the file is committed to the public repo.</p>
-        <button class="secondary wide" type="button" data-action="import-workbook">Import spreadsheet</button>
       </section>
       <section class="block">
         ${sectionHead("People", "add-person", "Add")}
@@ -791,14 +795,12 @@ function modalMarkup() {
     delete: deleteForm,
     "import-local": importForm,
     person: personForm,
-    income: incomeForm,
     bill: billForm,
     envelope: envelopeForm,
     card: cardForm,
     sub: subForm,
     pending: pendingForm,
     oneoff: oneOffForm,
-    import: importWorkbookForm,
     annual: annualForm,
     pot: potForm,
     pension: pensionForm,
@@ -857,42 +859,6 @@ function deleteForm() {
     <div class="confirm-actions"><button class="secondary" data-action="close-modal">Keep it</button><button class="${modal.target === "reset-month" ? "primary" : "danger"}" data-action="delete-confirmed">${modal.target === "reset-month" ? "Reset ticks" : "Delete"}</button></div></div>`;
 }
 
-function importReportCopy(report) {
-  const lines = reportLines(report);
-  const landed = lines.landed.length ? lines.landed.map(([label, count]) => `${label}: ${count}`).join(" · ") : "Nothing landed.";
-  const skipped = lines.skipped
-    ? ` · Skipped ${lines.skipped}${lines.skippedWhy.length ? ` (${lines.skippedWhy.join(", ")})` : ""}`
-    : "";
-  return `${landed}${skipped}`;
-}
-
-function importWorkbookForm() {
-  const report = modal.report;
-  if (report) {
-    return `<div class="delete-confirm">${modalHead("Imported", "It’s in the gist.")}
-      <p>${esc(importReportCopy(report))}</p>
-      <button class="primary wide" type="button" data-action="close-modal">Done</button>
-    </div>`;
-  }
-  if (modal.pending) {
-    return `<div class="delete-confirm">${modalHead("Replace household?", "Friend tabs stay.")}
-      <p>This gist already has household lines. Replace them with the workbook, or keep what is there?</p>
-      <p class="helper">${esc(importReportCopy(modal.pending.report))}</p>
-      <div class="confirm-actions">
-        <button class="secondary" type="button" data-action="import-keep">Keep existing</button>
-        <button class="danger" type="button" data-action="import-replace">Replace household</button>
-      </div>
-    </div>`;
-  }
-  return `<form id="import-form">${modalHead("Spreadsheet", "Import household lines")}
-    <p>Upload the .xlsx export. Household lines are written to the same private gist. Friend tabs are not removed.</p>
-    ${householdHasData(household()) ? `<p class="helper">If this household already has lines, you will be asked before they are replaced.</p>` : ""}
-    <label>Workbook<input required type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>
-    <p class="form-error" id="form-error"></p>
-    <button class="primary wide" type="submit">Import</button>
-  </form>`;
-}
-
 function importForm() {
   return `<div class="delete-confirm">${modalHead("This browser", "Import the old local tab?")}
     <p>This browser still has friends and expenses from before Tab saved to a private gist. Import them once, then they leave this device.</p>
@@ -909,19 +875,6 @@ function personForm() {
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${person.id ? "Save name" : "Add person"}</button>
     ${person.id ? '<button class="danger-link" type="button" data-action="confirm-delete-person">Remove person</button>' : ""}
-  </form>`;
-}
-
-function incomeForm() {
-  const item = modal.item || {};
-  return `<form id="income-form">${modalHead(item.id ? "Income" : "New income", item.id ? "Edit income" : "Add income")}
-    <label>Whose<select name="personId" required>${household().people.map((person) => `<option value="${person.id}" ${person.id === (item.personId || household().people[0]?.id) ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select></label>
-    <label>Label<input required maxlength="80" name="label" value="${esc(item.label || "Take-home")}" placeholder="Take-home" /></label>
-    ${moneyLabel("Monthly take-home", "amount", item.amountPence)}
-    <p class="helper">Type the figure. A payslip that lands this month is shown on Home as a hint only.</p>
-    <p class="form-error" id="form-error"></p>
-    <button class="primary wide" type="submit">${item.id ? "Save income" : "Add income"}</button>
-    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-income">Delete income</button>' : ""}
   </form>`;
 }
 
@@ -942,6 +895,7 @@ function envelopeForm() {
   return `<form id="envelope-form">${modalHead(item.id ? "Weekly slot" : "New weekly slot", item.id ? "Edit weekly slot" : "Add a weekly slot")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Food shop, Amazon…" /></label>
     ${moneyLabel("Weekly amount", "amount", item.weeklyPence)}
+    <p class="helper">This slot is on every month. Ticks do not carry forward.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save slot" : "Add slot"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-envelope">Delete slot</button>' : ""}
@@ -1051,7 +1005,7 @@ function payslipForm() {
   const deductions = item.otherDeductions || [];
   return `<form id="payslip-form">${modalHead(item.id ? "Payslip" : "New payslip", item.id ? "Edit payslip" : "Add a payslip")}
     <label>Person<select name="personId" required>${household().people.map((person) => `<option value="${person.id}" ${person.id === (item.personId || household().people[0]?.id) ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select></label>
-    <label>Tax year<select name="taxYear">${taxYearOptions().map((year) => `<option value="${year}" ${year === (item.taxYear || currentUkTaxYear()) ? "selected" : ""}>${year}</option>`).join("")}</select></label>
+    <label>Tax year<select name="taxYear">${taxYearOptionsFor(item.taxYear).map((year) => `<option value="${year}" ${year === (item.taxYear || currentUkTaxYear()) ? "selected" : ""}>${year}</option>`).join("")}</select></label>
     <label>Pay period<input required type="month" name="periodMonth" value="${item.periodMonth || viewMonth}" /></label>
     <label>Month the money lands<input required type="month" name="moneyLandsMonth" value="${item.moneyLandsMonth || item.periodMonth || viewMonth}" /></label>
     ${moneyLabel("Salary", "salary", item.salaryPence)}
@@ -1064,8 +1018,11 @@ function payslipForm() {
     <label data-extra-field="bonus" class="${show.bonus ? "" : "hidden"}">Bonus<div class="money-input"><span>£</span><input inputmode="decimal" name="bonus" value="${moneyFieldValue(item.bonusPence)}" placeholder="0.00" autocomplete="off" /></div></label>
     <label data-extra-field="benefits" class="${show.benefits ? "" : "hidden"}">Benefits<div class="money-input"><span>£</span><input inputmode="decimal" name="benefits" value="${moneyFieldValue(item.benefitsPence)}" placeholder="0.00" autocomplete="off" /></div></label>
     <label data-extra-field="sacrifice" class="${show.sacrifice ? "" : "hidden"}">Salary-sacrifice pension<div class="money-input"><span>£</span><input inputmode="decimal" name="sacrifice" value="${moneyFieldValue(item.salarySacrificePensionPence)}" placeholder="0.00" autocomplete="off" /></div></label>
-    <div id="deduction-rows">${deductions.map((row) => deductionRowMarkup(row.id, row.label, row.amountPence)).join("")}</div>
-    <button type="button" class="text-button" data-action="add-deduction-row">Add a deduction type</button>
+    <div class="deduction-block">
+      <p class="helper">Add a deduction type when a new column appears on a slip — cycle scheme, student loan, and so on. Do not leave empty columns sitting here.</p>
+      <div id="deduction-rows">${deductions.map((row) => deductionRowMarkup(row.id, row.label, row.amountPence)).join("")}</div>
+      <button type="button" class="text-button" data-action="add-deduction-row">Add a deduction type</button>
+    </div>
     ${moneyLabel("Tax", "tax", item.taxPence)}
     ${moneyLabel("National Insurance", "ni", item.niPence)}
     ${moneyLabel("Net", "net", item.netPence)}
@@ -1217,8 +1174,6 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "add-person") openItem("person");
   if (action === "edit-person") openItem("person", "people", id);
-  if (action === "add-income") openItem("income");
-  if (action === "edit-income") openItem("income", "incomes", id);
   if (action === "add-bill") openItem("bill");
   if (action === "edit-bill") openItem("bill", "bills", id);
   if (action === "add-envelope") openItem("envelope");
@@ -1257,12 +1212,8 @@ document.addEventListener("click", async (event) => {
       kind: "delete",
       target: "reset-month",
       label: `${monthLabel(viewMonth)} ticks`,
-      copy: "Untick monthly bills, weekly slots, and card subs for this month. Amounts stay. You can tick them again as the month happens.",
+      copy: `Clears ticks on weeklies, bills, and card subs for ${monthLabel(viewMonth)}. The template lines stay.`,
     };
-    renderModal();
-  }
-  if (action === "import-workbook") {
-    modal = { kind: "import" };
     renderModal();
   }
   if (action === "tick-envelope") {
@@ -1293,7 +1244,6 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-delete-transaction") askDelete("transaction", modal.transaction.id, "this entry");
   if (action === "confirm-delete-friend") askDelete("friend", modal.friend.id, "friend and history");
   if (action === "confirm-delete-person") askDelete("person", modal.person.id, "this person", "Their income and payslip rows will be removed. Donations keep the typed name.");
-  if (action === "confirm-delete-income") askDelete("income", modal.item.id, "this income");
   if (action === "confirm-delete-bill") askDelete("bill", modal.item.id, "this bill");
   if (action === "confirm-delete-envelope") askDelete("envelope", modal.item.id, "this weekly slot");
   if (action === "confirm-delete-card") askDelete("card", modal.item.id, "this card");
@@ -1328,7 +1278,6 @@ document.addEventListener("click", async (event) => {
         hh.incomes = hh.incomes.filter((item) => item.personId !== targetModal.id);
         hh.payslips = hh.payslips.filter((item) => item.personId !== targetModal.id);
       }
-      if (targetModal.target === "income") hh.incomes = hh.incomes.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "bill") hh.bills = hh.bills.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "envelope") hh.envelopes = hh.envelopes.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "card") {
@@ -1359,15 +1308,6 @@ document.addEventListener("click", async (event) => {
     if (saved) { clearLocalStore(); closeModal(); showToast("Imported from this browser"); }
     else showToast(sync.message || "Could not import");
   }
-  if (action === "import-keep") {
-    closeModal();
-    showToast("Kept the existing household");
-  }
-  if (action === "import-replace") {
-    const pending = modal.pending;
-    if (!pending) return;
-    await commitWorkbookImport(pending.household, pending.report);
-  }
 });
 
 document.addEventListener("change", async (event) => {
@@ -1375,12 +1315,6 @@ document.addEventListener("change", async (event) => {
   if (action === "payslip-year") { payslipTaxYear = event.target.value; render(); }
   if (action === "ani-person") { aniPersonId = event.target.value; render(); }
   if (action === "ani-year") { aniTaxYear = event.target.value; render(); }
-  if (action === "toggle-gift-aid-ani") {
-    const checked = event.target.checked;
-    const saved = await withStoreUpdate(() => { household().includeGiftAidInAni = checked; });
-    if (!saved) showToast(sync.message || "Could not save");
-    render();
-  }
 });
 
 document.addEventListener("submit", (event) => {
@@ -1389,13 +1323,11 @@ document.addEventListener("submit", (event) => {
     "transaction-form": saveTransaction,
     "login-form": signIn,
     "person-form": savePerson,
-    "income-form": saveIncome,
     "bill-form": saveBill,
     "envelope-form": saveEnvelope,
     "card-form": saveCard,
     "sub-form": saveSub,
     "pending-form": savePending,
-    "import-form": importWorkbook,
     "oneoff-form": saveOneOff,
     "annual-form": saveAnnual,
     "pot-form": savePot,
@@ -1563,19 +1495,6 @@ async function savePerson(event) {
     toastAdd: "Person added",
     toastEdit: "Name updated",
     build: (data) => ({ name: requireName(data.get("name"), "name") }),
-  });
-}
-
-async function saveIncome(event) {
-  return saveNamedMoney(event, {
-    list: "incomes",
-    toastAdd: "Income added",
-    toastEdit: "Income updated",
-    build: (data) => ({
-      personId: data.get("personId"),
-      label: requireName(data.get("label"), "label"),
-      amountPence: requireMoney(data.get("amount"), "amount"),
-    }),
   });
 }
 
@@ -1769,46 +1688,6 @@ async function savePayslip(event) {
   }
   closeModal();
   showToast(editing ? "Payslip updated" : "Payslip added");
-}
-
-async function commitWorkbookImport(imported, report) {
-  const saved = await withStoreUpdate(() => {
-    store = applyHouseholdImport(store, imported, { overwrite: true });
-  });
-  if (!saved) {
-    const message = sync.message || "Could not save the import.";
-    showFormError(message);
-    showToast(message);
-    return false;
-  }
-  modal = { kind: "import", report };
-  renderModal();
-  showToast("Imported");
-  return true;
-}
-
-async function importWorkbook(event) {
-  event.preventDefault();
-  const file = event.target.elements.file?.files?.[0];
-  if (!file) return showFormError("Choose the .xlsx export.");
-  setBusy(event.target, true);
-  try {
-    const workbook = await readXlsx(await file.arrayBuffer());
-    const { household: imported, report } = householdFromWorkbook(workbook);
-    if (!importHasData(report)) {
-      throw new Error("Nothing from that workbook mapped. Check it is the .xlsx export with Main, Payslips, Annually, Where’s the money, and Charity.");
-    }
-    if (householdHasData(household())) {
-      modal = { kind: "import", pending: { household: imported, report } };
-      renderModal();
-      return;
-    }
-    const saved = await commitWorkbookImport(imported, report);
-    if (!saved) setBusy(event.target, false);
-  } catch (error) {
-    showFormError(error.message || "Could not read that workbook.");
-    setBusy(event.target, false);
-  }
 }
 
 async function saveDonation(event) {
