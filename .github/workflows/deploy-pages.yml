@@ -1,0 +1,54 @@
+# Publish the static Tab app to https://hoffbrandm.github.io/tab/
+#
+# If Settings → Pages is still "Deploy from a branch" (build_type: legacy),
+# switch Source to GitHub Actions once. After that, push to main or
+# Actions → Deploy GitHub Pages → Run workflow publishes current main.
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Stage public static files
+        run: |
+          mkdir -p _site
+          cp index.html styles.css favicon.svg manifest.webmanifest _site/
+          cp app.js calculations.js household.js store.js session.js gist-store.js _site/
+          test -f _site/index.html
+          test -f _site/app.js
+          test ! -e _site/test
+          test ! -e _site/server.mjs
+          test ! -e _site/node_modules
+          test ! -e _site/.git
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
