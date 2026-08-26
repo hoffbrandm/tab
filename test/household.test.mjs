@@ -12,6 +12,7 @@ import {
   currentUkTaxYear,
   datesOfWeekdayInMonth,
   defaultCategoriesForNewPayslip,
+  DEFAULT_PAYSLIP_CATEGORIES,
   effectiveDueDate,
   emptyHousehold,
   extraSacrificeRatio,
@@ -661,6 +662,22 @@ test("weekly ticks and purchased one-offs do not move Out", () => {
   const afterBuy = cashflowForMonth(hh, "2026-08", today);
   assert.equal(afterBuy.outPence, before.outPence);
   assert.equal(afterBuy.oneOffsPence, 40000);
+});
+
+test("the settings category list keeps the sheet column set after a slip is saved", () => {
+  const hh = {
+    ...emptyHousehold(),
+    payslips: [{
+      taxPence: 4000,
+      niPence: 2000,
+      otherDeductions: [{ id: "smp", label: "SMP", amountPence: 5000, inNet: false }],
+    }],
+  };
+  rememberPayslipCategories(hh, []);
+  const labels = hh.payslipCategories.map((item) => item.label);
+  assert.ok(DEFAULT_PAYSLIP_CATEGORIES.every((item) => labels.includes(item.label)));
+  assert.ok(hh.payslipCategories.some((item) => item.kind === "parental" && item.label === "SMP"));
+  assert.ok(hh.payslipCategories.some((item) => item.label === "Jury service"));
 });
 
 test("a new payslip defaults to the previous month’s used categories", () => {

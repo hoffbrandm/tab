@@ -732,13 +732,22 @@ export function payslipCategoriesOf(household) {
 }
 
 export function masterPayslipCategories(household) {
-  const listed = payslipCategoriesOf(household);
-  return listed.length ? listed : DEFAULT_PAYSLIP_CATEGORIES.map((item) => ({ ...item }));
+  return payslipCategoriesOf({
+    payslipCategories: [
+      ...DEFAULT_PAYSLIP_CATEGORIES,
+      ...(household?.payslipCategories || []),
+    ],
+    payslips: household?.payslips || [],
+  });
 }
 
 export function rememberPayslipCategories(household, extras = []) {
   const next = payslipCategoriesOf({
-    payslipCategories: [...(household.payslipCategories || []), ...extras],
+    payslipCategories: [
+      ...DEFAULT_PAYSLIP_CATEGORIES,
+      ...(household.payslipCategories || []),
+      ...extras,
+    ],
     payslips: household.payslips || [],
   });
   household.payslipCategories = next;
