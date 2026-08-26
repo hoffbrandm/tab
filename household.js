@@ -6,6 +6,17 @@ export const DEFAULT_PEOPLE = [
   { id: "person-partner", name: "Partner" },
 ];
 export const PENSION_STATUSES = ["active", "deferred", "drawing", "other"];
+export const WEEKLY_CADENCES = ["once", "times", "weekday"];
+export const WEEKDAYS = [
+  { value: 1, label: "Monday" },
+  { value: 2, label: "Tuesday" },
+  { value: 3, label: "Wednesday" },
+  { value: 4, label: "Thursday" },
+  { value: 5, label: "Friday" },
+  { value: 6, label: "Saturday" },
+  { value: 7, label: "Sunday" },
+];
+export const MONTHLY_PAID_FROM = ["card", "cash"];
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH = /^\d{4}-\d{2}$/;
@@ -17,6 +28,9 @@ export function emptyHousehold() {
     incomes: [],
     bills: [],
     envelopes: [],
+    monthlies: [],
+    weeklyRules: [],
+    weeklyExtras: [],
     cards: [],
     cardSubs: [],
     pendings: [],
@@ -26,7 +40,7 @@ export function emptyHousehold() {
     pensions: [],
     payslips: [],
     donations: [],
-    includeGiftAidInAni: false,
+    includeGiftAidInAni: true,
   };
 }
 
@@ -36,6 +50,9 @@ export function householdHasData(household) {
     "incomes",
     "bills",
     "envelopes",
+    "monthlies",
+    "weeklyRules",
+    "weeklyExtras",
     "cards",
     "cardSubs",
     "pendings",
@@ -133,6 +150,232 @@ export function taxYearOptions(today = new Date(), years = 6) {
   return Array.from({ length: years }, (_, index) => taxYearLabel(currentStart - index));
 }
 
+export function taxYearOptionsFor(selected, today = new Date(), years = 6) {
+  const options = taxYearOptions(today, years);
+  if (selected && isTaxYearLabel(selected) && !options.includes(selected)) options.push(selected);
+  return options.sort().reverse();
+}
+
+export function isCurrentMonth(month, today = new Date()) {
+  return month === monthKey(today);
+}
+
+export function viewPeriodLabel(month) {
+  return monthLabel(month);
+}
+
+export function currentPeriodHint(month, today = new Date()) {
+  return isCurrentMonth(month, today) ? "This month" : monthLabel(month);
+}
+
+export function payslipLandsMonth(payslip) {
+  return payslip?.moneyLandsMonth || payslip?.periodMonth || "";
+}
+
+export function payslipRecordLabels(payslip) {
+  return {
+    period: monthLabel(payslip?.periodMonth),
+    lands: monthLabel(payslipLandsMonth(payslip)),
+    taxYear: String(payslip?.taxYear || ""),
+  };
+}
+
+export function payslipsForCashflowMonth(payslips, month) {
+  return (payslips || []).filter((slip) => payslipLandsMonth(slip) === month);
+}
+
+export function incomeLinesFromPayslips(household, month) {
+  const people = household?.people || [];
+  return payslipsForCashflowMonth(household?.payslips, month).map((slip) => ({
+    id: slip.id,
+    personId: slip.personId,
+    personName: people.find((person) => person.id === slip.personId)?.name || "",
+    amountPence: Number.isInteger(slip.netPence) ? slip.netPence : 0,
+    forecast: Boolean(slip.forecast),
+    periodMonth: slip.periodMonth,
+    moneyLandsMonth: payslipLandsMonth(slip),
+    taxYear: slip.taxYear,
+  }));
+}
+
+export function incomeFromPayslipsPence(household, month) {
+  return sumPence(incomeLinesFromPayslips(household, month), (item) => item.amountPence);
+}
+
+export function weekliesForMonth(household, month) {
+  if ((household?.weeklyRules || []).length || (household?.weeklyExtras || []).length) {
+    return weeklySlotsForMonth(household, month);
+  }
+  return (household?.envelopes || []).map((item) => {
+    const happenedDates = happenedInMonth(item, month);
+    return {
+      id: item.id,
+      name: item.name,
+      weeklyPence: item.weeklyPence,
+      amountPence: item.weeklyPence,
+      happenedDates,
+      ticked: happenedDates.length > 0,
+    };
+  });
+}
+
+export function weekdayLabel(weekday) {
+  return WEEKDAYS.find((item) => item.value === Number(weekday))?.label || "";
+}
+
+export function jsWeekdayToIso(jsDay) {
+  return jsDay === 0 ? 7 : jsDay;
+}
+
+export function datesOfWeekdayInMonth(month, weekday) {
+  const parsed = parseMonthKey(month);
+  if (!parsed) return [];
+  const wanted = Number(weekday);
+  if (!Number.isInteger(wanted) || wanted < 1 || wanted > 7) return [];
+  const dates = [];
+  const days = daysInMonth(parsed.year, parsed.month);
+  for (let day = 1; day <= days; day += 1) {
+    const date = new Date(parsed.year, parsed.month - 1, day);
+    if (jsWeekdayToIso(date.getDay()) === wanted) {
+      dates.push(`${month}-${String(day).padStart(2, "0")}`);
+    }
+  }
+  return dates;
+}
+
+export function weeklySlotKeysForRule(rule, month) {
+  if (!rule) return [];
+  if (rule.cadence === "weekday") return datesOfWeekdayInMonth(month, rule.weekday);
+  if (rule.cadence === "times") {
+    const times = Number(rule.timesPerMonth);
+    const count = Number.isInteger(times) && times > 0 ? times : 1;
+    return Array.from({ length: count }, (_, index) => String(index + 1));
+  }
+  return ["1"];
+}
+
+export function tickedKeysFromHappenedDates(dates) {
+  const byMonth = new Map();
+  for (const date of dates || []) {
+    const month = String(date).slice(0, 7);
+    if (!MONTH.test(month)) continue;
+    if (!byMonth.has(month)) byMonth.set(month, []);
+    byMonth.get(month).push(date);
+  }
+  const keys = [];
+  for (const [month, items] of byMonth) {
+    items.sort().forEach((_, index) => keys.push(`${month}:${index + 1}`));
+  }
+  return keys;
+}
+
+export function weeklyRulesOf(household) {
+  if (Array.isArray(household?.weeklyRules) && household.weeklyRules.length) {
+    return household.weeklyRules;
+  }
+  return (household?.envelopes || []).map((item) => ({
+    id: item.id,
+    name: item.name,
+    amountPence: item.weeklyPence,
+    cadence: "times",
+    timesPerMonth: 4,
+    weekday: 2,
+    tickedKeys: tickedKeysFromHappenedDates(item.happenedDates),
+  }));
+}
+
+export function monthliesOf(household) {
+  if (Array.isArray(household?.monthlies) && household.monthlies.length) {
+    return household.monthlies;
+  }
+  return [
+    ...(household?.bills || []).map((item) => ({ ...item, paidFrom: "cash" })),
+    ...(household?.cardSubs || []).map((item) => ({ ...item, paidFrom: "card" })),
+  ];
+}
+
+export function weeklySlotsForMonth(household, month) {
+  const slots = [];
+  for (const rule of weeklyRulesOf(household)) {
+    for (const key of weeklySlotKeysForRule(rule, month)) {
+      slots.push({
+        id: `${rule.id}:${key}`,
+        ruleId: rule.id,
+        extraId: "",
+        name: rule.name,
+        amountPence: rule.amountPence,
+        weeklyPence: rule.amountPence,
+        month,
+        slotKey: key,
+        date: DATE.test(key) ? key : "",
+        ticked: (rule.tickedKeys || []).includes(`${month}:${key}`),
+        adHoc: false,
+      });
+    }
+  }
+  for (const extra of (household?.weeklyExtras || []).filter((item) => item.month === month)) {
+    slots.push({
+      id: extra.id,
+      ruleId: "",
+      extraId: extra.id,
+      name: extra.name,
+      amountPence: extra.amountPence,
+      weeklyPence: extra.amountPence,
+      month,
+      slotKey: extra.id,
+      date: "",
+      ticked: Boolean(extra.happened),
+      adHoc: true,
+    });
+  }
+  return slots;
+}
+
+export function weeklyCadenceLabel(rule) {
+  if (rule?.cadence === "weekday") return `Every ${weekdayLabel(rule.weekday) || "weekday"}`;
+  if (rule?.cadence === "times") {
+    const times = Number(rule.timesPerMonth) || 1;
+    return times === 1 ? "Once a month" : `${times} times a month`;
+  }
+  return "Once a month";
+}
+
+export function monthlyIsAllowed(item, month, dayOfMonth) {
+  if (paidInMonth(item, month)) return true;
+  return Number(item?.dueDay) > 0 && Number(item.dueDay) <= dayOfMonth;
+}
+
+export function toggleWeeklySlotTick(household, slotId, month) {
+  const extras = household.weeklyExtras || [];
+  const extra = extras.find((item) => item.id === slotId);
+  if (extra && extra.month === month) {
+    extra.happened = !extra.happened;
+    return household;
+  }
+  const split = String(slotId).indexOf(":");
+  if (split < 0) return household;
+  const ruleId = slotId.slice(0, split);
+  const key = slotId.slice(split + 1);
+  const rule = (household.weeklyRules || weeklyRulesOf(household)).find((item) => item.id === ruleId);
+  if (!rule) return household;
+  if (!household.weeklyRules?.length && household.envelopes) {
+    const envelope = household.envelopes.find((item) => item.id === ruleId);
+    if (envelope && DATE.test(key)) {
+      const dates = new Set(envelope.happenedDates || []);
+      if (dates.has(key)) dates.delete(key);
+      else dates.add(key);
+      envelope.happenedDates = [...dates].sort();
+      return household;
+    }
+  }
+  const stamp = `${month}:${key}`;
+  const ticks = new Set(rule.tickedKeys || []);
+  if (ticks.has(stamp)) ticks.delete(stamp);
+  else ticks.add(stamp);
+  rule.tickedKeys = [...ticks].sort();
+  return household;
+}
+
 export function giftAidGrossPence(amountPence, giftAid) {
   if (!Number.isInteger(amountPence) || amountPence < 0) return 0;
   if (!giftAid) return amountPence;
@@ -180,41 +423,49 @@ export function proRateDay(viewMonth, today = new Date()) {
 
 export function cashflowForMonth(household, month, today = new Date()) {
   const people = household?.people || [];
-  const incomes = household?.incomes || [];
-  const bills = household?.bills || [];
-  const envelopes = household?.envelopes || [];
+  const incomeLines = incomeLinesFromPayslips(household, month);
+  const monthlies = monthliesOf(household);
+  const cashMonthlies = monthlies.filter((item) => item.paidFrom === "cash");
+  const cardMonthlies = monthlies.filter((item) => item.paidFrom !== "cash");
+  const weeklySlots = weeklySlotsForMonth(household, month);
   const cards = household?.cards || [];
-  const cardSubs = household?.cardSubs || [];
   const oneOffs = (household?.oneOffs || []).filter((item) => item.month === month);
   const annualBills = household?.annualBills || [];
   const days = daysInMonthKey(month);
   const dayOfMonth = proRateDay(month, today);
 
-  const incomePence = sumPence(incomes, (item) => item.amountPence);
-  const billsPence = sumPence(bills, (item) => item.amountPence);
+  const incomePence = incomeFromPayslipsPence(household, month);
+  const billsPence = sumPence(cashMonthlies, (item) => item.amountPence);
   const annualReserve = annualReservePence(annualBills);
   const oneOffsPence = sumPence(oneOffs, (item) => item.estimatePence);
-  const envelopesMonthlyPence = sumPence(envelopes, (item) => envelopeMonthlyPence(item.weeklyPence, month));
+  const envelopesMonthlyPence = sumPence(weeklySlots, (item) => item.amountPence);
   const committedOutPence = billsPence + annualReserve + oneOffsPence;
   const potPence = incomePence - committedOutPence;
   const remainingAfterPlanPence = potPence - envelopesMonthlyPence;
-  const allowedSoFarPence = days && dayOfMonth ? Math.round((potPence / days) * dayOfMonth) : 0;
-  const allowedSubs = cardSubs.filter((sub) => cardSubIsAllowed(sub, month, dayOfMonth));
-  const subsAllowedPence = sumPence(allowedSubs, (item) => item.amountPence);
-  const allowedWithSubsPence = allowedSoFarPence + subsAllowedPence;
+  const allowedMonthlies = cardMonthlies.filter((item) => monthlyIsAllowed(item, month, dayOfMonth));
+  const allowedPence = sumPence(allowedMonthlies, (item) => item.amountPence);
+  const allowedSoFarPence = allowedPence;
+  const subsAllowedPence = allowedPence;
+  const allowedWithSubsPence = allowedPence;
   const cardBalancesPence = sumPence(cards, (item) => item.balancePence);
   const pendingPence = sumPence(cards, (item) => item.pendingPence || 0)
     + sumPence(household?.pendings || [], (item) => item.amountPence);
   const cardSidePence = cardBalancesPence + pendingPence;
-  const overUnderPence = allowedWithSubsPence - cardSidePence;
+  const overUnderPence = allowedPence - cardSidePence;
 
   return {
     month,
     daysInMonth: days,
     dayOfMonth,
     people,
+    incomeLines,
     incomePence,
     billsPence,
+    monthlies,
+    cashMonthlies,
+    cardMonthlies,
+    allowedMonthlies,
+    weeklySlots,
     annualReservePence: annualReserve,
     oneOffsPence,
     oneOffs,
@@ -222,6 +473,7 @@ export function cashflowForMonth(household, month, today = new Date()) {
     committedOutPence,
     potPence,
     remainingAfterPlanPence,
+    allowedPence,
     allowedSoFarPence,
     subsAllowedPence,
     allowedWithSubsPence,
@@ -233,13 +485,14 @@ export function cashflowForMonth(household, month, today = new Date()) {
 }
 
 export function spendVerdict(overUnderPence, formatMoney) {
-  if (overUnderPence === 0) return "Cards match the allowed-so-far.";
+  if (overUnderPence === 0) return "Cards match the allowed expecteds.";
   if (overUnderPence > 0) return `${formatMoney(overUnderPence)} under — room on the cards.`;
-  return `${formatMoney(-overUnderPence)} over the allowed-so-far.`;
+  return `${formatMoney(-overUnderPence)} over the allowed expecteds.`;
 }
 
-export function savingLine(flow) {
-  if (flow.potPence < 0) return "This month does not balance yet.";
+export function savingLine(flow, today = new Date()) {
+  const when = isCurrentMonth(flow.month, today) ? "This month" : monthLabel(flow.month);
+  if (flow.potPence < 0) return `${when} does not balance yet.`;
   if (flow.overUnderPence >= 0) return "On track to save.";
   return "Spending ahead of the pot.";
 }
@@ -252,8 +505,17 @@ export function resetMonthTicks(household, month) {
   for (const sub of next.cardSubs || []) {
     sub.paidMonths = (sub.paidMonths || []).filter((item) => item !== month);
   }
+  for (const item of next.monthlies || []) {
+    item.paidMonths = (item.paidMonths || []).filter((value) => value !== month);
+  }
   for (const envelope of next.envelopes || []) {
     envelope.happenedDates = (envelope.happenedDates || []).filter((date) => !String(date).startsWith(`${month}-`));
+  }
+  for (const rule of next.weeklyRules || []) {
+    rule.tickedKeys = (rule.tickedKeys || []).filter((key) => !String(key).startsWith(`${month}:`));
+  }
+  for (const extra of next.weeklyExtras || []) {
+    if (extra.month === month) extra.happened = false;
   }
   return next;
 }
@@ -273,10 +535,11 @@ export function payslipAniPence(payslip) {
 }
 
 export function giftAidForTaxYear(donations, taxYear, { who } = {}) {
+  const wanted = String(who || "").trim().toLowerCase();
   return sumPence(
     (donations || []).filter((donation) => {
       if (ukTaxYearFromDate(donation.date) !== taxYear || !donation.giftAid) return false;
-      if (who && donation.who !== who) return false;
+      if (wanted && String(donation.who || "").trim().toLowerCase() !== wanted) return false;
       return true;
     }),
     (donation) => giftAidGrossPence(donation.amountPence, true) - donation.amountPence,
@@ -289,7 +552,7 @@ export function aniProjection({
   personId,
   personName,
   taxYear,
-  includeGiftAid = false,
+  includeGiftAid = true,
   today = new Date(),
 } = {}) {
   const slips = (payslips || [])
@@ -326,6 +589,19 @@ export function aniProjection({
     underByPence: Math.max(0, ANI_LIMIT_PENCE - projectedPence),
     overLimit: projectedPence > ANI_LIMIT_PENCE,
   };
+}
+
+export function aniFromHousehold(household, { personId, taxYear, today = new Date() } = {}) {
+  const person = (household?.people || []).find((item) => item.id === personId);
+  return aniProjection({
+    payslips: household?.payslips || [],
+    donations: household?.donations || [],
+    personId,
+    personName: person?.name,
+    taxYear,
+    includeGiftAid: true,
+    today,
+  });
 }
 
 export function isMonthKey(value) {

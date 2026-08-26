@@ -5,6 +5,7 @@ import {
   isMonthKey,
   isTaxYearLabel,
   PENSION_STATUSES,
+  tickedKeysFromHappenedDates,
 } from "./household.js";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -143,6 +144,31 @@ function parseHousehold(value) {
   const cards = list(value.cards).map(parseCard);
   const cardIds = new Set(cards.map((card) => card.id));
   const cardSubs = list(value.cardSubs).map((item) => parseCardSub(item, cardIds));
+  const monthlies = list(value.monthlies).length
+    ? list(value.monthlies).map(parseMonthly)
+    : [
+      ...bills.map((item) => ({ ...item, id: `cash-${item.id}`, paidFrom: "cash" })),
+      ...cardSubs.map((item) => ({
+        id: `card-${item.id}`,
+        name: item.name,
+        amountPence: item.amountPence,
+        dueDay: item.dueDay,
+        paidMonths: item.paidMonths,
+        paidFrom: "card",
+      })),
+    ];
+  const weeklyRules = list(value.weeklyRules).length
+    ? list(value.weeklyRules).map(parseWeeklyRule)
+    : envelopes.map((item) => ({
+      id: item.id,
+      name: item.name,
+      amountPence: item.weeklyPence,
+      cadence: "times",
+      timesPerMonth: 4,
+      weekday: 2,
+      tickedKeys: tickedKeysFromHappenedDates(item.happenedDates),
+    }));
+  const weeklyExtras = list(value.weeklyExtras).map(parseWeeklyExtra);
   const pendings = list(value.pendings).map(parsePending);
   const oneOffs = list(value.oneOffs).map(parseOneOff);
   const annualBills = list(value.annualBills).map(parseAnnualBill);
@@ -154,6 +180,9 @@ function parseHousehold(value) {
   uniqueIds(incomes, "Income");
   uniqueIds(bills, "Bill");
   uniqueIds(envelopes, "Envelope");
+  uniqueIds(monthlies, "Monthly");
+  uniqueIds(weeklyRules, "Weekly rule");
+  uniqueIds(weeklyExtras, "Weekly extra");
   uniqueIds(cards, "Card");
   uniqueIds(cardSubs, "Card subscription");
   uniqueIds(pendings, "Pending");
@@ -169,6 +198,9 @@ function parseHousehold(value) {
     incomes,
     bills,
     envelopes,
+    monthlies,
+    weeklyRules,
+    weeklyExtras,
     cards,
     cardSubs,
     pendings,
@@ -261,6 +293,70 @@ function parsePending(item) {
     name: requiredName(item.name, "Pending"),
     amountPence: moneyPence(item.amountPence, "Pending"),
   };
+}
+
+function parseMonthly(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new StoreError("Each monthly expected must be an object.");
+  }
+  const paidFrom = item.paidFrom === "cash" ? "cash" : "card";
+  return {
+    id: requiredId(item.id, "Monthly"),
+    name: requiredName(item.name, "Monthly"),
+    amountPence: moneyPence(item.amountPence, "Monthly"),
+    dueDay: dueDay(item.dueDay, "Monthly"),
+    paidMonths: monthList(item.paidMonths, "Monthly"),
+    paidFrom,
+  };
+}
+
+function parseWeeklyRule(rule) {
+  if (!rule || typeof rule !== "object" || Array.isArray(rule)) {
+    throw new StoreError("Each weekly rule must be an object.");
+  }
+  const cadence = ["once", "times", "weekday"].includes(rule.cadence) ? rule.cadence : "once";
+  const parsed = {
+    id: requiredId(rule.id, "Weekly rule"),
+    name: requiredName(rule.name, "Weekly rule"),
+    amountPence: moneyPence(rule.amountPence, "Weekly rule"),
+    cadence,
+    tickedKeys: tickKeyList(rule.tickedKeys, "Weekly rule"),
+  };
+  if (cadence === "times") {
+    const times = Number(rule.timesPerMonth == null ? 2 : rule.timesPerMonth);
+    if (!Number.isInteger(times) || times < 1 || times > 12) {
+      throw new StoreError("Times a month must be 1 to 12.");
+    }
+    parsed.timesPerMonth = times;
+  }
+  if (cadence === "weekday") {
+    const weekday = Number(rule.weekday);
+    if (!Number.isInteger(weekday) || weekday < 1 || weekday > 7) {
+      throw new StoreError("Weekday must be Monday (1) to Sunday (7).");
+    }
+    parsed.weekday = weekday;
+  }
+  return parsed;
+}
+
+function parseWeeklyExtra(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new StoreError("Each extra weekly must be an object.");
+  }
+  if (!isMonthKey(item.month)) throw new StoreError("Extra weekly month must be YYYY-MM.");
+  return {
+    id: requiredId(item.id, "Weekly extra"),
+    name: requiredName(item.name, "Weekly extra"),
+    amountPence: moneyPence(item.amountPence, "Weekly extra"),
+    month: item.month,
+    happened: Boolean(item.happened),
+  };
+}
+
+function tickKeyList(value, label) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new StoreError(`${label} ticks must be an array.`);
+  return [...new Set(value.map(String))].filter(Boolean).sort();
 }
 
 function parseCardSub(sub, cardIds) {
