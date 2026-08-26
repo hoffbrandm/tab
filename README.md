@@ -68,7 +68,7 @@ An older gist with only `friends` and `transactions` still loads. The household 
 
 ## Product
 
-- **Home cashflow** — recurring take-home for two people, cash bills with a due day and paid-this-period tick, weekly envelopes, card subscriptions (allowed once due or ticked), card balances, this month’s planned one-offs, and the annual reserve. Dashboard: in, out, remaining, daily pot pro-rate, allowed-so-far versus cards, over/underspend in plain English.
+- **Home cashflow** — typed take-home, monthly bills and weekly slots you can add and tick, card balances plus pending amounts, card subscriptions, this month’s planned one-offs, and the annual reserve. In / out / left, then one line for under or over and whether you are saving. **Reset this month’s ticks** clears paid/happened marks for the month on screen.
 - **Planned** — item, month, estimate, purchased. Current month rows appear on Home by a plain filter.
 - **Annual** — yearly bills. Total ÷ 12 is the monthly reserve on cashflow.
 - **Pots** — named pots with a dated snapshot. Optional pension *names and status* only.

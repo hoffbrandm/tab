@@ -6,6 +6,7 @@ import {
   ANI_LIMIT_PENCE,
   cashflowForMonth,
   currentUkTaxYear,
+  householdHasData,
   donationGrossPence,
   emptyHousehold,
   envelopeMonthlyPence,
@@ -16,13 +17,17 @@ import {
   ordinalDay,
   paidInMonth,
   payslipIsConfirmed,
+  resetMonthTicks,
+  savingLine,
   PENSION_STATUSES,
   spendVerdict,
   taxYearOptions,
   ukTaxYearFromDate,
 } from "./household.js";
+import { applyHouseholdImport, householdFromWorkbook, reportLines } from "./workbook-import.js";
 import { createSession } from "./session.js";
 import { emptyStore, parseStore } from "./store.js";
+import { readXlsx } from "./xlsx.js";
 
 const LOCAL_KEY = "tab.personal.v1";
 const SCREENS = ["home", "planned", "annual", "pots", "payslips", "ani", "giving", "more", "tabs"];
@@ -347,7 +352,7 @@ function cashflowScreen() {
   return shell({
     eyebrow: "This month",
     title: "Cashflow.",
-    lede: "Add the variable lines. Tick what has happened. The totals follow.",
+    lede: "Add a line. Tick it when it happens.",
     month: true,
     extra: `<div class="dash">
         <div class="stat"><span>In</span><strong>${formatMoney(flow.incomePence)}</strong></div>
@@ -356,10 +361,9 @@ function cashflowScreen() {
       </div>
       <section class="verdict ${verdictClass}">
         <p>${esc(verdict)}</p>
-        <p class="helper">Allowed so far ${formatMoney(flow.allowedWithSubsPence)} (daily pot ${formatMoney(flow.allowedSoFarPence)} + card subs ${formatMoney(flow.subsAllowedPence)}). Cards stand at ${formatMoney(flow.cardBalancesPence)}.</p>
-        <p class="helper">Daily pro-rate: leftover pot ${formatMoney(flow.potPence)} ÷ ${flow.daysInMonth} days × day ${flow.dayOfMonth || "0"}.</p>
-        ${flow.envelopesMonthlyPence ? `<p class="helper">Weekly envelopes this month: ${formatMoney(flow.envelopesMonthlyPence)}. After those, ${formatMoney(flow.remainingAfterPlanPence)}.</p>` : ""}
-      </section>`,
+        <p class="helper">${esc(savingLine(flow))} Cards ${formatMoney(flow.cardBalancesPence)}${flow.pendingPence ? ` + pending ${formatMoney(flow.pendingPence)}` : ""} vs allowed so far ${formatMoney(flow.allowedWithSubsPence)}.</p>
+      </section>
+      <button class="secondary wide" type="button" data-action="reset-month">Reset ${esc(monthLabel(viewMonth))} ticks</button>`,
     body: `
       <section class="block">
         ${sectionHead("Income", "add-income", "Add")}
@@ -377,7 +381,7 @@ function cashflowScreen() {
         }).join("") : emptyLines("Typed monthly take-home for each of you. Not pulled from a bank.", "add-income", "Add income")}
       </section>
       <section class="block">
-        ${sectionHead("Cash bills", "add-bill", "Add")}
+        ${sectionHead("Monthly", "add-bill", "Add")}
         ${hh.bills.length ? hh.bills.map((item) => lineRow({
           edit: "edit-bill",
           id: item.id,
@@ -387,7 +391,7 @@ function cashflowScreen() {
           tickAction: "toggle-bill",
           ticked: paidInMonth(item, viewMonth),
           tickLabel: paidInMonth(item, viewMonth) ? "Paid this period" : "Not paid this period",
-        })).join("") : emptyLines("Mortgage, council tax, energy, phones — amount, due day, tick when paid.", "add-bill", "Add a bill")}
+        })).join("") : emptyLines("Mortgage, council tax, energy — amount, due day, tick when paid.", "add-bill", "Add a monthly")}
       </section>
       <section class="block">
         ${sectionHead("Weekly", "add-envelope", "Add")}
@@ -428,9 +432,19 @@ function cashflowScreen() {
           edit: "edit-card",
           id: item.id,
           title: item.name,
-          detail: item.updatedOn ? `Updated ${dateLabel(item.updatedOn)}` : "Update today’s figure",
+          detail: `${item.pendingPence ? `Pending ${formatMoney(item.pendingPence)} · ` : ""}${item.updatedOn ? `Updated ${dateLabel(item.updatedOn)}` : "Update today’s figure"}`,
           amount: formatMoney(item.balancePence),
-        })).join("") : emptyLines("Two cards is enough. Add more if you need them.", "add-card", "Add a card")}
+        })).join("") : emptyLines("Balance and any pending amount.", "add-card", "Add a card")}
+      </section>
+      <section class="block">
+        ${sectionHead("Pending", "add-pending", "Add")}
+        ${hh.pendings.length ? hh.pendings.map((item) => lineRow({
+          edit: "edit-pending",
+          id: item.id,
+          title: item.name,
+          detail: "Counts with the cards",
+          amount: formatMoney(item.amountPence),
+        })).join("") : emptyLines("Holds and pending card amounts.", "add-pending", "Add pending")}
       </section>
       <section class="block">
         ${sectionHead("This month’s one-offs", "add-oneoff", "Add")}
@@ -612,7 +626,7 @@ function aniScreen() {
       </div>
       <label class="check-row">
         <input type="checkbox" data-action="toggle-gift-aid-ani" ${hh.includeGiftAidInAni ? "checked" : ""} />
-        <span>Add Gift Aid from the giving log. Your sheet currently types this as 0 — leave it off unless you want it.</span>
+        <span>Add Gift Aid from the giving log. Leave this off to treat Gift Aid as £0.</span>
       </label>
     `,
     body: `
@@ -669,14 +683,19 @@ function moreScreen() {
   ];
   return shell({
     eyebrow: "More",
-    title: "Household.",
-    lede: "The rest of the workbook, and the two names on the income and payslip lines.",
+    title: "More.",
+    lede: "The quieter corners, plus a one-time spreadsheet import.",
     body: `
       <section class="nav-grid">
         ${links.map(([name, title, detail]) => `<a class="friend-card" href="#/${name}" data-action="go" data-screen="${name}">
           <span class="friend-main"><strong>${esc(title)}</strong><small>${esc(detail)}</small></span>
           <span class="chevron">›</span>
         </a>`).join("")}
+      </section>
+      <section class="block">
+        ${sectionHead("Spreadsheet", "", "")}
+        <p class="helper">One-time upload of your Numbers/Excel export. Friend tabs stay. Nothing from the file is committed to the public repo.</p>
+        <button class="secondary wide" type="button" data-action="import-workbook">Import spreadsheet</button>
       </section>
       <section class="block">
         ${sectionHead("People", "add-person", "Add")}
@@ -796,7 +815,9 @@ function modalMarkup() {
     envelope: envelopeForm,
     card: cardForm,
     sub: subForm,
+    pending: pendingForm,
     oneoff: oneOffForm,
+    import: importWorkbookForm,
     annual: annualForm,
     pot: potForm,
     pension: pensionForm,
@@ -850,9 +871,27 @@ function transactionForm() {
 }
 
 function deleteForm() {
-  return `<div class="delete-confirm">${modalHead("Please check", `Delete ${modal.label || (modal.target === "friend" ? "friend and history" : "this entry")}?`)}
+  return `<div class="delete-confirm">${modalHead("Please check", modal.target === "reset-month" ? `Reset ${modal.label}?` : `Delete ${modal.label || (modal.target === "friend" ? "friend and history" : "this entry")}?`)}
     <p>${esc(modal.copy || (modal.target === "friend" ? "This will permanently remove this friend and every transaction in their tab." : "This cannot be undone."))}</p>
-    <div class="confirm-actions"><button class="secondary" data-action="close-modal">Keep it</button><button class="danger" data-action="delete-confirmed">Delete</button></div></div>`;
+    <div class="confirm-actions"><button class="secondary" data-action="close-modal">Keep it</button><button class="${modal.target === "reset-month" ? "primary" : "danger"}" data-action="delete-confirmed">${modal.target === "reset-month" ? "Reset ticks" : "Delete"}</button></div></div>`;
+}
+
+function importWorkbookForm() {
+  const report = modal.report;
+  if (report) {
+    const lines = reportLines(report);
+    return `<div class="delete-confirm">${modalHead("Imported", "It’s in the gist.")}
+      <p>${lines.landed.length ? lines.landed.map(([label, count]) => `${label}: ${count}`).join(" · ") : "Nothing landed."}${lines.skipped ? ` · Skipped ${lines.skipped}` : ""}</p>
+      <button class="primary wide" type="button" data-action="close-modal">Done</button>
+    </div>`;
+  }
+  return `<form id="import-form">${modalHead("Spreadsheet", "Import household lines")}
+    <p>Upload the .xlsx export. Household lines are written to the same private gist. Friend tabs are not removed.</p>
+    ${householdHasData(household()) ? `<p class="helper">This household already has lines. Importing will replace them.</p>` : ""}
+    <label>Workbook<input required type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>
+    <p class="form-error" id="form-error"></p>
+    <button class="primary wide" type="submit">${householdHasData(household()) ? "Replace household lines" : "Import"}</button>
+  </form>`;
 }
 
 function importForm() {
@@ -915,6 +954,7 @@ function cardForm() {
   return `<form id="card-form">${modalHead(item.id ? "Card" : "New card", item.id ? "Update card" : "Add a card")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Card one" /></label>
     ${moneyLabel("Balance", "amount", item.balancePence)}
+    ${moneyLabel("Pending", "pending", item.pendingPence)}
     <p class="helper">Saving sets the snapshot date to today.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Update figure" : "Add card"}</button>
@@ -932,6 +972,17 @@ function subForm() {
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save subscription" : "Add subscription"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-sub">Delete subscription</button>' : ""}
+  </form>`;
+}
+
+function pendingForm() {
+  const item = modal.item || {};
+  return `<form id="pending-form">${modalHead(item.id ? "Pending" : "New pending", item.id ? "Edit pending" : "Add pending")}
+    <label>What<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Flight hold…" /></label>
+    ${moneyLabel("Amount", "amount", item.amountPence)}
+    <p class="form-error" id="form-error"></p>
+    <button class="primary wide" type="submit">${item.id ? "Save pending" : "Add pending"}</button>
+    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-pending">Delete pending</button>' : ""}
   </form>`;
 }
 
@@ -1019,6 +1070,7 @@ function payslipForm() {
     ${moneyLabel("Tax", "tax", item.taxPence)}
     ${moneyLabel("National Insurance", "ni", item.niPence)}
     ${moneyLabel("Net", "net", item.netPence)}
+    <label>Tax code <span class="optional">optional</span><input maxlength="20" name="taxCode" value="${esc(item.taxCode)}" autocomplete="off" /></label>
     <label>Note <span class="optional">optional</span><input maxlength="200" name="note" value="${esc(item.note)}" /></label>
     <label class="check-row"><input type="checkbox" name="forecast" ${item.forecast ? "checked" : ""} /><span>This is a forecast — do not treat it as confirmed</span></label>
     <p class="form-error" id="form-error"></p>
@@ -1174,6 +1226,8 @@ document.addEventListener("click", async (event) => {
   if (action === "edit-envelope") openItem("envelope", "envelopes", id);
   if (action === "add-card") openItem("card");
   if (action === "edit-card") openItem("card", "cards", id);
+  if (action === "add-pending") openItem("pending");
+  if (action === "edit-pending") openItem("pending", "pendings", id);
   if (action === "add-sub") openItem("sub");
   if (action === "edit-sub") openItem("sub", "cardSubs", id);
   if (action === "add-oneoff") openItem("oneoff");
@@ -1198,6 +1252,19 @@ document.addEventListener("click", async (event) => {
       if (item) item.purchased = !item.purchased;
     });
     render();
+  }
+  if (action === "reset-month") {
+    modal = {
+      kind: "delete",
+      target: "reset-month",
+      label: `${monthLabel(viewMonth)} ticks`,
+      copy: "Untick monthly bills, weekly slots, and card subs for this month. Amounts stay. You can tick them again as the month happens.",
+    };
+    renderModal();
+  }
+  if (action === "import-workbook") {
+    modal = { kind: "import" };
+    renderModal();
   }
   if (action === "tick-envelope") {
     event.preventDefault();
@@ -1231,6 +1298,7 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-delete-bill") askDelete("bill", modal.item.id, "this bill");
   if (action === "confirm-delete-envelope") askDelete("envelope", modal.item.id, "this weekly slot");
   if (action === "confirm-delete-card") askDelete("card", modal.item.id, "this card");
+  if (action === "confirm-delete-pending") askDelete("pending", modal.item.id, "this pending amount");
   if (action === "confirm-delete-sub") askDelete("sub", modal.item.id, "this subscription");
   if (action === "confirm-delete-oneoff") askDelete("oneoff", modal.item.id, "this one-off");
   if (action === "confirm-delete-annual") askDelete("annual", modal.item.id, "this annual bill");
@@ -1268,6 +1336,8 @@ document.addEventListener("click", async (event) => {
         hh.cards = hh.cards.filter((item) => item.id !== targetModal.id);
         hh.cardSubs = hh.cardSubs.map((item) => (item.cardId === targetModal.id ? { ...item, cardId: undefined } : item));
       }
+      if (targetModal.target === "reset-month") resetMonthTicks(hh, viewMonth);
+      if (targetModal.target === "pending") hh.pendings = hh.pendings.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "sub") hh.cardSubs = hh.cardSubs.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "oneoff") hh.oneOffs = hh.oneOffs.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "annual") hh.annualBills = hh.annualBills.filter((item) => item.id !== targetModal.id);
@@ -1276,7 +1346,7 @@ document.addEventListener("click", async (event) => {
       if (targetModal.target === "payslip") hh.payslips = hh.payslips.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "donation") hh.donations = hh.donations.filter((item) => item.id !== targetModal.id);
     });
-    if (saved) { closeModal(); showToast("Deleted"); }
+    if (saved) { closeModal(); showToast(targetModal.target === "reset-month" ? "Ticks reset" : "Deleted"); }
     else showToast(sync.message || "Could not delete");
   }
   if (action === "sign-out") signOut();
@@ -1316,6 +1386,8 @@ document.addEventListener("submit", (event) => {
     "envelope-form": saveEnvelope,
     "card-form": saveCard,
     "sub-form": saveSub,
+    "pending-form": savePending,
+    "import-form": importWorkbook,
     "oneoff-form": saveOneOff,
     "annual-form": saveAnnual,
     "pot-form": savePot,
@@ -1534,7 +1606,20 @@ async function saveCard(event) {
     build: (data) => ({
       name: requireName(data.get("name"), "name"),
       balancePence: requireMoney(data.get("amount"), "balance"),
+      pendingPence: requireMoney(data.get("pending"), "pending"),
       updatedOn: today(),
+    }),
+  });
+}
+
+async function savePending(event) {
+  return saveNamedMoney(event, {
+    list: "pendings",
+    toastAdd: "Pending added",
+    toastEdit: "Pending updated",
+    build: (data) => ({
+      name: requireName(data.get("name"), "name"),
+      amountPence: requireMoney(data.get("amount"), "amount"),
     }),
   });
 }
@@ -1660,6 +1745,7 @@ async function savePayslip(event) {
     note: String(data.get("note") || "").trim(),
     moneyLandsMonth: data.get("moneyLandsMonth") || data.get("periodMonth"),
     forecast: data.get("forecast") === "on",
+    taxCode: String(data.get("taxCode") || "").trim(),
   };
   const editing = Boolean(modal.payslip?.id);
   const existingId = modal.payslip?.id;
@@ -1675,6 +1761,31 @@ async function savePayslip(event) {
   }
   closeModal();
   showToast(editing ? "Payslip updated" : "Payslip added");
+}
+
+async function importWorkbook(event) {
+  event.preventDefault();
+  const file = event.target.elements.file?.files?.[0];
+  if (!file) return showFormError("Choose the .xlsx export.");
+  setBusy(event.target, true);
+  try {
+    const workbook = await readXlsx(await file.arrayBuffer());
+    const { household: imported, report } = householdFromWorkbook(workbook);
+    const saved = await withStoreUpdate(() => {
+      store = applyHouseholdImport(store, imported, { overwrite: true });
+    });
+    if (!saved) {
+      showFormError(sync.message || "Could not save the import.");
+      setBusy(event.target, false);
+      return;
+    }
+    modal = { kind: "import", report };
+    renderModal();
+    showToast("Imported");
+  } catch (error) {
+    showFormError(error.message || "Could not read that workbook.");
+    setBusy(event.target, false);
+  }
 }
 
 async function saveDonation(event) {

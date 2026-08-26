@@ -19,6 +19,7 @@ export function emptyHousehold() {
     envelopes: [],
     cards: [],
     cardSubs: [],
+    pendings: [],
     oneOffs: [],
     annualBills: [],
     pots: [],
@@ -37,6 +38,7 @@ export function householdHasData(household) {
     "envelopes",
     "cards",
     "cardSubs",
+    "pendings",
     "oneOffs",
     "annualBills",
     "pots",
@@ -201,7 +203,10 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const subsAllowedPence = sumPence(allowedSubs, (item) => item.amountPence);
   const allowedWithSubsPence = allowedSoFarPence + subsAllowedPence;
   const cardBalancesPence = sumPence(cards, (item) => item.balancePence);
-  const overUnderPence = allowedWithSubsPence - cardBalancesPence;
+  const pendingPence = sumPence(cards, (item) => item.pendingPence || 0)
+    + sumPence(household?.pendings || [], (item) => item.amountPence);
+  const cardSidePence = cardBalancesPence + pendingPence;
+  const overUnderPence = allowedWithSubsPence - cardSidePence;
 
   return {
     month,
@@ -221,14 +226,36 @@ export function cashflowForMonth(household, month, today = new Date()) {
     subsAllowedPence,
     allowedWithSubsPence,
     cardBalancesPence,
+    pendingPence,
+    cardSidePence,
     overUnderPence,
   };
 }
 
 export function spendVerdict(overUnderPence, formatMoney) {
   if (overUnderPence === 0) return "Cards match the allowed-so-far.";
-  if (overUnderPence > 0) return `${formatMoney(overUnderPence)} under the allowed-so-far — room on the cards.`;
+  if (overUnderPence > 0) return `${formatMoney(overUnderPence)} under — room on the cards.`;
   return `${formatMoney(-overUnderPence)} over the allowed-so-far.`;
+}
+
+export function savingLine(flow) {
+  if (flow.potPence < 0) return "This month does not balance yet.";
+  if (flow.overUnderPence >= 0) return "On track to save.";
+  return "Spending ahead of the pot.";
+}
+
+export function resetMonthTicks(household, month) {
+  const next = household;
+  for (const bill of next.bills || []) {
+    bill.paidMonths = (bill.paidMonths || []).filter((item) => item !== month);
+  }
+  for (const sub of next.cardSubs || []) {
+    sub.paidMonths = (sub.paidMonths || []).filter((item) => item !== month);
+  }
+  for (const envelope of next.envelopes || []) {
+    envelope.happenedDates = (envelope.happenedDates || []).filter((date) => !String(date).startsWith(`${month}-`));
+  }
+  return next;
 }
 
 export function payslipIsConfirmed(payslip, today = new Date()) {

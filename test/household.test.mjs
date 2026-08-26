@@ -13,6 +13,8 @@ import {
   householdHasData,
   payslipAniPence,
   payslipIsConfirmed,
+  resetMonthTicks,
+  savingLine,
   spendVerdict,
   ukTaxYearFromDate,
 } from "../household.js";
@@ -90,8 +92,28 @@ test("a ticked card sub counts as allowed before its due day", () => {
   assert.equal(flow.subsAllowedPence, 9000);
 });
 
+test("pending amounts sit with card balances against the allowed-so-far", () => {
+  const withPending = {
+    ...household,
+    cards: household.cards.map((card, index) => (index === 0 ? { ...card, pendingPence: 5000 } : card)),
+    pendings: [{ id: "p-1", name: "Flight hold", amountPence: 3000 }],
+  };
+  const flow = cashflowForMonth(withPending, "2026-08", new Date("2026-08-10T12:00:00Z"));
+  assert.equal(flow.pendingPence, 8000);
+  assert.equal(flow.cardSidePence, 108000);
+  assert.equal(flow.overUnderPence, -6000);
+});
+
+test("a new-month reset clears ticks for that month only", () => {
+  const copy = structuredClone(household);
+  resetMonthTicks(copy, "2026-08");
+  assert.deepEqual(copy.bills[0].paidMonths, []);
+  assert.deepEqual(copy.envelopes[0].happenedDates, []);
+  assert.equal(savingLine(cashflowForMonth(household, "2026-08", new Date("2026-08-10T12:00:00Z"))), "On track to save.");
+});
+
 test("over and underspend are plain English", () => {
-  assert.equal(spendVerdict(2000, formatMoney), "£20.00 under the allowed-so-far — room on the cards.");
+  assert.equal(spendVerdict(2000, formatMoney), "£20.00 under — room on the cards.");
   assert.equal(spendVerdict(-4500, formatMoney), "£45.00 over the allowed-so-far.");
   assert.equal(spendVerdict(0, formatMoney), "Cards match the allowed-so-far.");
 });

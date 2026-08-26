@@ -143,6 +143,7 @@ function parseHousehold(value) {
   const cards = list(value.cards).map(parseCard);
   const cardIds = new Set(cards.map((card) => card.id));
   const cardSubs = list(value.cardSubs).map((item) => parseCardSub(item, cardIds));
+  const pendings = list(value.pendings).map(parsePending);
   const oneOffs = list(value.oneOffs).map(parseOneOff);
   const annualBills = list(value.annualBills).map(parseAnnualBill);
   const pots = list(value.pots).map(parsePot);
@@ -155,6 +156,7 @@ function parseHousehold(value) {
   uniqueIds(envelopes, "Envelope");
   uniqueIds(cards, "Card");
   uniqueIds(cardSubs, "Card subscription");
+  uniqueIds(pendings, "Pending");
   uniqueIds(oneOffs, "One-off");
   uniqueIds(annualBills, "Annual bill");
   uniqueIds(pots, "Pot");
@@ -169,6 +171,7 @@ function parseHousehold(value) {
     envelopes,
     cards,
     cardSubs,
+    pendings,
     oneOffs,
     annualBills,
     pots,
@@ -244,7 +247,19 @@ function parseCard(card) {
     id: requiredId(card.id, "Card"),
     name: requiredName(card.name, "Card"),
     balancePence: moneyPence(card.balancePence, "Card"),
+    pendingPence: moneyPence(card.pendingPence, "Card pending"),
     updatedOn: optionalDate(card.updatedOn, "Card"),
+  };
+}
+
+function parsePending(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new StoreError("Each pending amount must be an object.");
+  }
+  return {
+    id: requiredId(item.id, "Pending"),
+    name: requiredName(item.name, "Pending"),
+    amountPence: moneyPence(item.amountPence, "Pending"),
   };
 }
 
@@ -363,7 +378,15 @@ function parsePayslip(slip, personIds) {
     note,
     moneyLandsMonth,
     forecast: Boolean(slip.forecast),
+    taxCode: optionalTaxCode(slip.taxCode),
   };
+}
+
+function optionalTaxCode(value) {
+  const code = String(value || "").trim();
+  if (!code) return "";
+  if (code.length > 20) throw new StoreError("Payslip tax code is too long.");
+  return code;
 }
 
 function parseDeduction(item) {
