@@ -1,5 +1,5 @@
 # Tab
-
+ 
 A mobile-first UK household workbook for one signed-in person. The live site is static GitHub Pages: https://hoffbrandm.github.io/tab/
 
 Friend tabs are still here: 50/50 expenses, transfers, running balances. The rest is household money — cashflow for the month on screen, planned one-offs, an annual sinking fund, pots, payslips, a £100k adjusted-net-income helper for childcare, and giving.
