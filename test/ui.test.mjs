@@ -170,3 +170,17 @@ test("the £100k helper takes grossed-up Gift Aid off, and never adds it on", ()
   assert.doesNotMatch(app, /giftAidAddBackPence/);
   assert.match(app, /Grossed-up Gift Aid taken off/);
 });
+
+test("the payslip form says what Gross means and checks it against the slip", () => {
+  assert.match(app, /Gross is the Payments total on the slip/);
+  assert.match(app, /name="grossBeforeSacrifice"/);
+  assert.match(app, /Gross is before salary sacrifice/);
+  assert.match(app, /moneyLabel\("Net on the payslip", "statedNet"/);
+  assert.match(app, /data-payslip-net-block/);
+  assert.match(app, /payslipNetHints\(live\)/);
+});
+
+test("the payslips list shows the live net, never a stale cached one", () => {
+  assert.doesNotMatch(app, /formatMoney\(slip\.netPence\)/);
+  assert.match(app, /net \$\{formatMoney\(payslipNetPence\(slip\)\)\}/);
+});

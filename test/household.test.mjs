@@ -31,6 +31,12 @@ import {
   payslipCategoriesOf,
   payslipIsConfirmed,
   payslipNetPence,
+  payslipNetCheck,
+  payslipNetHints,
+  payslipGrossPaidPence,
+  payslipDeductionsPence,
+  payslipTaxablePayPence,
+  basicRateGrossUpPence,
   payslipRecordLabels,
   pendingListTotalPence,
   pendingsForMonth,
@@ -651,12 +657,12 @@ test("payslip categories stay available after a later slip leaves them unused", 
   assert.ok(later.some((item) => item.label === "Cycle scheme"));
 });
 
-test("payslip net is gross through jury-service deductions and skips parental pay", () => {
+test("payslip net is the slip's own arithmetic: gross paid less deductions", () => {
   assert.equal(isParentalPayLabel("SMP"), true);
   assert.equal(isParentalPayLabel("Enhanced maternity"), true);
   assert.equal(isParentalPayLabel("OSPP"), true);
   assert.equal(isParentalPayLabel("Jury service"), false);
-  assert.equal(payslipNetPence({
+  const slip = {
     grossPence: 400000,
     bonusPence: 20000,
     benefitsPence: 5000,
@@ -670,7 +676,17 @@ test("payslip net is gross through jury-service deductions and skips parental pa
       { id: "smp", label: "SMP", amountPence: 15000 },
       { id: "mat", label: "Enhanced maternity", amountPence: 80000, inNet: false },
     ],
-  }), 301000);
+  };
+  // Gross is the Payments total, so the bonus is already inside it. A taxable
+  // benefit is never paid, so it is not in there and is not added. The salary
+  // sacrifice reduced gross before it was struck, so it is not a deduction.
+  // 4000 gross − (600 tax + 200 NI + 40 gym + 80 cycle + 20 jury) = 3060.
+  assert.equal(payslipGrossPaidPence(slip), 400000);
+  assert.equal(payslipDeductionsPence(slip), 94000);
+  assert.equal(payslipNetPence(slip), 306000);
+
+  // The same slip, but the gross typed in is the figure before the sacrifice.
+  assert.equal(payslipNetPence({ ...slip, grossBeforeSacrifice: true }), 276000);
   assert.equal(payslipNetPence({
     grossPence: 400000,
     netPence: 999999,
@@ -1050,9 +1066,24 @@ test("pending table rows add to the total without a per-row modal", () => {
   assert.equal(flow.pendingPence, 4250);
 });
 
-test("payslip ANI is gross plus benefits minus salary sacrifice", () => {
+test("payslip ANI is taxable pay plus taxable benefits", () => {
+  // Gross is already after the sacrifice, so taking it off again here would
+  // understate adjusted net income — the direction that hides a £100k breach.
   assert.equal(payslipAniPence({
     grossPence: 900000,
+    benefitsPence: 10000,
+    salarySacrificePensionPence: 50000,
+  }), 910000);
+  assert.equal(payslipAniPence({
+    grossPence: 900000,
+    benefitsPence: 10000,
+    salarySacrificePensionPence: 50000,
+    grossBeforeSacrifice: true,
+  }), 860000);
+  // With no gross typed, salary is contractual and so sits before the sacrifice.
+  assert.equal(payslipAniPence({
+    salaryPence: 800000,
+    bonusPence: 100000,
     benefitsPence: 10000,
     salarySacrificePensionPence: 50000,
   }), 860000);
@@ -1211,4 +1242,78 @@ test("pending splits into the table and anything left on the cards", () => {
   assert.equal(flow.pendingTablePence, 500);
   assert.equal(flow.pendingPence, 3500);
   assert.equal(flow.actualOnCardsPence, 53500);
+});
+
+test("the net on the slip is checked against the net these figures produce", () => {
+  const base = {
+    grossPence: 350000,
+    salarySacrificePensionPence: 20000,
+    taxPence: 60000,
+    niPence: 28000,
+    otherDeductions: [{ id: "cycle", label: "Cycle scheme", amountPence: 4000 }],
+  };
+  assert.equal(payslipNetPence(base), 258000);
+  assert.equal(payslipNetCheck(base), null, "no stated net means nothing to check");
+
+  const matching = { ...base, statedNetPence: 258000 };
+  assert.equal(payslipNetCheck(matching).matches, true);
+  assert.deepEqual(payslipNetHints(matching), []);
+
+  // Out by exactly the sacrifice: the gross typed in is the before figure.
+  const preSacrifice = { ...base, statedNetPence: 238000 };
+  const check = payslipNetCheck(preSacrifice);
+  assert.equal(check.matches, false);
+  assert.equal(check.differencePence, 20000);
+  assert.match(payslipNetHints(preSacrifice)[0], /exactly the salary sacrifice/);
+  assert.match(payslipNetHints(preSacrifice)[0], /before salary sacrifice/);
+
+  // Ticking the box resolves it.
+  assert.equal(payslipNetCheck({ ...preSacrifice, grossBeforeSacrifice: true }).matches, true);
+
+  // Taking it off twice is named too.
+  const doubled = { ...base, statedNetPence: 258000, grossBeforeSacrifice: true };
+  assert.match(payslipNetHints(doubled)[0], /taken off twice/);
+
+  // Out by exactly the bonus: gross was typed as basic pay only.
+  const missingBonus = { ...base, bonusPence: 50000, statedNetPence: 308000 };
+  assert.match(payslipNetHints(missingBonus)[0], /exactly the bonus/);
+
+  // Anything else falls back to naming the direction.
+  const other = { ...base, statedNetPence: 250000 };
+  assert.match(payslipNetHints(other)[0], /a deduction is probably missing/);
+});
+
+test("a taxable benefit counts for the £100k line and never for take-home", () => {
+  const slip = { grossPence: 400000, benefitsPence: 60000, taxPence: 80000, niPence: 20000 };
+  // A benefit in kind is notional. It is taxed but never paid.
+  assert.equal(payslipNetPence(slip), 300000);
+  assert.equal(payslipTaxablePayPence(slip), 400000);
+  assert.equal(payslipAniPence(slip), 460000);
+});
+
+test("a relief-at-source pension comes off pay, and off ANI grossed up", () => {
+  const slip = {
+    grossPence: 500000,
+    taxPence: 80000,
+    niPence: 30000,
+    reliefAtSourcePensionPence: 20000,
+  };
+  // It is paid out of pay, unlike a sacrifice, so take-home drops by the £200.
+  assert.equal(payslipNetPence(slip), 370000);
+  // The provider reclaims basic rate, so £200 in is £250 of pension.
+  assert.equal(basicRateGrossUpPence(20000), 25000);
+  assert.equal(payslipAniPence(slip), 500000 - 25000);
+
+  // A sacrifice of the same size never reached taxable pay, so it needs no
+  // second deduction — the two must not be modelled the same way.
+  const sacrificed = { grossPence: 500000, taxPence: 80000, niPence: 30000, salarySacrificePensionPence: 20000 };
+  assert.equal(payslipNetPence(sacrificed), 390000);
+  assert.equal(payslipAniPence(sacrificed), 500000);
+});
+
+test("the sacrifice category says which pension it is", () => {
+  const labels = DEFAULT_PAYSLIP_CATEGORIES.map((item) => item.label);
+  assert.ok(labels.includes("Salary sacrifice pension"));
+  assert.ok(labels.includes("Pension (relief at source)"));
+  assert.equal(labels.includes("Pensions"), false);
 });

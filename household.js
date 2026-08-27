@@ -22,11 +22,13 @@ export const WEEKDAYS = [
 ];
 export const MONTHLY_PAID_FROM = ["card", "cash"];
 export const DUE_ROLLS = ["calendar", "nextWorking", "firstWorking"];
-export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "sacrifice", "tax", "ni", "extra", "deduction", "parental"];
+export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "sacrifice", "pension", "tax", "ni", "extra", "deduction", "parental"];
 export const BUILTIN_PAYSLIP_CATEGORIES = [
   { id: "bonus", label: "Bonus", kind: "bonus" },
   { id: "benefits", label: "Benefits", kind: "benefits" },
-  { id: "sacrifice", label: "Pensions", kind: "sacrifice" },
+  // "Pensions" said nothing about which kind, and the two behave differently.
+  { id: "sacrifice", label: "Salary sacrifice pension", kind: "sacrifice" },
+  { id: "pension", label: "Pension (relief at source)", kind: "pension" },
   { id: "tax", label: "Tax", kind: "tax" },
   { id: "ni", label: "NI", kind: "ni" },
 ];
@@ -538,6 +540,12 @@ export function giftAidGrossPence(amountPence, giftAid) {
   return Math.round((amountPence * 5) / 4);
 }
 
+/** Basic-rate gross-up: a contribution paid from net pay is worth 100/80. */
+export function basicRateGrossUpPence(amountPence) {
+  if (!Number.isInteger(amountPence) || amountPence <= 0) return 0;
+  return Math.round((amountPence * 5) / 4);
+}
+
 export function donationGrossPence(donation) {
   return giftAidGrossPence(donation.amountPence, donation.giftAid);
 }
@@ -861,8 +869,9 @@ export function payslipCategoriesOf(household) {
     if (slip.bonusPence) remember(BUILTIN_PAYSLIP_CATEGORIES[0]);
     if (slip.benefitsPence) remember(BUILTIN_PAYSLIP_CATEGORIES[1]);
     if (slip.salarySacrificePensionPence) remember(BUILTIN_PAYSLIP_CATEGORIES[2]);
-    if (slip.taxPence) remember(BUILTIN_PAYSLIP_CATEGORIES[3]);
-    if (slip.niPence) remember(BUILTIN_PAYSLIP_CATEGORIES[4]);
+    if (slip.reliefAtSourcePensionPence) remember(BUILTIN_PAYSLIP_CATEGORIES[3]);
+    if (slip.taxPence) remember(BUILTIN_PAYSLIP_CATEGORIES[4]);
+    if (slip.niPence) remember(BUILTIN_PAYSLIP_CATEGORIES[5]);
     for (const row of slip.otherDeductions || []) {
       if (row.label) remember({
         id: row.id,
@@ -916,6 +925,7 @@ export function payslipAmountForCategory(slip, category) {
   if (category.kind === "bonus") return slip.bonusPence || 0;
   if (category.kind === "benefits") return slip.benefitsPence || 0;
   if (category.kind === "sacrifice") return slip.salarySacrificePensionPence || 0;
+  if (category.kind === "pension") return slip.reliefAtSourcePensionPence || 0;
   if (category.kind === "tax") return slip.taxPence || 0;
   if (category.kind === "ni") return slip.niPence || 0;
   const label = String(category.label || "").trim().toLowerCase();
@@ -940,21 +950,116 @@ export function payslipAmountOutsideNet(row) {
   return isParentalPayLabel(row.label);
 }
 
+/**
+ * Gross actually paid. `grossPence` is the payslip's Payments total, so it
+ * already carries basic salary, bonus, and any statutory or enhanced parental
+ * pay — that is why those are not added again anywhere below.
+ *
+ * Salary sacrifice is not an employee deduction: the employee gives up
+ * contractual pay and the employer pays the pension, so the Payments total is
+ * already reduced by it. A slip that instead shows gross before the sacrifice
+ * sets grossBeforeSacrifice, and only then does the sacrifice come off.
+ */
+export function payslipGrossPaidPence(slip) {
+  const gross = slip?.grossPence || 0;
+  if (!slip?.grossBeforeSacrifice) return gross;
+  return gross - (slip.salarySacrificePensionPence || 0);
+}
+
+/**
+ * Deductions the payslip takes off gross: tax, NI, a relief-at-source pension
+ * (paid out of pay, unlike a sacrifice), and the deduction rows.
+ */
+export function payslipDeductionsPence(slip) {
+  return (slip?.taxPence || 0)
+    + (slip?.niPence || 0)
+    + (slip?.reliefAtSourcePensionPence || 0)
+    + sumPence(
+      (slip?.otherDeductions || []).filter((row) => !row.extra && !payslipAmountOutsideNet(row)),
+      (row) => row.amountPence,
+    );
+}
+
+/** Additions paid on top of the Payments total, if a slip is built that way. */
+export function payslipAdditionsPence(slip) {
+  return sumPence(
+    (slip?.otherDeductions || []).filter((row) => row.extra && !payslipAmountOutsideNet(row)),
+    (row) => row.amountPence,
+  );
+}
+
+/**
+ * The payslip's own arithmetic: Net pay = Total gross pay − Total deductions.
+ *
+ * Taxable benefits are deliberately absent. A benefit in kind is notional — it
+ * is taxed but never paid, so it cannot raise the money that lands in the bank.
+ * It belongs in adjusted net income, and only there.
+ */
 export function payslipNetPence(slip) {
   if (!slip) return 0;
-  const extras = (slip.bonusPence || 0) + (slip.benefitsPence || 0)
-    + sumPence(
-      (slip.otherDeductions || []).filter((row) => row.extra && !payslipAmountOutsideNet(row)),
-      (row) => row.amountPence,
-    );
-  const deductions = (slip.salarySacrificePensionPence || 0)
-    + (slip.taxPence || 0)
-    + (slip.niPence || 0)
-    + sumPence(
-      (slip.otherDeductions || []).filter((row) => !row.extra && !payslipAmountOutsideNet(row)),
-      (row) => row.amountPence,
-    );
-  return (slip.grossPence || 0) + extras - deductions;
+  return payslipGrossPaidPence(slip) + payslipAdditionsPence(slip) - payslipDeductionsPence(slip);
+}
+
+/**
+ * What the slip is worth for the £100k line: taxable pay plus taxable benefits.
+ * Taxable pay is already net of any salary sacrifice, so the sacrifice is not
+ * subtracted a second time here.
+ */
+export function payslipTaxablePayPence(slip) {
+  if (!slip) return 0;
+  if ((slip.grossPence || 0) > 0) return payslipGrossPaidPence(slip);
+  // No gross typed. Salary is contractual, so it is a before-sacrifice figure.
+  return (slip.salaryPence || 0) + (slip.bonusPence || 0) - (slip.salarySacrificePensionPence || 0);
+}
+
+/**
+ * The net the payslip itself states, against the net these figures produce.
+ * A mismatch means a category is missing, misfiled, or gross was typed on the
+ * wrong side of the sacrifice — better caught here than carried into Home.
+ */
+export function payslipNetCheck(slip) {
+  const statedPence = slip?.statedNetPence;
+  if (!Number.isInteger(statedPence) || statedPence <= 0) return null;
+  const calculatedPence = payslipNetPence(slip);
+  return {
+    statedPence,
+    calculatedPence,
+    differencePence: calculatedPence - statedPence,
+    matches: calculatedPence === statedPence,
+  };
+}
+
+/**
+ * Why a stated net and a calculated net disagree. The gap is usually exactly
+ * one figure on the slip, and naming which one is more use than "does not
+ * match" — the conventions here are the part people get wrong.
+ */
+export function payslipNetHints(slip) {
+  const check = payslipNetCheck(slip);
+  if (!check || check.matches) return [];
+  const difference = check.differencePence;
+  const sacrifice = slip?.salarySacrificePensionPence || 0;
+  const bonus = slip?.bonusPence || 0;
+  const benefits = slip?.benefitsPence || 0;
+  const hints = [];
+  if (sacrifice > 0 && difference === sacrifice && !slip?.grossBeforeSacrifice) {
+    hints.push("That is exactly the salary sacrifice, so the Gross typed here looks like the figure before it came off. Tick “Gross is before salary sacrifice”.");
+  }
+  if (sacrifice > 0 && difference === -sacrifice && slip?.grossBeforeSacrifice) {
+    hints.push("That is exactly the salary sacrifice, and it is being taken off twice. Untick “Gross is before salary sacrifice”.");
+  }
+  if (bonus > 0 && difference === -bonus) {
+    hints.push("That is exactly the bonus. Gross should be the Payments total on the slip, which already includes it.");
+  }
+  if (benefits > 0 && difference === -benefits) {
+    hints.push("That is exactly the taxable benefit. A benefit in kind is never paid to you, so it does not belong in Gross — it counts for the £100k line only.");
+  }
+  if (!hints.length) {
+    hints.push(difference > 0
+      ? "The calculation pays out more than the slip does, so a deduction is probably missing from Categories."
+      : "The calculation pays out less than the slip does, so a deduction is probably too large, or Gross is too low.");
+  }
+  return hints;
 }
 
 export function usedPayslipCategories(slip, categories) {
@@ -1075,12 +1180,17 @@ export function payslipIsConfirmed(payslip, today = new Date()) {
   return Boolean(lands) && lands <= monthKey(today);
 }
 
+/**
+ * Adjusted net income for one slip: taxable pay plus taxable benefits, less the
+ * grossed-up relief-at-source pension. A sacrifice needs no line here — it
+ * never reached taxable pay. Grossed-up Gift Aid comes off across the year, in
+ * aniProjection, because giving is not tied to a slip.
+ */
 export function payslipAniPence(payslip) {
   if (!payslip) return 0;
-  const income = payslip.grossPence > 0
-    ? payslip.grossPence
-    : (payslip.salaryPence || 0) + (payslip.bonusPence || 0);
-  return income + (payslip.benefitsPence || 0) - (payslip.salarySacrificePensionPence || 0);
+  return payslipTaxablePayPence(payslip)
+    + (payslip.benefitsPence || 0)
+    - basicRateGrossUpPence(payslip.reliefAtSourcePensionPence || 0);
 }
 
 /**

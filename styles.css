@@ -779,11 +779,41 @@ legend { padding: 0; margin-bottom: 7px; }
 .payslip-cat-name { font-weight: 750; }
 .payslip-net {
   margin: 8px 0 14px;
-  font-size: 1.05rem;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  font-size: 0.95rem;
 }
-.payslip-net strong {
+.payslip-net-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  margin: 0 0 6px;
+}
+.payslip-net-line span { color: var(--muted); }
+.payslip-net-line.total {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.payslip-net-line.total strong {
   font-size: 1.4rem;
   letter-spacing: -0.03em;
+}
+.payslip-net-check {
+  margin: 10px 0 0;
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+.payslip-net-check.ok { color: var(--green); }
+.payslip-net-check.off { color: var(--red); }
+.payslip-net-hint {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--muted);
 }
 .month-nav {
   border: 1px solid var(--line);

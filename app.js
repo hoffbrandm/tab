@@ -31,6 +31,10 @@ import {
   masterPayslipCategories,
   payslipIsConfirmed,
   payslipNetPence,
+  payslipNetCheck,
+  payslipNetHints,
+  payslipGrossPaidPence,
+  payslipDeductionsPence,
   payslipRecordLabels,
   pendingListTotalPence,
   pendingsForMonth,
@@ -887,7 +891,7 @@ function payslipsScreen() {
             edit: "edit-payslip",
             id: slip.id,
             title: `${personById(slip.personId)?.name || "Person"} · ${labels.period}`,
-            detail: `${confirmed ? "Confirmed" : "Forecast"} · ${labels.taxYear} · lands ${labels.lands} · net ${formatMoney(slip.netPence)}`,
+            detail: `${confirmed ? "Confirmed" : "Forecast"} · ${labels.taxYear} · lands ${labels.lands} · net ${formatMoney(payslipNetPence(slip))}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
             amount: formatMoney(slip.grossPence || slip.salaryPence),
           });
         }).join("") : emptyLines("Add a month when you have a slip — or a forecast row you do not treat as fact.", "add-payslip", "Add a payslip")}
@@ -1424,6 +1428,8 @@ function payslipForm() {
     <label>Month the money lands<input required type="month" name="moneyLandsMonth" value="${item.moneyLandsMonth || item.periodMonth || viewMonth}" /></label>
     ${moneyLabel("Salary", "salary", item.salaryPence)}
     ${moneyLabel("Gross", "gross", item.grossPence)}
+    <p class="helper">Gross is the Payments total on the slip — basic, bonus, and any parental pay — after any salary sacrifice has come off. Tax and NI go in Categories below.</p>
+    <label class="check-row"><input type="checkbox" name="grossBeforeSacrifice" data-action="payslip-field" ${item.grossBeforeSacrifice ? "checked" : ""} /><span>Gross is before salary sacrifice</span></label>
     <section class="payslip-cats">
       <h3>Categories</h3>
       <p class="helper">Pick a category and enter the amount. Names live in Account. Net is calculated.</p>
@@ -1435,7 +1441,9 @@ function payslipForm() {
         </select>
       </label>` : `<p class="helper">Every category from Account is already on this slip.</p>`}
     </section>
-    <p class="payslip-net">Net <strong data-payslip-net>${formatMoney(payslipNetPence(live))}</strong></p>
+    ${payslipNetBlock(live)}
+    ${moneyLabel("Net on the payslip", "statedNet", item.statedNetPence)}
+    <p class="helper">Optional. Type what the slip says and the figures above get checked against it.</p>
     <label>Tax code <span class="optional">optional</span><input maxlength="20" name="taxCode" value="${esc(item.taxCode || "")}" autocomplete="off" /></label>
     <label>Note <span class="optional">optional</span><input maxlength="200" name="note" value="${esc(item.note || "")}" /></label>
     <label class="check-row"><input type="checkbox" name="forecast" ${item.forecast ? "checked" : ""} /><span>This is a forecast — do not treat it as confirmed</span></label>
@@ -1443,6 +1451,27 @@ function payslipForm() {
     <button class="primary wide" type="submit">${item.id ? "Save payslip" : "Add payslip"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-payslip">Delete payslip</button>' : ""}
   </form>`;
+}
+
+/**
+ * Net with its working shown, and — when the slip's own net is typed in — the
+ * check against it. Seeing gross, deductions, and the gap is what makes a
+ * mistyped figure obvious.
+ */
+function payslipNetBlock(live) {
+  const check = payslipNetCheck(live);
+  const hints = payslipNetHints(live);
+  return `<div class="payslip-net" data-payslip-net-block>
+    <p class="payslip-net-line"><span>Gross paid</span><strong>${formatMoney(payslipGrossPaidPence(live))}</strong></p>
+    <p class="payslip-net-line"><span>Deductions</span><strong>−${formatMoney(payslipDeductionsPence(live))}</strong></p>
+    <p class="payslip-net-line total"><span>Net</span><strong data-payslip-net>${formatMoney(payslipNetPence(live))}</strong></p>
+    ${check
+      ? (check.matches
+        ? `<p class="payslip-net-check ok">Matches the net on the slip.</p>`
+        : `<p class="payslip-net-check off">${esc(`${formatMoney(Math.abs(check.differencePence))} ${check.differencePence > 0 ? "more" : "less"} than the ${formatMoney(check.statedPence)} on the slip.`)}</p>
+           ${hints.map((hint) => `<p class="payslip-net-hint">${esc(hint)}</p>`).join("")}`)
+      : ""}
+  </div>`;
 }
 
 function payslipFormCategories(slip, personId) {
@@ -1480,6 +1509,9 @@ function livePayslipFromForm(slip, categories) {
   return applyPayslipCategoryAmounts({
     ...base,
     grossPence: readMoney("gross"),
+    salaryPence: readMoney("salary"),
+    statedNetPence: readMoney("statedNet"),
+    grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
   }, modal.slipCategories || categories || [], form);
 }
 
@@ -1489,6 +1521,7 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
     bonusPence: 0,
     benefitsPence: 0,
     salarySacrificePensionPence: 0,
+    reliefAtSourcePensionPence: 0,
     taxPence: 0,
     niPence: 0,
     otherDeductions: [],
@@ -1499,6 +1532,7 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
     if (category.kind === "bonus") next.bonusPence = amount;
     else if (category.kind === "benefits") next.benefitsPence = amount;
     else if (category.kind === "sacrifice") next.salarySacrificePensionPence = amount;
+    else if (category.kind === "pension") next.reliefAtSourcePensionPence = amount;
     else if (category.kind === "tax") next.taxPence = amount;
     else if (category.kind === "ni") next.niPence = amount;
     else {
@@ -2513,10 +2547,13 @@ async function savePayslip(event) {
   } catch (error) {
     return showFormError(error.message);
   }
+  const statedNetPence = parseMoneyAllowZero(data.get("statedNet"));
+  if (statedNetPence === null) return showFormError("Use a valid net, such as 2420.00.");
   const amounts = applyPayslipCategoryAmounts({
     ...(modal.payslip || {}),
     salaryPence,
     grossPence,
+    grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
   }, modal.slipCategories || [], event.target);
   if ((amounts.otherDeductions || []).some((row) => row.amountPence == null)) {
     return showFormError("Use a valid amount, such as 12.50.");
@@ -2530,10 +2567,13 @@ async function savePayslip(event) {
     bonusPence: amounts.bonusPence,
     benefitsPence: amounts.benefitsPence,
     salarySacrificePensionPence: amounts.salarySacrificePensionPence,
+    reliefAtSourcePensionPence: amounts.reliefAtSourcePensionPence,
     otherDeductions: amounts.otherDeductions,
     taxPence: amounts.taxPence,
     niPence: amounts.niPence,
+    grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
     netPence: amounts.netPence,
+    statedNetPence,
     note: String(data.get("note") || "").trim(),
     moneyLandsMonth: data.get("moneyLandsMonth") || data.get("periodMonth"),
     forecast: data.get("forecast") === "on",
@@ -2597,10 +2637,10 @@ function snapshotPayslipForm() {
 }
 
 function updatePayslipNet() {
-  const output = document.querySelector("[data-payslip-net]");
-  if (!output) return;
+  const block = document.querySelector("[data-payslip-net-block]");
+  if (!block) return;
   const live = livePayslipFromForm(modal?.payslip || {}, modal?.slipCategories || []);
-  output.textContent = formatMoney(payslipNetPence(live));
+  block.outerHTML = payslipNetBlock(live);
 }
 
 function updatePendingField(input) {
