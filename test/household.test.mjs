@@ -54,6 +54,7 @@ import {
   oneOffsForMonth,
   oneOffsOutsideMonth,
   exceptionsForMonth,
+  exceptionsOutsideMonth,
   exceptionsTotalPence,
 } from "../household.js";
 
@@ -549,7 +550,7 @@ test("£100k helper ignores forecast rows and can stay under the cliff", () => {
   assert.equal(result.overLimit, false);
 });
 
-test("Gift Aid from giving in the tax year feeds the £100k helper", () => {
+test("grossed-up Gift Aid comes off adjusted net income", () => {
   const donations = [{
     id: "d-1",
     who: "you",
@@ -567,12 +568,14 @@ test("Gift Aid from giving in the tax year feeds the £100k helper", () => {
     taxYear: "2026-27",
     today: new Date("2026-08-26T12:00:00Z"),
   });
-  assert.equal(result.giftAidAddBackPence, 20000);
+  // £800 given with Gift Aid is £1,000 gross, and adjusted net income is net
+  // income less the gross donation — so it takes £1,000 off, not £200 on.
+  assert.equal(result.giftAidReliefPence, 100000);
   assert.equal(result.ytdPence, 900000);
-  assert.equal(result.projectedPence, result.ytdPence + result.projectedRestPence + 20000);
+  assert.equal(result.projectedPence, result.ytdPence + result.projectedRestPence - 100000);
 });
 
-test("Gift Aid add-back is off unless the planner asks for it", () => {
+test("Gift Aid relief is off unless the planner asks for it", () => {
   const donations = [{
     id: "d-1",
     who: "You",
@@ -600,8 +603,10 @@ test("Gift Aid add-back is off unless the planner asks for it", () => {
     includeGiftAid: true,
     today: new Date("2026-08-26T12:00:00Z"),
   });
-  assert.equal(off.giftAidAddBackPence, 0);
-  assert.equal(on.giftAidAddBackPence, 20000);
+  assert.equal(off.giftAidReliefPence, 0);
+  assert.equal(on.giftAidReliefPence, 100000);
+  assert.equal(on.projectedPence, off.projectedPence - 100000);
+  assert.ok(on.extraSacrificePence < off.extraSacrificePence);
 });
 
 test("pots remind quietly when this calendar month has no snapshot", () => {
@@ -1154,4 +1159,56 @@ test("exceptions are read for the month on screen", () => {
   assert.deepEqual(exceptionsForMonth(hh, "2026-08").map((item) => item.name), ["Travel insurance", "School trip"]);
   assert.equal(exceptionsTotalPence(hh, "2026-08"), 60000);
   assert.equal(exceptionsTotalPence(hh, "2026-10"), 0);
+  assert.deepEqual(exceptionsOutsideMonth(hh, "2026-08").map((item) => item.id), ["x-3"]);
+
+  // A month written the sheet's way still lands in August.
+  const loose = { ...emptyHousehold(), exceptions: [{ id: "x-4", name: "Travel insurance", month: "August 2026", amountPence: 56000 }] };
+  assert.equal(exceptionsTotalPence(loose, "2026-08"), 56000);
+});
+
+test("the card check needs a balance recorded for the month on screen", () => {
+  const today = new Date("2026-08-26T12:00:00Z");
+  const hh = {
+    ...emptyHousehold(),
+    payslips: [slipFor("you", "2026-08", 300000)],
+    people: [{ id: "you", name: "You" }],
+    weeklyRules: [{ id: "food", name: "Food shop", amountPence: 7000, cadence: "times", timesPerMonth: 2, tickedKeys: ["2026-07:1", "2026-07:2", "2026-08:1"] }],
+    cards: [{ id: "c-1", name: "Card", balancePence: 9000, pendingPence: 0, updatedOn: "2026-08-10" }],
+  };
+
+  // August has a snapshot seeded from updatedOn, so the check is live.
+  const august = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(august.cardCheckKnown, true);
+  assert.equal(august.cardBalancesPence, 9000);
+  assert.equal(august.overUnderPence, 7000 - 9000);
+  assert.equal(august.totalSavingsPence, august.savingsPence - 2000);
+
+  // July has none. Reading the missing balance as £0 would have reported the
+  // whole £140 allowance as underspend.
+  const july = cashflowForMonth(hh, "2026-07", today);
+  assert.equal(july.cardCheckKnown, false);
+  assert.deepEqual(july.cardsMissingSnapshot.map((card) => card.id), ["c-1"]);
+  assert.equal(july.allowanceSoFarPence, 14000);
+  assert.equal(july.cardCheckPence, 14000);
+  assert.equal(july.overUnderPence, 0);
+  assert.equal(july.totalSavingsPence, july.savingsPence);
+
+  // No cards at all is a knowable check, not a missing one.
+  const noCards = cashflowForMonth({ ...hh, cards: [] }, "2026-07", today);
+  assert.equal(noCards.cardCheckKnown, true);
+  assert.equal(noCards.overUnderPence, 14000);
+});
+
+test("pending splits into the table and anything left on the cards", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const hh = {
+    ...emptyHousehold(),
+    cards: [{ id: "c-1", name: "Card", balancePence: 50000, pendingPence: 3000, updatedOn: "2026-08-10" }],
+    pendings: [{ id: "p-1", note: "Coffee", amountPence: 500, month: "2026-08" }],
+  };
+  const flow = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(flow.cardPendingPence, 3000);
+  assert.equal(flow.pendingTablePence, 500);
+  assert.equal(flow.pendingPence, 3500);
+  assert.equal(flow.actualOnCardsPence, 53500);
 });

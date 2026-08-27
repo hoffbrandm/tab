@@ -60,7 +60,10 @@ test("Home has income, pending clear-all, and planned accordion hooks", () => {
   assert.match(app, /class="primary home-add-payslip"/);
   assert.match(app, /formatMoney\(flow\.savingsPence\)/);
   assert.match(app, /formatMoney\(flow\.totalSavingsPence\)/);
-  assert.doesNotMatch(app, /Allowed/);
+  // Allowed is not a statement row of its own; it reads as the small note that
+  // shows both sides of the check.
+  assert.doesNotMatch(app, /<span>Allowed<\/span>/);
+  assert.match(app, /data-statement-note/);
   assert.doesNotMatch(app, /flow\.leftPence/);
 });
 
@@ -151,4 +154,18 @@ test("Home has an Exceptions section that can add, edit, and delete", () => {
   assert.match(app, /edit: "edit-exception"/);
   assert.match(app, /removeAction: "remove-exception"/);
   assert.match(app, /"exception-form": saveException/);
+});
+
+test("modal saves flip in memory and write in the background", () => {
+  const update = app.slice(app.indexOf("async function withStoreUpdate"), app.indexOf("function applyLocal"));
+  assert.doesNotMatch(update, /await persist\(\)/);
+  assert.doesNotMatch(update, /await persistQueue\.flush\(\)/);
+  assert.match(update, /persistQueue\.schedule\(\)/);
+  assert.doesNotMatch(app, /let isSaving/);
+});
+
+test("the £100k helper takes grossed-up Gift Aid off, and never adds it on", () => {
+  assert.match(app, /giftAidReliefPence/);
+  assert.doesNotMatch(app, /giftAidAddBackPence/);
+  assert.match(app, /Grossed-up Gift Aid taken off/);
 });

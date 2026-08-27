@@ -16,6 +16,7 @@ import {
   keepPayslipFormRows,
   emptyHousehold,
   exceptionsForMonth,
+  exceptionsOutsideMonth,
   giftAidGrossPence,
   isCurrentMonth,
   jumpToCurrentMonthLabel,
@@ -68,7 +69,6 @@ let screen = parseHash();
 let modal = null;
 let boot = { name: "loading" };
 let sync = { name: "saved" };
-let isSaving = false;
 let storeGeneration = 0;
 let localImportOffered = false;
 let localSession = false;
@@ -236,22 +236,23 @@ async function persist() {
   }
 }
 
+/**
+ * Modal saves flip in memory, close, and write to the gist in the background —
+ * the same path ticks and table edits already take. Holding the form open on a
+ * round trip made every add and edit feel slow. A write that fails shows on the
+ * sync chip with a retry, and the queue keeps the change until it lands.
+ */
 async function withStoreUpdate(mutator) {
-  await persistQueue.flush();
-  if (isSaving) return false;
-  isSaving = true;
   const previous = structuredClone(store);
   try {
     mutator();
-    storeGeneration += 1;
-    await persist();
-    return true;
   } catch {
     store = previous;
     return false;
-  } finally {
-    isSaving = false;
   }
+  storeGeneration += 1;
+  persistQueue.schedule();
+  return true;
 }
 
 function applyLocal(mutator, { render: shouldRender = true } = {}) {
@@ -431,13 +432,29 @@ function moneyClass(pence) {
 }
 
 function overUnderLabel(flow) {
+  if (!flow.cardCheckKnown) return "Underspend";
   if (flow.overUnderPence < 0) return "Overspend";
   if (flow.overUnderPence > 0) return "Underspend";
   return "On budget";
 }
 
 function overUnderAmount(flow) {
+  if (!flow.cardCheckKnown) return "—";
   return formatMoney(Math.abs(flow.overUnderPence));
+}
+
+/**
+ * The check is two numbers and people need to see both to trust it: what the
+ * card is allowed to carry by today, against what it really carries.
+ */
+function statementNote(flow) {
+  if (!flow.cardCheckKnown) {
+    const names = flow.cardsMissingSnapshot.map((card) => card.name).join(", ");
+    return `No balance for ${monthLabel(flow.month)} on ${names}. Total savings is In − Out until one is in.`;
+  }
+  const allowed = `Allowed ${formatMoney(flow.allowanceSoFarPence)}`;
+  const exceptions = flow.exceptionsPence ? ` (incl. ${formatMoney(flow.exceptionsPence)} exceptions)` : "";
+  return `${allowed}${exceptions} · on cards ${formatMoney(flow.actualOnCardsPence)}`;
 }
 
 function statementSection(flow) {
@@ -458,6 +475,7 @@ function statementSection(flow) {
           <span data-statement-check-label>${overUnderLabel(flow)}</span>
           <strong class="${moneyClass(flow.overUnderPence)}" data-statement-check>${overUnderAmount(flow)}</strong>
         </div>
+        <p class="statement-note" data-statement-note>${esc(statementNote(flow))}</p>
         <div class="statement-row left">
           <span>Total savings</span>
           <strong class="${moneyClass(flow.totalSavingsPence)}" data-statement-total>${formatMoney(flow.totalSavingsPence)}</strong>
@@ -485,6 +503,7 @@ function refreshStatement() {
   set("[data-statement-savings]", formatMoney(flow.savingsPence), flow.savingsPence);
   set("[data-statement-check-label]", overUnderLabel(flow));
   set("[data-statement-check]", overUnderAmount(flow), flow.overUnderPence);
+  set("[data-statement-note]", statementNote(flow));
   set("[data-statement-total]", formatMoney(flow.totalSavingsPence), flow.totalSavingsPence);
 }
 
@@ -498,6 +517,7 @@ function cashflowScreen() {
   const pendingRows = flow.pendingRows || pendingsForMonth(hh, viewMonth, now);
   const planned = plannedForViewedMonth(hh);
   const exceptions = exceptionsForMonth(hh, viewMonth);
+  const otherExceptionCount = exceptionsOutsideMonth(hh, viewMonth).length;
   const otherPlannedCount = oneOffsOutsideMonth(hh, viewMonth).length;
   const incomeLines = flow.incomeLines || [];
 
@@ -528,7 +548,7 @@ function cashflowScreen() {
         </form>
       `)}
       ${homeAccordion("pending", "Pending", `
-        <p class="helper">Amounts from the statement. Total <strong data-pending-total>${formatMoney(pendingListTotalPence(pendingRows))}</strong>.</p>
+        <p class="helper">Amounts from the statement. Total <strong data-pending-total>${formatMoney(pendingListTotalPence(pendingRows))}</strong>.${flow.cardPendingPence ? ` A further <strong>${formatMoney(flow.cardPendingPence)}</strong> is typed as pending on the cards themselves, and both count. Keep each amount in one place only.` : ""}</p>
         <div class="pending-table" role="table" aria-label="Pending amounts">
           <div class="pending-head" role="row">
             <span role="columnheader">Amount</span>
@@ -552,6 +572,7 @@ function cashflowScreen() {
           removeAction: "remove-exception",
           removeLabel: "Delete",
         })).join("") : `<p class="helper">Nothing set aside in ${esc(period)}.</p>`}
+        ${otherExceptionCount ? `<p class="helper">${otherExceptionCount} exception${otherExceptionCount === 1 ? "" : "s"} in other months.</p>` : ""}
         <button class="text-button" type="button" data-action="add-exception">Add an exception</button>
       `)}
       ${homeAccordion("weeklies", "Weeklies", `
@@ -887,7 +908,7 @@ function aniScreen() {
   return shell({
     eyebrow: "Childcare cliff",
     title: "£100k ANI.",
-    lede: "Stay at or under £100,000 adjusted net income. YTD and the projection come from payslips. Gift Aid from giving in this tax year is included automatically.",
+    lede: "Stay at or under £100,000 adjusted net income. YTD and the projection come from payslips. Grossed-up Gift Aid from giving in this tax year comes off automatically.",
     back: "",
     extra: `
       <div class="ani-controls">
@@ -912,7 +933,7 @@ function aniScreen() {
           : result.overLimit
             ? `<p>Sacrifice another ${formatMoney(result.extraSacrificePence)} this tax year${formatExtraPercent(result)} to stay at £100k.${result.remainingMonths ? ` That’s ${formatMoney(result.extraPerRemainingMonthPence)} in each of the ${result.remainingMonths} remaining months.` : ""}</p>`
             : `<p>On this projection you’re ${formatMoney(result.underByPence)} under the £100k cliff.</p>`}
-        <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Gift Aid from giving ${formatMoney(result.giftAidAddBackPence)}.</p>
+        <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Grossed-up Gift Aid taken off: ${formatMoney(result.giftAidReliefPence)}.</p>
       </section>
     `,
   });

@@ -583,8 +583,16 @@ export function proRateDay(viewMonth, today = new Date()) {
  * pro-rated it by day-of-month; this app does not invent that pro-rate, so
  * reserves stay out of spentSoFar.
  */
+export function exceptionMonthKey(item) {
+  return coerceMonthKey(item?.month);
+}
+
 export function exceptionsForMonth(household, month) {
-  return (household?.exceptions || []).filter((item) => item.month === month);
+  return (household?.exceptions || []).filter((item) => exceptionMonthKey(item) === month);
+}
+
+export function exceptionsOutsideMonth(household, month) {
+  return (household?.exceptions || []).filter((item) => exceptionMonthKey(item) !== month);
 }
 
 export function exceptionsTotalPence(household, month) {
@@ -652,9 +660,14 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const allowedWithSubsPence = allowedPence;
   const cardBalancesPence = sumPence(cards, (item) => item.balancePence);
   const pendingRows = pendingsForMonth(household, month, today);
-  const pendingPence = sumPence(cards, (item) => item.pendingPence || 0)
-    + pendingListTotalPence(pendingRows);
+  const cardPendingPence = sumPence(cards, (item) => item.pendingPence || 0);
+  const pendingTablePence = pendingListTotalPence(pendingRows);
+  const pendingPence = cardPendingPence + pendingTablePence;
   const cardSidePence = cardBalancesPence + pendingPence;
+  // A card with no balance recorded for this month reads as £0, which would
+  // report the whole allowance as underspend. The check is unknown instead.
+  const cardsMissingSnapshot = cards.filter((item) => item.missingSnapshot);
+  const cardCheckKnown = cardsMissingSnapshot.length === 0;
   const tickedWeeklyPence = live.tickedWeeklyPence;
   const purchasedOneOffsPence = live.purchasedOneOffsPence;
   const dueCardMonthliesPence = live.dueCardMonthliesPence;
@@ -669,8 +682,8 @@ export function cashflowForMonth(household, month, today = new Date()) {
   // Sheet footer: Savings is In minus Out; the card check is the over/underspend
   // against the allowance; Total Savings adds the two.
   const savingsPence = leftPence;
-  const overUnderPence = allowanceSoFarPence - actualOnCardsPence;
-  const cardCheckPence = overUnderPence;
+  const cardCheckPence = allowanceSoFarPence - actualOnCardsPence;
+  const overUnderPence = cardCheckKnown ? cardCheckPence : 0;
   const totalSavingsPence = savingsPence + overUnderPence;
   const overspendPence = overUnderPence < 0 ? -overUnderPence : 0;
   const underspendPence = overUnderPence > 0 ? overUnderPence : 0;
@@ -704,8 +717,12 @@ export function cashflowForMonth(household, month, today = new Date()) {
     subsAllowedPence,
     allowedWithSubsPence,
     cardBalancesPence,
+    cardsMissingSnapshot,
+    cardCheckKnown,
     pendingRows,
     pendingPence,
+    cardPendingPence,
+    pendingTablePence,
     cardSidePence,
     overUnderPence,
     tickedWeeklyPence,
@@ -1066,6 +1083,11 @@ export function payslipAniPence(payslip) {
   return income + (payslip.benefitsPence || 0) - (payslip.salarySacrificePensionPence || 0);
 }
 
+/**
+ * Grossed-up Gift Aid donations for the tax year. Adjusted net income is net
+ * income less the *gross* donation (ITA 2007 s58), so an £80 gift with Gift
+ * Aid takes £100 off adjusted net income — it does not add the £20 uplift on.
+ */
 export function giftAidForTaxYear(donations, taxYear, { who } = {}) {
   const wanted = String(who || "").trim().toLowerCase();
   return sumPence(
@@ -1074,7 +1096,7 @@ export function giftAidForTaxYear(donations, taxYear, { who } = {}) {
       if (wanted && String(donation.who || "").trim().toLowerCase() !== wanted) return false;
       return true;
     }),
-    (donation) => giftAidGrossPence(donation.amountPence, true) - donation.amountPence,
+    (donation) => giftAidGrossPence(donation.amountPence, true),
   );
 }
 
@@ -1097,10 +1119,10 @@ export function aniProjection({
   const last = confirmed[confirmed.length - 1];
   const lastMonthlyPence = last ? payslipAniPence(last) : 0;
   const projectedRestPence = lastMonthlyPence * remainingMonths;
-  const giftAidAddBackPence = includeGiftAid
+  const giftAidReliefPence = includeGiftAid
     ? giftAidForTaxYear(donations, taxYear, { who: personName })
     : 0;
-  const projectedPence = ytdPence + projectedRestPence + giftAidAddBackPence;
+  const projectedPence = Math.max(0, ytdPence + projectedRestPence - giftAidReliefPence);
   const extraSacrificePence = Math.max(0, projectedPence - ANI_LIMIT_PENCE);
   const extraPerRemainingMonthPence = remainingMonths > 0
     ? Math.round(extraSacrificePence / remainingMonths)
@@ -1118,7 +1140,7 @@ export function aniProjection({
     ytdPence,
     lastMonthlyPence,
     projectedRestPence,
-    giftAidAddBackPence,
+    giftAidReliefPence,
     projectedPence,
     extraSacrificePence,
     extraPerRemainingMonthPence,

@@ -27,8 +27,12 @@ export function createPersistQueue({ persist, debounceMs = 400 } = {}) {
     }
     if (!queued) return;
     queued = false;
+    // A failed write already reports itself; swallow it here so a rejection
+    // never escapes the debounce timer as an unhandled error, and so the next
+    // change still gets its own attempt.
     inFlight = Promise.resolve()
       .then(() => persist?.())
+      .catch(() => {})
       .finally(() => {
         inFlight = null;
         if (queued) flush();
