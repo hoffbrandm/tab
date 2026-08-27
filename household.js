@@ -359,6 +359,7 @@ export function weeklyRulesOf(household) {
     timesPerMonth: 4,
     weekday: 2,
     tickedKeys: tickedKeysFromHappenedDates(item.happenedDates),
+    paidFrom: weeklyPaidFrom(item),
   }));
 }
 
@@ -388,6 +389,7 @@ export function weeklySlotsForMonth(household, month) {
         date: DATE.test(key) ? key : "",
         ticked: (rule.tickedKeys || []).includes(`${month}:${key}`),
         adHoc: false,
+        paidFrom: weeklyPaidFrom(rule),
       });
     }
   }
@@ -404,6 +406,7 @@ export function weeklySlotsForMonth(household, month) {
       date: "",
       ticked: Boolean(extra.happened),
       adHoc: true,
+      paidFrom: weeklyPaidFrom(extra),
     });
   }
   return slots;
@@ -490,6 +493,10 @@ export function monthlyDueLabel(item, month) {
 export function monthlyIsAllowed(item, month, dayOfMonth) {
   const due = effectiveDueDay(item, month);
   return due > 0 && due <= dayOfMonth;
+}
+
+export function weeklyPaidFrom(item) {
+  return item?.paidFrom === "cash" ? "cash" : "card";
 }
 
 export function toggleWeeklySlotTick(household, slotId, month) {
@@ -603,6 +610,17 @@ export function cashflowForMonth(household, month, today = new Date()) {
     + pendingListTotalPence(pendingRows);
   const cardSidePence = cardBalancesPence + pendingPence;
   const overUnderPence = allowedPence - cardSidePence;
+  const tickedWeeklyPence = sumPence(
+    weeklySlots.filter((slot) => slot.ticked),
+    (item) => item.amountPence,
+  );
+  const purchasedOneOffsPence = sumPence(
+    oneOffs.filter((item) => item.purchased),
+    (item) => item.estimatePence,
+  );
+  const spentSoFarPence = tickedWeeklyPence + allowedPence + purchasedOneOffsPence;
+  const actualOnCardsPence = cardSidePence;
+  const savingsPence = spentSoFarPence - actualOnCardsPence;
 
   return {
     month,
@@ -637,6 +655,11 @@ export function cashflowForMonth(household, month, today = new Date()) {
     pendingPence,
     cardSidePence,
     overUnderPence,
+    tickedWeeklyPence,
+    purchasedOneOffsPence,
+    spentSoFarPence,
+    actualOnCardsPence,
+    savingsPence,
   };
 }
 

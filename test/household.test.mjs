@@ -48,6 +48,7 @@ import {
   weeklyCadenceLabel,
   weeklySlotKeysForRule,
   weeklySlotsForMonth,
+  weeklyPaidFrom,
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
@@ -131,6 +132,10 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
   assert.equal(flow.cardOutPence, 11000);
   assert.equal(flow.outPence, 229000);
   assert.equal(flow.leftPence, 271000);
+  assert.equal(flow.remainingAfterPlanPence, 271000);
+  assert.equal(flow.spentSoFarPence, 9000);
+  assert.equal(flow.actualOnCardsPence, 100000);
+  assert.equal(flow.savingsPence, -91000);
   assert.equal(flow.committedOutPence, 229000);
   assert.equal(flow.potPence, 271000);
   assert.equal(flow.daysInMonth, 31);
@@ -143,6 +148,8 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
   assert.equal(reserved.reservePence, 90000);
   assert.equal(reserved.outPence, 319000);
   assert.equal(reserved.leftPence, 181000);
+  assert.equal(reserved.spentSoFarPence, flow.spentSoFarPence);
+  assert.equal(reserved.savingsPence, flow.savingsPence);
 
   const future = cashflowForMonth(household, "2026-09", today);
   assert.equal(future.billsPence, 140000);
@@ -686,11 +693,126 @@ test("weekly ticks and purchased one-offs do not move Out", () => {
   toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
   const afterTick = cashflowForMonth(hh, "2026-08", today);
   assert.equal(afterTick.outPence, before.outPence);
+  assert.equal(afterTick.incomePence, before.incomePence);
   assert.equal(afterTick.weeklySlots.filter((slot) => slot.ticked).length, 1);
   hh.oneOffs[0].purchased = true;
   const afterBuy = cashflowForMonth(hh, "2026-08", today);
   assert.equal(afterBuy.outPence, before.outPence);
   assert.equal(afterBuy.oneOffsPence, 40000);
+});
+
+test("ticking a £100 weekly leaves In and Out the same and raises savings by £100", () => {
+  const hh = {
+    ...emptyHousehold(),
+    weeklyRules: [{
+      id: "amazon",
+      name: "Amazon",
+      amountPence: 10000,
+      cadence: "times",
+      timesPerMonth: 1,
+      tickedKeys: [],
+    }],
+    cards: [{
+      id: "c-1",
+      name: "Card",
+      balancePence: 25000,
+      pendingPence: 4000,
+      updatedOn: "2026-08-26",
+    }],
+    pendings: [{ id: "p-1", amountPence: 1500, note: "hold", month: "2026-08" }],
+  };
+  const today = new Date("2026-08-26T12:00:00Z");
+  const before = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(before.incomePence, 0);
+  assert.equal(before.outPence, 10000);
+  assert.equal(before.spentSoFarPence, 0);
+  assert.equal(before.actualOnCardsPence, 30500);
+  assert.equal(before.savingsPence, -30500);
+  assert.equal(before.weeklySlots[0].paidFrom, "card");
+  toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
+  const after = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(after.incomePence, before.incomePence);
+  assert.equal(after.outPence, before.outPence);
+  assert.equal(after.actualOnCardsPence, before.actualOnCardsPence);
+  assert.equal(after.spentSoFarPence, 10000);
+  assert.equal(after.savingsPence, before.savingsPence + 10000);
+  toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
+  const undone = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(undone.savingsPence, before.savingsPence);
+  assert.equal(undone.spentSoFarPence, 0);
+});
+
+test("a ticked cash weekly still counts in spent so far", () => {
+  const hh = {
+    ...emptyHousehold(),
+    weeklyRules: [{
+      id: "food",
+      name: "Food shop",
+      amountPence: 7000,
+      cadence: "times",
+      timesPerMonth: 1,
+      paidFrom: "cash",
+      tickedKeys: ["2026-08:1"],
+    }],
+  };
+  const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
+  assert.equal(weeklyPaidFrom({}), "card");
+  assert.equal(weeklyPaidFrom({ paidFrom: "cash" }), "cash");
+  assert.equal(flow.weeklySlots[0].paidFrom, "cash");
+  assert.equal(flow.spentSoFarPence, 7000);
+  assert.equal(flow.outPence, 7000);
+});
+
+test("a card monthly due on day 1 counts in spent so far on day 26 without a tick", () => {
+  const hh = {
+    ...emptyHousehold(),
+    monthlies: [{
+      id: "phone",
+      name: "Phone",
+      amountPence: 4500,
+      dueDay: 1,
+      paidFrom: "card",
+    }],
+  };
+  const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
+  assert.equal(flow.spentSoFarPence, 4500);
+  assert.equal(flow.outPence, 4500);
+  assert.equal(flow.savingsPence, 4500);
+});
+
+test("a future month date-gates spent so far unless already ticked or purchased", () => {
+  const hh = {
+    ...emptyHousehold(),
+    weeklyRules: [{
+      id: "amazon",
+      name: "Amazon",
+      amountPence: 10000,
+      cadence: "times",
+      timesPerMonth: 1,
+      tickedKeys: [],
+    }],
+    monthlies: [{
+      id: "phone",
+      name: "Phone",
+      amountPence: 4500,
+      dueDay: 1,
+      paidFrom: "card",
+    }],
+    oneOffs: [{ id: "o-1", name: "MOT", month: "2026-09", estimatePence: 20000, purchased: false }],
+  };
+  const today = new Date("2026-08-26T12:00:00Z");
+  const september = cashflowForMonth(hh, "2026-09", today);
+  assert.equal(september.dayOfMonth, 0);
+  assert.equal(september.outPence, 34500);
+  assert.equal(september.spentSoFarPence, 0);
+  assert.equal(september.savingsPence, 0);
+  toggleWeeklySlotTick(hh, september.weeklySlots[0].id, "2026-09");
+  hh.oneOffs[0].purchased = true;
+  const after = cashflowForMonth(hh, "2026-09", today);
+  assert.equal(after.outPence, september.outPence);
+  assert.equal(after.incomePence, september.incomePence);
+  assert.equal(after.spentSoFarPence, 30000);
+  assert.equal(after.savingsPence, 30000);
 });
 
 test("the settings category list keeps the sheet column set after a slip is saved", () => {

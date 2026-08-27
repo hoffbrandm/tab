@@ -49,6 +49,10 @@ test("Home has income, pending clear-all, and planned accordion hooks", () => {
   assert.match(app, /data-action="clear-pending"/);
   assert.match(app, /data-action="add-payslip"/);
   assert.match(app, /class="primary home-add-payslip"/);
+  assert.match(app, /formatMoney\(flow\.savingsPence\)/);
+  assert.match(app, /Left \/ savings/);
+  assert.doesNotMatch(app, /Allowed/);
+  assert.doesNotMatch(app, /flow\.leftPence/);
 });
 
 test("Home Planned and the Planned room keep one add control", () => {
