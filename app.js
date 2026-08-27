@@ -51,6 +51,7 @@ import { readHomeSectionState, writeHomeSectionOpen } from "./home-sections.js";
 import { createPersistQueue } from "./persist-queue.js";
 import { createSession } from "./session.js";
 import { emptyStore, parseStore } from "./store.js";
+import { SWIPE_DELETE_WIDTH, swipeAxis, swipeOffset, swipeShouldOpen } from "./swipe-row.js";
 
 const LOCAL_KEY = "tab.personal.v1";
 const SCREENS = ["home", "weeklies", "monthlies", "planned", "annual", "pots", "payslips", "ani", "giving", "more", "tabs"];
@@ -74,6 +75,9 @@ let viewMonth = monthKey();
 let aniPersonId = null;
 let aniTaxYear = null;
 let payslipTaxYear = null;
+let lastDeleted = null;
+let swipeState = null;
+let suppressClick = false;
 
 const persistQueue = createPersistQueue({
   persist: () => persist(),
@@ -401,14 +405,20 @@ function moneyControl({ id = "", name = "", pence = 0, value, extra = "", requir
   return `<div class="money-input"><span class="money-prefix" aria-hidden="true">£</span><input${id ? ` id="${esc(id)}"` : ""}${name ? ` name="${esc(name)}"` : ""}${required ? " required" : ""} inputmode="decimal" value="${esc(shown)}" placeholder="${esc(placeholder)}" autocomplete="off"${extra ? ` ${extra}` : ""} /></div>`;
 }
 
-function lineRow({ edit, id, title, detail, amount, tickAction, ticked, tickLabel, tickId }) {
-  return `<article class="line">
-    ${tickAction ? `<button class="tick${ticked ? " on" : ""}" type="button" data-action="${tickAction}" data-id="${esc(tickId || id)}" aria-pressed="${ticked ? "true" : "false"}" aria-label="${esc(tickLabel || (ticked ? "Done" : "Not done"))}"><span class="tick-box" aria-hidden="true">${ticked ? "✓" : ""}</span></button>` : ""}
+function lineRow({ edit, id, title, detail, amount, tickAction, ticked, tickLabel, tickId, removeAction, removeLabel = "Delete" }) {
+  const inner = `${tickAction ? `<button class="tick${ticked ? " on" : ""}" type="button" data-action="${tickAction}" data-id="${esc(tickId || id)}" aria-pressed="${ticked ? "true" : "false"}" aria-label="${esc(tickLabel || (ticked ? "Done" : "Not done"))}"><span class="tick-box" aria-hidden="true">${ticked ? "✓" : ""}</span></button>` : ""}
     <button class="line-main" type="button" data-action="${edit}" data-id="${esc(id)}">
       <span class="line-copy"><strong>${esc(title)}</strong>${detail ? `<small>${esc(detail)}</small>` : ""}</span>
       <span class="line-amount">${amount}</span>
     </button>
-  </article>`;
+    ${removeAction ? `<button class="row-remove" type="button" data-action="${removeAction}" data-id="${esc(id)}" aria-label="${esc(removeLabel)}">×</button>` : ""}`;
+  if (!removeAction) return `<article class="line">${inner}</article>`;
+  return `<div class="swipe-row" data-swipe>
+    <div class="swipe-row-actions">
+      <button class="swipe-delete" type="button" data-action="${removeAction}" data-id="${esc(id)}">${esc(removeLabel)}</button>
+    </div>
+    <article class="line swipe-row-front">${inner}</article>
+  </div>`;
 }
 
 function emptyLines(text, action, label) {
@@ -509,6 +519,8 @@ function cashflowScreen() {
           tickAction: "toggle-oneoff",
           ticked: item.purchased,
           tickLabel: item.purchased ? "Purchased" : "Not purchased",
+          removeAction: "remove-oneoff",
+          removeLabel: "Delete",
         })).join("") : homePlannedEmpty(period, otherPlannedCount)}
         <button class="text-button" type="button" data-action="add-oneoff">Add</button>
       `)}
@@ -593,6 +605,8 @@ function monthliesScreen() {
           title: item.name,
           detail: `${item.paidFrom === "cash" ? "Cash" : "Card"} · ${monthlyDueLabel(item, viewMonth)}`,
           amount: formatMoney(item.amountPence),
+          removeAction: "remove-monthly",
+          removeLabel: "Delete",
         })).join("") : emptyLines("Phone on the 21st. Mortgage on the 1st. Due date only — no ticks.", "add-monthly", "Add a monthly")}
       </section>
       <section class="block">
@@ -650,6 +664,8 @@ function oneOffRow(item) {
     tickAction: "toggle-oneoff",
     ticked: item.purchased,
     tickLabel: item.purchased ? "Purchased" : "Not purchased",
+    removeAction: "remove-oneoff",
+    removeLabel: "Delete",
   });
 }
 
@@ -1403,11 +1419,55 @@ function donationForm() {
   </form>`;
 }
 
-function showToast(message) {
-  toast.textContent = message;
+function showToast(message, { action, actionLabel } = {}) {
+  toast.replaceChildren(document.createTextNode(message));
+  if (action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "toast-undo";
+    button.dataset.action = action;
+    button.textContent = actionLabel || "Undo";
+    toast.append(" ", button);
+  }
+  toast.classList.toggle("has-action", Boolean(action));
   toast.classList.add("show");
   clearTimeout(showToast.timeout);
-  showToast.timeout = setTimeout(() => toast.classList.remove("show"), 2600);
+  showToast.timeout = setTimeout(() => {
+    toast.classList.remove("show");
+    toast.classList.remove("has-action");
+  }, action ? 4200 : 2600);
+}
+
+function closeSwipeRows(except) {
+  document.querySelectorAll(".swipe-row.open").forEach((row) => {
+    if (row !== except) {
+      row.classList.remove("open");
+      const front = row.querySelector(".swipe-row-front");
+      if (front) front.style.transform = "";
+    }
+  });
+}
+
+function finishSwipe(open) {
+  if (!swipeState?.row) {
+    swipeState = null;
+    return;
+  }
+  const { row } = swipeState;
+  const front = row.querySelector(".swipe-row-front");
+  row.classList.toggle("open", open);
+  if (front) front.style.transform = "";
+  swipeState = null;
+}
+
+function removeListedItem(list, id, label) {
+  const item = findIn(list, id);
+  if (!item) return;
+  lastDeleted = { list, item: structuredClone(item) };
+  applyLocal(() => {
+    household()[list] = (household()[list] || []).filter((row) => row.id !== id);
+  });
+  showToast(`Deleted ${label}`, { action: "undo-delete", actionLabel: "Undo" });
 }
 
 function showFormError(message) {
@@ -1490,8 +1550,15 @@ function signOut() {
 
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
+  const swipeRow = event.target.closest("[data-swipe]");
+  if (!event.target.closest(".swipe-delete, .row-remove")) closeSwipeRows(swipeRow);
   if (!target) return;
   const { action, id, screen: nextScreen, extra } = target.dataset;
+  if (swipeRow?.classList.contains("open") && action !== "remove-oneoff" && action !== "remove-monthly" && action !== "toggle-oneoff") {
+    event.preventDefault();
+    closeSwipeRows();
+    return;
+  }
 
   if (action === "go") {
     event.preventDefault();
@@ -1558,6 +1625,28 @@ document.addEventListener("click", async (event) => {
       const item = findIn("oneOffs", id);
       if (item) item.purchased = !item.purchased;
     });
+  }
+  if (action === "remove-oneoff") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("oneOffs", id, "one-off");
+  }
+  if (action === "remove-monthly") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("monthlies", id, "monthly");
+  }
+  if (action === "undo-delete") {
+    event.preventDefault();
+    if (!lastDeleted) return;
+    const restored = lastDeleted;
+    lastDeleted = null;
+    applyLocal(() => {
+      const list = household()[restored.list] || [];
+      if (!list.some((row) => row.id === restored.item.id)) list.push(restored.item);
+      household()[restored.list] = list;
+    });
+    showToast("Restored");
   }
   if (action === "tick-envelope" || action === "tick-weekly-slot") {
     event.preventDefault();
@@ -1762,6 +1851,64 @@ document.addEventListener("toggle", (event) => {
     writeHomeSectionOpen(window.sessionStorage, section.dataset.homeSection, section.open);
   }
 }, true);
+
+document.addEventListener("pointerdown", (event) => {
+  const ignore = event.target.closest(".tick, .row-remove, .swipe-delete, input, select, textarea, .text-button, .primary");
+  const row = event.target.closest("[data-swipe]");
+  if (ignore || !row) {
+    if (!row) closeSwipeRows();
+    return;
+  }
+  swipeState = {
+    row,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    offset: row.classList.contains("open") ? -SWIPE_DELETE_WIDTH : 0,
+    opened: row.classList.contains("open"),
+    axis: "",
+  };
+}, { passive: true });
+
+document.addEventListener("pointermove", (event) => {
+  if (!swipeState || event.pointerId !== swipeState.pointerId) return;
+  const dx = event.clientX - swipeState.startX;
+  const dy = event.clientY - swipeState.startY;
+  if (!swipeState.axis) {
+    swipeState.axis = swipeAxis(dx, dy);
+    if (swipeState.axis !== "x") {
+      if (swipeState.axis === "y") swipeState = null;
+      return;
+    }
+    closeSwipeRows(swipeState.row);
+    swipeState.row.setPointerCapture?.(event.pointerId);
+  }
+  const front = swipeState.row.querySelector(".swipe-row-front");
+  swipeState.offset = swipeOffset(swipeState.opened, dx);
+  if (front) front.style.transform = `translateX(${swipeState.offset}px)`;
+}, { passive: true });
+
+document.addEventListener("pointerup", (event) => {
+  if (!swipeState || event.pointerId !== swipeState.pointerId) return;
+  if (swipeState.axis !== "x") {
+    swipeState = null;
+    return;
+  }
+  suppressClick = true;
+  finishSwipe(swipeShouldOpen(swipeState.offset));
+}, { passive: true });
+
+document.addEventListener("click", (event) => {
+  if (!suppressClick) return;
+  event.preventDefault();
+  event.stopPropagation();
+  suppressClick = false;
+}, true);
+
+document.addEventListener("pointercancel", () => {
+  if (!swipeState) return;
+  finishSwipe(swipeState.opened);
+});
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && modal) closeModal();

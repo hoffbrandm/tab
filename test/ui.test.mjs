@@ -65,3 +65,18 @@ test("Home Planned and the Planned room keep one add control", () => {
   assert.doesNotMatch(plannedRoom, /emptyLines\([^)]*"add-oneoff"/);
   assert.match(app, /if \(payload\.oneOffsRewritten\) persist\(\)/);
 });
+
+test("planned and monthly rows can swipe left to delete and keep a red X", () => {
+  assert.match(app, /removeAction: "remove-oneoff"/);
+  assert.match(app, /removeAction: "remove-monthly"/);
+  assert.match(app, /class="swipe-row" data-swipe/);
+  assert.match(app, /class="swipe-delete"/);
+  assert.match(app, /class="row-remove"/);
+  assert.match(app, /action === "undo-delete"/);
+  assert.match(css, /\.swipe-delete/);
+  assert.match(css, /background:\s*var\(--red\)/);
+  assert.match(rule(".swipe-row"), /overflow:\s*hidden/);
+  assert.match(rule(".swipe-row.open .swipe-row-front"), /translateX\(-88px\)/);
+  assert.match(app, /action === "remove-oneoff"/);
+  assert.match(app, /action === "remove-monthly"/);
+});

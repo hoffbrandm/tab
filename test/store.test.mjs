@@ -324,6 +324,26 @@ test("imported one-offs move to this year and previous months are dropped", () =
   assert.equal(gistOneOffsNeedRewrite(parsed, parsed), false);
 });
 
+test("September load drops August planned rows, including purchased", () => {
+  const today = new Date("2026-09-10T12:00:00Z");
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      oneOffs: [
+        { id: "o-open", name: "Open item", month: "2026-08", estimatePence: 5000, purchased: false },
+        { id: "o-bought", name: "Bought item", month: "2026-08", estimatePence: 7000, purchased: true },
+        { id: "o-later", name: "Later item", month: "2025-09", estimatePence: 3000, purchased: false },
+      ],
+    },
+  }, today);
+  assert.deepEqual(parsed.household.oneOffs.map((item) => `${item.id}:${item.month}`), ["o-later:2026-09"]);
+  assert.deepEqual(oneOffsForMonth(parsed.household, "2026-08"), []);
+  assert.deepEqual(oneOffsForMonth(parsed.household, "2026-09").map((item) => item.id), ["o-later"]);
+});
+
 test("weekday weekly rules keep their calendar cadence", () => {
   const parsed = parseStore({
     version: 1,
