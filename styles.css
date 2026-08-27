@@ -392,17 +392,35 @@ input, select {
 select { appearance: auto; }
 .optional { color: var(--muted); font-weight: 500; }
 
-.money-input { position: relative; }
-.money-input span {
-  position: absolute;
-  z-index: 1;
-  top: 15px;
-  left: 14px;
+.money-input {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 51px;
+  border: 1px solid #d7d6d0;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+.money-input .money-prefix {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px 0 13px;
   font-size: 1.12rem;
   color: var(--muted);
+  line-height: 1;
+  pointer-events: none;
 }
 .money-input input {
-  padding-left: 31px;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  border: 0;
+  background: transparent;
+  min-height: 51px;
+  padding: 0 12px 0 0;
+  border-radius: 0;
   font-size: 1.22rem;
   font-weight: 750;
 }
@@ -618,17 +636,17 @@ legend { padding: 0; margin-bottom: 7px; }
 }
 .card-balance-row .line-main { padding-right: 0; }
 .card-balance-row .money-input {
-  width: 118px;
+  width: 128px;
   flex: none;
 }
 .home-add-card {
   display: grid;
-  grid-template-columns: 1fr 118px auto;
+  grid-template-columns: 1fr 128px auto;
   gap: 8px;
   align-items: center;
   padding: 12px 0 4px;
 }
-.home-add-card input {
+.home-add-card > input {
   width: 100%;
   min-height: 46px;
   border: 1px solid var(--line);
@@ -640,7 +658,7 @@ legend { padding: 0; margin-bottom: 7px; }
 .pending-head,
 .pending-row {
   display: grid;
-  grid-template-columns: 118px 1fr 36px;
+  grid-template-columns: 128px 1fr 36px;
   gap: 8px;
   align-items: center;
 }
@@ -651,7 +669,7 @@ legend { padding: 0; margin-bottom: 7px; }
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
-.pending-row input {
+.pending-row > input {
   width: 100%;
   min-height: 46px;
   border: 1px solid var(--line);
@@ -659,18 +677,59 @@ legend { padding: 0; margin-bottom: 7px; }
   padding: 0 12px;
   background: var(--card);
 }
-.home-planned {
-  margin-top: 18px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
+.home-add-card .money-input,
+.pending-row .money-input,
+.card-balance-row .money-input {
+  min-height: 46px;
+  border-color: var(--line);
   background: var(--card);
-  padding: 4px 14px 12px;
 }
-.home-planned summary {
+.home-add-card .money-input input,
+.pending-row .money-input input,
+.card-balance-row .money-input input {
+  min-height: 46px;
+  width: auto;
+  border: 0;
+  padding-left: 8px;
+}
+.home-section {
+  margin-top: 8px;
+}
+.home-section > summary {
   cursor: pointer;
+  list-style: none;
+  padding: 20px 0 10px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
   font-weight: 800;
-  padding: 12px 0;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.035em;
+  font-size: 1.12rem;
+}
+.home-section > summary::-webkit-details-marker { display: none; }
+.home-section > summary::after {
+  content: "›";
+  color: #9ba29e;
+  font-size: 1.4rem;
+  font-weight: 300;
+  transform: rotate(90deg);
+  line-height: 0.8;
+}
+.home-section:not([open]) > summary::after {
+  transform: rotate(0deg);
+}
+.home-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+  padding: 8px 0 4px;
+}
+.home-add-payslip {
+  margin: 8px 0 4px;
+  min-height: 48px;
+  padding: 0 18px;
 }
 .payslip-cats {
   display: grid;

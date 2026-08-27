@@ -6,7 +6,11 @@ export const DEFAULT_PEOPLE = [
   { id: "person-partner", name: "Partner" },
 ];
 export const PENSION_STATUSES = ["active", "deferred", "drawing", "other"];
-export const WEEKLY_CADENCES = ["once", "times", "weekday"];
+export const WEEKLY_CADENCES = ["times", "weekday"];
+export const WEEKLY_CADENCE_OPTIONS = [
+  { value: "times", label: "N times a month" },
+  { value: "weekday", label: "Every week on a chosen weekday" },
+];
 export const WEEKDAYS = [
   { value: 1, label: "Monday" },
   { value: 2, label: "Tuesday" },
@@ -48,6 +52,20 @@ export const DEFAULT_PAYSLIP_CATEGORIES = [
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH = /^\d{4}-\d{2}$/;
 const TAX_YEAR = /^\d{4}-\d{2}$/;
+const MONTH_NAMES = {
+  january: 1, jan: 1,
+  february: 2, feb: 2,
+  march: 3, mar: 3,
+  april: 4, apr: 4,
+  may: 5,
+  june: 6, jun: 6,
+  july: 7, jul: 7,
+  august: 8, aug: 8,
+  september: 9, sep: 9, sept: 9,
+  october: 10, oct: 10,
+  november: 11, nov: 11,
+  december: 12, dec: 12,
+};
 
 export function emptyHousehold() {
   return {
@@ -286,15 +304,32 @@ export function datesOfWeekdayInMonth(month, weekday) {
   return dates;
 }
 
+export function normalizeWeeklyCadence(rule = {}) {
+  if (rule.cadence === "weekday") {
+    return { cadence: "weekday", weekday: Number(rule.weekday) };
+  }
+  if (rule.cadence === "once") {
+    return { cadence: "times", timesPerMonth: 1 };
+  }
+  const times = Number(rule.timesPerMonth);
+  return {
+    cadence: "times",
+    timesPerMonth: Number.isInteger(times) && times >= 1 && times <= 12 ? times : 1,
+  };
+}
+
+export function assertWeeklyRuleAmount(amountPence) {
+  if (!Number.isInteger(amountPence) || amountPence <= 0) {
+    throw new Error("Typical amount is required.");
+  }
+  return amountPence;
+}
+
 export function weeklySlotKeysForRule(rule, month) {
   if (!rule) return [];
-  if (rule.cadence === "weekday") return datesOfWeekdayInMonth(month, rule.weekday);
-  if (rule.cadence === "times") {
-    const times = Number(rule.timesPerMonth);
-    const count = Number.isInteger(times) && times > 0 ? times : 1;
-    return Array.from({ length: count }, (_, index) => String(index + 1));
-  }
-  return ["1"];
+  const next = normalizeWeeklyCadence(rule);
+  if (next.cadence === "weekday") return datesOfWeekdayInMonth(month, next.weekday);
+  return Array.from({ length: next.timesPerMonth }, (_, index) => String(index + 1));
 }
 
 export function tickedKeysFromHappenedDates(dates) {
@@ -375,15 +410,12 @@ export function weeklySlotsForMonth(household, month) {
 }
 
 export function weeklyCadenceLabel(rule) {
-  if (rule?.cadence === "weekday") {
-    const day = weekdayLabel(rule.weekday);
-    return day ? `Every week on ${day}` : "Every week on a weekday";
+  const next = normalizeWeeklyCadence(rule);
+  if (next.cadence === "weekday") {
+    const day = weekdayLabel(next.weekday);
+    return day ? `Every week on ${day}` : "Every week on a chosen weekday";
   }
-  if (rule?.cadence === "times") {
-    const times = Number(rule.timesPerMonth) || 1;
-    return times === 1 ? "Once a month" : `${times} times a month`;
-  }
-  return "Once a month";
+  return next.timesPerMonth === 1 ? "Once a month" : `${next.timesPerMonth} times a month`;
 }
 
 export function isUkWeekend(dateStr) {
@@ -543,7 +575,7 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const cardMonthlies = monthlies.filter((item) => item.paidFrom !== "cash");
   const weeklySlots = weeklySlotsForMonth(household, month);
   const cards = cardsForMonth(household, month, today);
-  const oneOffs = (household?.oneOffs || []).filter((item) => item.month === month);
+  const oneOffs = oneOffsForMonth(household, month);
   const annualBills = household?.annualBills || [];
   const days = daysInMonthKey(month);
   const dayOfMonth = proRateDay(month, today);
@@ -849,6 +881,52 @@ export function pendingsForMonth(household, month, today = new Date()) {
 
 export function pendingListTotalPence(pendings) {
   return sumPence(pendings, (item) => item.amountPence);
+}
+
+export function coerceMonthKey(value, fallbackYear = new Date().getFullYear()) {
+  if (value == null || value === "") return "";
+  if (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 12) {
+    const year = Number.isInteger(fallbackYear) ? fallbackYear : new Date().getFullYear();
+    return `${year}-${String(value).padStart(2, "0")}`;
+  }
+  const raw = String(value).trim();
+  if (parseMonthKey(raw)) return raw;
+  if (DATE.test(raw)) return raw.slice(0, 7);
+  const padded = raw.match(/^(\d{4})-(\d{1,2})$/);
+  if (padded) {
+    const month = Number(padded[2]);
+    if (month >= 1 && month <= 12) return `${padded[1]}-${String(month).padStart(2, "0")}`;
+  }
+  const dotted = raw.match(/^(\d{4})[/.](\d{1,2})$/);
+  if (dotted) {
+    const month = Number(dotted[2]);
+    if (month >= 1 && month <= 12) return `${dotted[1]}-${String(month).padStart(2, "0")}`;
+  }
+  const namedYear = raw.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (namedYear && MONTH_NAMES[namedYear[1].toLowerCase()]) {
+    return `${namedYear[2]}-${String(MONTH_NAMES[namedYear[1].toLowerCase()]).padStart(2, "0")}`;
+  }
+  const named = MONTH_NAMES[raw.toLowerCase()];
+  if (named) {
+    const year = Number.isInteger(fallbackYear) ? fallbackYear : new Date().getFullYear();
+    return `${year}-${String(named).padStart(2, "0")}`;
+  }
+  return "";
+}
+
+export function oneOffMonthKey(item) {
+  return coerceMonthKey(item?.month);
+}
+
+export function oneOffsForMonth(household, month) {
+  return (household?.oneOffs || []).filter((item) => oneOffMonthKey(item) === month);
+}
+
+export function clearPendingsForMonth(household, month, today = new Date()) {
+  const items = household?.pendings || [];
+  const visible = new Set(pendingsForMonth(household, month, today).map((item) => item.id));
+  household.pendings = items.filter((item) => !visible.has(item.id));
+  return household;
 }
 
 export function addPendingRow(household, { id, amountPence = 0, note = "", month = "" } = {}) {

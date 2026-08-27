@@ -5,7 +5,9 @@ import {
   emptyHousehold,
   isIsoDate,
   isMonthKey,
+  coerceMonthKey,
   isTaxYearLabel,
+  normalizeWeeklyCadence,
   PAYSLIP_CATEGORY_KINDS,
   PENSION_STATUSES,
   payslipCategoriesOf,
@@ -350,23 +352,19 @@ function parseWeeklyRule(rule) {
   if (!rule || typeof rule !== "object" || Array.isArray(rule)) {
     throw new StoreError("Each weekly rule must be an object.");
   }
-  const cadence = ["once", "times", "weekday"].includes(rule.cadence) ? rule.cadence : "once";
+  const next = normalizeWeeklyCadence(rule);
   const parsed = {
     id: requiredId(rule.id, "Weekly rule"),
     name: requiredName(rule.name, "Weekly rule"),
     amountPence: moneyPence(rule.amountPence, "Weekly rule"),
-    cadence,
+    cadence: next.cadence,
     tickedKeys: tickKeyList(rule.tickedKeys, "Weekly rule"),
   };
-  if (cadence === "times") {
-    const times = Number(rule.timesPerMonth == null ? 2 : rule.timesPerMonth);
-    if (!Number.isInteger(times) || times < 1 || times > 12) {
-      throw new StoreError("Times a month must be 1 to 12.");
-    }
-    parsed.timesPerMonth = times;
+  if (next.cadence === "times") {
+    parsed.timesPerMonth = next.timesPerMonth;
   }
-  if (cadence === "weekday") {
-    const weekday = Number(rule.weekday);
+  if (next.cadence === "weekday") {
+    const weekday = Number(next.weekday);
     if (!Number.isInteger(weekday) || weekday < 1 || weekday > 7) {
       throw new StoreError("Weekday must be Monday (1) to Sunday (7).");
     }
@@ -417,11 +415,12 @@ function parseOneOff(item) {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     throw new StoreError("Each planned one-off must be an object.");
   }
-  if (!isMonthKey(item.month)) throw new StoreError("One-off month must be YYYY-MM.");
+  const month = coerceMonthKey(item.month);
+  if (!isMonthKey(month)) throw new StoreError("One-off month must be YYYY-MM.");
   return {
     id: requiredId(item.id, "One-off"),
     name: requiredName(item.name, "One-off"),
-    month: item.month,
+    month,
     estimatePence: moneyPence(item.estimatePence, "One-off"),
     purchased: Boolean(item.purchased),
   };
