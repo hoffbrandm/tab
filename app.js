@@ -600,7 +600,7 @@ function monthliesScreen() {
   return shell({
     eyebrow: "Monthlies",
     title: "Standing outs.",
-    lede: "Name, amount, and due day. Optional first working day. These are config — they are not ticked. Cash lines, card lines, and reserve lines count in Out for the whole month on screen.",
+    lede: "Name, amount, and due day. Optional first working day. These are config — they are not ticked. Cash lines, card lines, and reserve lines count in Out for the whole month on screen. Cash lines do not move Left / savings. Card lines do, on the due date, with no tick.",
     month: true,
     body: `
       <section class="block">

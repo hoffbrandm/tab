@@ -39,6 +39,14 @@ test("weekly rule form drops Once a month and requires typical amount", () => {
   assert.doesNotMatch(app, /Every weekday</);
 });
 
+test("standing monthlies have no tick control", () => {
+  const monthlies = app.match(/function monthliesScreen\(\) \{[\s\S]*?\nfunction plannedForViewedMonth/)?.[0] || "";
+  assert.match(monthlies, /they are not ticked/);
+  assert.doesNotMatch(monthlies, /tickAction/);
+  assert.doesNotMatch(app, /tick-monthly|toggle-monthly|tick-bill|tick-card-sub/);
+  assert.doesNotMatch(app, /data-action="tick-monthly"/);
+});
+
 test("Home has income, pending clear-all, and planned accordion hooks", () => {
   assert.match(app, /homeAccordion\("income"/);
   assert.match(app, /homeAccordion\("cards"/);

@@ -574,6 +574,40 @@ export function proRateDay(viewMonth, today = new Date()) {
   return today.getDate();
 }
 
+/**
+ * Live spend versus cards (sheet column L / footer). In and Out stay the month
+ * plan. Cash monthlies never enter this total. Cash-in-reserve / £30-a-day is
+ * a standing Out line only — the sheet pro-rated it by day-of-month; this app
+ * does not invent that pro-rate, so reserves stay out of spentSoFar.
+ */
+export function spentSoFarForMonth(household, month, today = new Date()) {
+  const dayOfMonth = proRateDay(month, today);
+  const monthlies = monthliesOf(household);
+  const cardMonthlies = monthlies.filter((item) => item.paidFrom !== "cash");
+  const weeklySlots = weeklySlotsForMonth(household, month);
+  const oneOffs = oneOffsForMonth(household, month);
+  const tickedWeeklyPence = sumPence(
+    weeklySlots.filter((slot) => slot.ticked),
+    (item) => item.amountPence,
+  );
+  const dueCardMonthlies = cardMonthlies.filter((item) => monthlyIsAllowed(item, month, dayOfMonth));
+  const dueCardMonthliesPence = sumPence(dueCardMonthlies, (item) => item.amountPence);
+  const purchasedOneOffsPence = sumPence(
+    oneOffs.filter((item) => item.purchased),
+    (item) => item.estimatePence,
+  );
+  const reserveSpentPence = 0;
+  return {
+    dayOfMonth,
+    tickedWeeklyPence,
+    dueCardMonthlies,
+    dueCardMonthliesPence,
+    purchasedOneOffsPence,
+    reserveSpentPence,
+    spentSoFarPence: tickedWeeklyPence + dueCardMonthliesPence + purchasedOneOffsPence + reserveSpentPence,
+  };
+}
+
 export function cashflowForMonth(household, month, today = new Date()) {
   const people = household?.people || [];
   const incomeLines = incomeLinesFromPayslips(household, month);
@@ -585,7 +619,8 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const oneOffs = oneOffsForMonth(household, month);
   const annualBills = household?.annualBills || [];
   const days = daysInMonthKey(month);
-  const dayOfMonth = proRateDay(month, today);
+  const live = spentSoFarForMonth(household, month, today);
+  const dayOfMonth = live.dayOfMonth;
 
   const incomePence = incomeFromPayslipsPence(household, month);
   const billsPence = sumPence(cashMonthlies, (item) => item.amountPence);
@@ -599,8 +634,8 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const committedOutPence = outPence;
   const potPence = leftPence;
   const remainingAfterPlanPence = leftPence;
-  const allowedMonthlies = cardMonthlies.filter((item) => monthlyIsAllowed(item, month, dayOfMonth));
-  const allowedPence = sumPence(allowedMonthlies, (item) => item.amountPence);
+  const allowedMonthlies = live.dueCardMonthlies;
+  const allowedPence = live.dueCardMonthliesPence;
   const allowedSoFarPence = allowedPence;
   const subsAllowedPence = allowedPence;
   const allowedWithSubsPence = allowedPence;
@@ -609,18 +644,14 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const pendingPence = sumPence(cards, (item) => item.pendingPence || 0)
     + pendingListTotalPence(pendingRows);
   const cardSidePence = cardBalancesPence + pendingPence;
-  const overUnderPence = allowedPence - cardSidePence;
-  const tickedWeeklyPence = sumPence(
-    weeklySlots.filter((slot) => slot.ticked),
-    (item) => item.amountPence,
-  );
-  const purchasedOneOffsPence = sumPence(
-    oneOffs.filter((item) => item.purchased),
-    (item) => item.estimatePence,
-  );
-  const spentSoFarPence = tickedWeeklyPence + allowedPence + purchasedOneOffsPence;
+  const tickedWeeklyPence = live.tickedWeeklyPence;
+  const purchasedOneOffsPence = live.purchasedOneOffsPence;
+  const dueCardMonthliesPence = live.dueCardMonthliesPence;
+  const reserveSpentPence = live.reserveSpentPence;
+  const spentSoFarPence = live.spentSoFarPence;
   const actualOnCardsPence = cardSidePence;
   const savingsPence = spentSoFarPence - actualOnCardsPence;
+  const overUnderPence = savingsPence;
 
   return {
     month,
@@ -656,7 +687,9 @@ export function cashflowForMonth(household, month, today = new Date()) {
     cardSidePence,
     overUnderPence,
     tickedWeeklyPence,
+    dueCardMonthliesPence,
     purchasedOneOffsPence,
+    reserveSpentPence,
     spentSoFarPence,
     actualOnCardsPence,
     savingsPence,
