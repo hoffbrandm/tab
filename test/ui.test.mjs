@@ -63,4 +63,5 @@ test("Home Planned and the Planned room keep one add control", () => {
   const plannedRoom = app.match(/function plannedScreen\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(plannedRoom, /sectionHead\(monthLabel\(viewMonth\), "add-oneoff", "Add"\)/);
   assert.doesNotMatch(plannedRoom, /emptyLines\([^)]*"add-oneoff"/);
+  assert.match(app, /if \(payload\.oneOffsRewritten\) persist\(\)/);
 });

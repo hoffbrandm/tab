@@ -5,6 +5,7 @@ import {
   GIST_FILENAME,
   createGistStore,
   parseGistContent,
+  parseGistDocument,
   pickGist,
   storeHasTabData,
   storeToGistContent,
@@ -249,6 +250,32 @@ test("truncated gist files are downloaded from raw_url", async () => {
   });
   const loaded = await gist.read();
   assert.equal(loaded.store.friends[0].name, "Ben");
+});
+
+test("loading a gist rewrites leftover 2025 one-offs onto this year", () => {
+  const today = new Date("2026-08-15T12:00:00Z");
+  const text = `${JSON.stringify({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      oneOffs: [
+        { id: "o-open", name: "Open item", month: "2025-08", estimatePence: 5000, purchased: false },
+        { id: "o-bought", name: "Bought item", month: "2025-08", estimatePence: 7000, purchased: true },
+        { id: "o-later", name: "Later item", month: "2025-09", estimatePence: 3000, purchased: false },
+        { id: "o-jan", name: "January leftover", month: "2025-01", estimatePence: 2000, purchased: false },
+      ],
+    },
+  }, null, 2)}\n`;
+  const document = parseGistDocument(text, today);
+  assert.equal(document.oneOffsRewritten, true);
+  assert.deepEqual(document.store.household.oneOffs.map((item) => `${item.id}:${item.month}`).sort(), [
+    "o-bought:2026-08",
+    "o-later:2026-09",
+    "o-open:2026-08",
+  ]);
+  assert.equal(document.store.household.oneOffs.some((item) => String(item.month).startsWith("2025-")), false);
 });
 
 test("rejected tokens do not create or update a gist", async () => {

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cashflowForMonth, emptyHousehold, oneOffsForMonth } from "../household.js";
-import { emptyStore, parseStore, StoreError } from "../store.js";
+import { emptyStore, gistOneOffsNeedRewrite, parseStore, StoreError } from "../store.js";
 
 const friend = {
   id: "ben",
@@ -291,9 +291,9 @@ test("one-off months such as August 2026 match the viewed month", () => {
   assert.equal(parsed.household.oneOffs[1].month, "2026-08");
 });
 
-test("unpurchased one-offs from the same month last year roll to this year", () => {
+test("imported one-offs move to this year and previous months are dropped", () => {
   const today = new Date("2026-08-15T12:00:00Z");
-  const parsed = parseStore({
+  const raw = {
     version: 1,
     friends: [],
     transactions: [],
@@ -302,22 +302,26 @@ test("unpurchased one-offs from the same month last year roll to this year", () 
       oneOffs: [
         { id: "o-open", name: "Open item", month: "2025-08", estimatePence: 5000, purchased: false },
         { id: "o-bought", name: "Bought item", month: "2025-08", estimatePence: 7000, purchased: true },
-        { id: "o-other", name: "Other month", month: "2025-01", estimatePence: 3000, purchased: false },
+        { id: "o-later", name: "Later item", month: "2025-09", estimatePence: 3000, purchased: false },
+        { id: "o-jan", name: "January leftover", month: "2025-01", estimatePence: 2000, purchased: false },
+        { id: "o-past", name: "This-year past", month: "2026-01", estimatePence: 1000, purchased: true },
       ],
     },
-  }, today);
-  const open = parsed.household.oneOffs.find((item) => item.id === "o-open");
-  const bought = parsed.household.oneOffs.find((item) => item.id === "o-bought");
-  const other = parsed.household.oneOffs.find((item) => item.id === "o-other");
-  assert.equal(open.month, "2026-08");
-  assert.equal(bought.month, "2025-08");
-  assert.equal(other.month, "2025-01");
-  assert.deepEqual(oneOffsForMonth(parsed.household, "2026-08").map((item) => item.id), ["o-open"]);
+  };
+  const parsed = parseStore(raw, today);
+  const byId = Object.fromEntries(parsed.household.oneOffs.map((item) => [item.id, item]));
+  assert.equal(byId["o-open"].month, "2026-08");
+  assert.equal(byId["o-bought"].month, "2026-08");
+  assert.equal(byId["o-later"].month, "2026-09");
+  assert.equal(byId["o-jan"], undefined);
+  assert.equal(byId["o-past"], undefined);
+  assert.equal(parsed.household.oneOffs.every((item) => !String(item.month).startsWith("2025-")), true);
+  assert.deepEqual(oneOffsForMonth(parsed.household, "2026-08").map((item) => item.id).sort(), ["o-bought", "o-open"]);
   const flow = cashflowForMonth(parsed.household, "2026-08", today);
-  assert.equal(flow.oneOffsPence, 5000);
-  assert.equal(flow.outPence, 5000);
-  assert.equal(flow.oneOffs.some((item) => item.id === "o-open"), true);
-  assert.equal(flow.oneOffs.some((item) => item.id === "o-bought"), false);
+  assert.equal(flow.oneOffsPence, 12000);
+  assert.equal(flow.outPence, 12000);
+  assert.equal(gistOneOffsNeedRewrite(raw, parsed), true);
+  assert.equal(gistOneOffsNeedRewrite(parsed, parsed), false);
 });
 
 test("weekday weekly rules keep their calendar cadence", () => {

@@ -187,6 +187,7 @@ async function bootApp() {
     boot = { name: "ready" };
     maybeOfferLocalImport();
     render();
+    if (payload.oneOffsRewritten) persist().catch(() => {});
   } catch (error) {
     if (error instanceof GistError && error.status === 401) {
       sessionStore.clear();

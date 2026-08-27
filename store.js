@@ -179,7 +179,7 @@ function parseHousehold(value, today = new Date()) {
   const weeklyExtras = list(value.weeklyExtras).map(parseWeeklyExtra);
   const pendings = list(value.pendings).map(parsePending);
   const reserves = list(value.reserves).map(parseReserve);
-  const oneOffs = list(value.oneOffs).map((item) => parseOneOff(item, today));
+  const oneOffs = normalizeOneOffsForViewMonth(list(value.oneOffs).map(parseOneOff), today).items;
   const annualBills = list(value.annualBills).map(parseAnnualBill);
   const pots = list(value.pots).map(parsePot);
   const pensions = list(value.pensions).map(parsePension);
@@ -413,19 +413,19 @@ function parseCardSub(sub, cardIds) {
   return parsed;
 }
 
-function parseOneOff(item, today = new Date()) {
+function parseOneOff(item) {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     throw new StoreError("Each planned one-off must be an object.");
   }
   const month = coerceMonthKey(item.month);
   if (!isMonthKey(month)) throw new StoreError("One-off month must be YYYY-MM.");
-  return rollUnpurchasedOneOffToViewYear({
+  return {
     id: requiredId(item.id, "One-off"),
     name: requiredName(item.name, "One-off"),
     month,
     estimatePence: moneyPence(item.estimatePence, "One-off"),
     purchased: Boolean(item.purchased),
-  }, today);
+  };
 }
 
 function referenceMonthKey(today) {
@@ -437,18 +437,42 @@ function referenceMonthKey(today) {
   return monthKey(new Date());
 }
 
-// Unpurchased leftovers from the same calendar month in a past year (e.g. 2025-08
-// when today/view is 2026-08) move to the current/view year. Purchased stay as history.
-function rollUnpurchasedOneOffToViewYear(item, today = new Date()) {
-  if (item.purchased) return item;
-  const view = parseMonthKey(referenceMonthKey(today));
-  const planned = parseMonthKey(item.month);
-  if (!view || !planned) return item;
-  if (planned.month !== view.month || planned.year >= view.year) return item;
-  return {
-    ...item,
-    month: `${String(view.year).padStart(4, "0")}-${String(view.month).padStart(2, "0")}`,
-  };
+function oneOffFingerprint(items) {
+  return (items || [])
+    .map((item) => `${item.id}:${item.month || ""}`)
+    .sort()
+    .join("\n");
+}
+
+// On load, leftover import years become the current/view year (purchased or not).
+// Months before today/view are dropped. Last year’s purchased rows are not kept as history.
+export function normalizeOneOffsForViewMonth(oneOffs, today = new Date()) {
+  const viewKey = referenceMonthKey(today);
+  const view = parseMonthKey(viewKey);
+  const source = Array.isArray(oneOffs) ? oneOffs : [];
+  if (!view) return { items: [...source], changed: false };
+  const items = [];
+  for (const item of source) {
+    const planned = parseMonthKey(item.month);
+    if (!planned) {
+      items.push(item);
+      continue;
+    }
+    const month = planned.year < view.year
+      ? `${String(view.year).padStart(4, "0")}-${String(planned.month).padStart(2, "0")}`
+      : item.month;
+    if (month < viewKey) continue;
+    items.push(month === item.month ? item : { ...item, month });
+  }
+  return { items, changed: oneOffFingerprint(source) !== oneOffFingerprint(items) };
+}
+
+export function gistOneOffsNeedRewrite(rawStore, parsedStore) {
+  const raw = (rawStore?.household?.oneOffs || []).map((item) => ({
+    id: item?.id,
+    month: coerceMonthKey(item?.month) || String(item?.month || ""),
+  }));
+  return oneOffFingerprint(raw) !== oneOffFingerprint(parsedStore?.household?.oneOffs);
 }
 
 function parseAnnualBill(item) {
