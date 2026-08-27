@@ -24,9 +24,12 @@ import {
   monthLabel,
   monthlyDueLabel,
   monthliesOf,
+  normalizeDueRoll,
+  dueDayOf,
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
+  plannedMonthTotals,
   payslipAmountForCategory,
   masterPayslipCategories,
   payslipIsConfirmed,
@@ -400,7 +403,7 @@ function homeSectionState() {
 }
 
 function homeAccordion(id, title, inner) {
-  const open = homeSectionState()[id] !== false;
+  const open = homeSectionState()[id] === true;
   return `<details class="home-section" data-home-section="${esc(id)}" ${open ? "open" : ""}>
     <summary>${esc(title)}</summary>
     ${inner}
@@ -457,9 +460,12 @@ function statementNote(flow) {
     const names = flow.cardsMissingSnapshot.map((card) => card.name).join(", ");
     return `No balance for ${monthLabel(flow.month)} on ${names}. Total savings is In − Out until one is in.`;
   }
-  const allowed = `Allowed ${formatMoney(flow.allowanceSoFarPence)}`;
-  const exceptions = flow.exceptionsPence ? ` (incl. ${formatMoney(flow.exceptionsPence)} exceptions)` : "";
-  return `${allowed}${exceptions} · on cards ${formatMoney(flow.actualOnCardsPence)}`;
+  const parts = [`Allowed so far ${formatMoney(flow.allowanceSoFarPence)}`];
+  if (flow.reserveSpentPence) {
+    parts.push(`incl. ${formatMoney(flow.reserveSpentPence)} of the ${formatMoney(flow.reserveTotalPence)} reserve, ${flow.dayOfMonth}/${flow.daysInMonth} of the way through`);
+  }
+  if (flow.exceptionsPence) parts.push(`incl. ${formatMoney(flow.exceptionsPence)} of exceptions`);
+  return parts.join(" · ");
 }
 
 function statementSection(flow) {
@@ -471,6 +477,11 @@ function statementSection(flow) {
         <div class="statement-row out">
           <span>Out</span>
           <strong data-statement-out>${formatMoney(flow.outPence)}</strong>
+        </div>
+        <div class="statement-split">
+          <p><span>Cash out</span><strong data-statement-cash-out>${formatMoney(flow.cashOutPence)}</strong></p>
+          <p><span>On to the card</span><strong data-statement-card-out>${formatMoney(flow.cardPlanPence)}</strong></p>
+          <p><span>Card balance now</span><strong data-statement-card-balance>${formatMoney(flow.actualOnCardsPence)}</strong></p>
         </div>
         <div class="statement-row savings">
           <span>Savings</span>
@@ -505,6 +516,9 @@ function refreshStatement() {
   };
   set("[data-statement-in]", formatMoney(flow.incomePence));
   set("[data-statement-out]", formatMoney(flow.outPence));
+  set("[data-statement-cash-out]", formatMoney(flow.cashOutPence));
+  set("[data-statement-card-out]", formatMoney(flow.cardPlanPence));
+  set("[data-statement-card-balance]", formatMoney(flow.actualOnCardsPence));
   set("[data-statement-savings]", formatMoney(flow.savingsPence), flow.savingsPence);
   set("[data-statement-check-label]", overUnderLabel(flow));
   set("[data-statement-check]", overUnderAmount(flow), flow.overUnderPence);
@@ -636,10 +650,18 @@ function pendingTableRow(item) {
       <button class="swipe-delete" type="button" data-action="remove-pending-row" data-id="${esc(item.id)}">Delete</button>
     </div>
     <div class="pending-row swipe-row-front" role="row" data-pending-id="${esc(item.id)}">
-      ${moneyControl({ pence: item.amountPence, extra: `data-action="pending-amount" data-id="${esc(item.id)}"` })}
+      ${moneyControl({ pence: item.amountPence, value: signedFieldValue(item.amountPence), extra: `data-action="pending-amount" data-id="${esc(item.id)}"`, placeholder: "0.00 or -0.00" })}
       <input data-action="pending-note" data-id="${esc(item.id)}" maxlength="80" value="${esc(item.note || "")}" placeholder="Note" autocomplete="off" />
     </div>
   </div>`;
+}
+
+function sumTicked(slots) {
+  return slots.filter((slot) => slot.ticked).reduce((total, slot) => total + slot.amountPence, 0);
+}
+
+function sumAll(slots) {
+  return slots.reduce((total, slot) => total + slot.amountPence, 0);
 }
 
 function weekliesScreen() {
@@ -649,7 +671,7 @@ function weekliesScreen() {
   return shell({
     eyebrow: "Weeklies",
     title: "Weekly rules.",
-    lede: "Enter a food shop once. Every week on a chosen weekday — four Tuesdays in the month on screen means four slots. Ticks stay on that month. A new month starts unticked.",
+    lede: "The rules that make the slots. Enter a food shop once — every week on a chosen weekday, so four Tuesdays in the month on screen means four slots. The slots themselves are ticked on Home.",
     month: true,
     body: `
       <section class="block">
@@ -665,19 +687,10 @@ function weekliesScreen() {
         })).join("") : emptyLines("Food shop every week on Tuesday. Amazon every week on Friday. Cat litter once a month.", "add-weekly-rule", "Add a weekly rule")}
       </section>
       <section class="block">
-        ${sectionHead(`${period} slots`, "add-weekly-extra", "Add extra")}
-        ${slots.length ? slots.map((slot) => lineRow({
-          edit: slot.adHoc ? "edit-weekly-extra" : "edit-weekly-rule",
-          id: slot.adHoc ? slot.extraId : slot.ruleId,
-          title: slot.name,
-          detail: slot.adHoc ? "Extra this month only" : (slot.date ? dateLabel(slot.date) : weeklyCadenceLabel(weeklyRulesOf(hh).find((rule) => rule.id === slot.ruleId) || {})),
-          amount: formatMoney(slot.amountPence),
-          tickAction: "tick-weekly-slot",
-          tickId: slot.id,
-          ticked: slot.ticked,
-          tickLabel: slot.ticked ? "Happened" : "Not yet",
-          ...(slot.adHoc ? { removeAction: "remove-weekly-extra", removeLabel: "Delete" } : {}),
-        })).join("") : emptyLines(`No slots in ${period} yet.`, "add-weekly-rule", "Add a rule")}
+        ${sectionHead(`${period}`, "go-home", "Tick on Home")}
+        <p class="helper">${slots.length
+          ? `${slots.filter((slot) => slot.ticked).length} of ${slots.length} slots ticked, ${formatMoney(sumTicked(slots))} of ${formatMoney(sumAll(slots))}. Ticking happens on Home, so it is in one place only.`
+          : `No slots in ${esc(period)} yet. Add a rule above.`}</p>
       </section>
     `,
   });
@@ -747,9 +760,34 @@ function plannedScreen() {
         ${sectionHead(monthLabel(viewMonth), "add-oneoff", "Add")}
         ${thisMonth.length ? thisMonth.map(oneOffRow).join("") : emptyLines(`Nothing planned for ${monthLabel(viewMonth)}.`)}
       </section>
+      ${plannedByMonthTable(hh)}
       ${later.length ? `<section class="block">${sectionHead("Other months", "", "")}${later.map(oneOffRow).join("")}</section>` : ""}
     `,
   });
+}
+
+/**
+ * What each month ahead is carrying, so a month quietly filling up with plans
+ * is visible before it arrives rather than when it lands in Out.
+ */
+function plannedByMonthTable(hh) {
+  const rows = plannedMonthTotals(hh, monthKey());
+  if (!rows.length) return "";
+  const most = Math.max(...rows.map((row) => row.totalPence));
+  return `<section class="block">
+    ${sectionHead("Planned per month", "", "")}
+    <div class="planned-months">
+      ${rows.map((row) => `<div class="planned-month${row.month === viewMonth ? " on" : ""}">
+        <button class="planned-month-main" type="button" data-action="go-month" data-month="${esc(row.month)}">
+          <span class="planned-month-name">${esc(monthLabel(row.month))}</span>
+          <span class="planned-month-count">${row.count} item${row.count === 1 ? "" : "s"}</span>
+        </button>
+        <span class="planned-month-bar" aria-hidden="true"><i style="width:${most > 0 ? Math.round((row.totalPence / most) * 100) : 0}%"></i></span>
+        <strong class="planned-month-total">${formatMoney(row.totalPence)}</strong>
+      </div>`).join("")}
+    </div>
+    <p class="helper">This month and every month ahead that has something planned. Tap a month to open it.</p>
+  </section>`;
 }
 
 function oneOffRow(item) {
@@ -1217,16 +1255,16 @@ function billForm() {
 
 function monthlyForm() {
   const item = modal.item || {};
-  const dueRoll = item.dueRoll || "calendar";
+  const dueRoll = normalizeDueRoll(item.dueRoll);
   return `<form id="monthly-form">${modalHead(item.id ? "Monthly" : "New monthly", item.id ? "Edit monthly" : "Add a monthly")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Phone, mortgage…" /></label>
     ${moneyLabel("Expected amount", "amount", item.amountPence)}
-    <label>Due<select name="dueRoll" data-action="monthly-due-roll">
+    <label>Due<select name="dueRoll">
       <option value="calendar" ${dueRoll === "calendar" ? "selected" : ""}>On this calendar day</option>
       <option value="nextWorking" ${dueRoll === "nextWorking" ? "selected" : ""}>This day, or the next working day if it is a weekend</option>
-      <option value="firstWorking" ${dueRoll === "firstWorking" ? "selected" : ""}>First working day of the month</option>
     </select></label>
-    <label data-due-day class="${dueRoll === "firstWorking" ? "hidden" : ""}">Day of month<input type="number" name="dueDay" min="1" max="31" value="${item.dueDay || 1}" /></label>
+    <label data-due-day>Day of month<input type="number" name="dueDay" min="1" max="31" value="${dueDayOf(item) || 1}" /></label>
+    <p class="helper">For the first working day of the month, pick day 1 with the next-working-day rule — that is the same thing.</p>
     <label>Paid from<select name="paidFrom">
       <option value="card" ${item.paidFrom !== "cash" ? "selected" : ""}>Card — due date only, not ticked</option>
       <option value="cash" ${item.paidFrom === "cash" ? "selected" : ""}>Cash — standing out for the whole month</option>
@@ -1301,7 +1339,8 @@ function subForm() {
 function pendingForm() {
   const item = modal.item || {};
   return `<form id="pending-form">${modalHead(item.id ? "Pending" : "New pending", item.id ? "Edit pending" : "Add pending")}
-    ${moneyLabel("Amount", "amount", item.amountPence)}
+    <label>Amount${moneyControl({ name: "amount", value: signedFieldValue(item.amountPence), placeholder: "0.00 or -0.00" })}</label>
+    <p class="helper">A refund or a credit on the statement goes in as a minus, so it comes off the card side.</p>
     <label>Note <span class="optional">optional</span><input maxlength="80" name="note" value="${esc(item.note || item.name || "")}" placeholder="Optional" /></label>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save pending" : "Add pending"}</button>
@@ -1739,6 +1778,8 @@ document.addEventListener("click", async (event) => {
     if (nextScreen === "planned") setScreen({ name: "planned" });
     else setScreen({ name: nextScreen || "home" });
   }
+  if (action === "go-home") setScreen({ name: "home" });
+  if (action === "go-month") { viewMonth = event.target.closest("[data-month]").dataset.month; render(); }
   if (action === "go-planned") setScreen({ name: "planned" });
   if (action === "go-weeklies") setScreen({ name: "weeklies" });
   if (action === "go-monthlies") setScreen({ name: "monthlies" });
@@ -2002,9 +2043,6 @@ document.addEventListener("change", async (event) => {
     document.querySelector("[data-weekly-field=weekday]")?.classList.toggle("hidden", cadence !== "weekday");
     document.querySelector("[data-weekly-field=times]")?.classList.toggle("hidden", cadence !== "times");
   }
-  if (action === "monthly-due-roll") {
-    document.querySelector("[data-due-day]")?.classList.toggle("hidden", event.target.value === "firstWorking");
-  }
   if (action === "add-payslip-category") {
     const value = event.target.value;
     if (!value) return;
@@ -2178,6 +2216,18 @@ async function saveFriend(event) {
   }
   closeModal();
   showToast(editing ? "Friend updated" : "Friend added");
+}
+
+/** Money for a field that may hold a credit, keeping the minus sign visible. */
+function signedFieldValue(pence) {
+  const amount = Number.isInteger(pence) ? pence : 0;
+  return amount < 0 ? `-${moneyFieldValue(-amount)}` : moneyFieldValue(amount);
+}
+
+function requireSignedMoney(value, label) {
+  const pence = parseSignedMoney(value);
+  if (pence === null) throw new Error(`Enter a valid ${label}, such as 12.50 or -12.50.`);
+  return pence;
 }
 
 function parseSignedMoney(value) {
@@ -2389,7 +2439,7 @@ async function savePending(event) {
     toastEdit: "Pending updated",
     build: (data) => ({
       note: String(data.get("note") || "").trim(),
-      amountPence: requireMoney(data.get("amount"), "amount"),
+      amountPence: requireSignedMoney(data.get("amount"), "amount"),
       month: modal.item?.month || viewMonth,
     }),
   });
@@ -2686,7 +2736,8 @@ function updatePendingField(input) {
   if (input.dataset.action === "pending-note") {
     item.note = String(input.value || "").trim();
   } else {
-    const amount = parseMoneyAllowZero(input.value);
+    // A refund or a credit is a negative row, so the sign has to survive.
+    const amount = parseSignedMoney(input.value);
     if (amount === null) return;
     item.amountPence = amount;
   }

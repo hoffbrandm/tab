@@ -3,8 +3,9 @@
 export const HOME_SECTIONS_KEY = "tab.home-sections.v1";
 export const HOME_SECTION_IDS = ["income", "cards", "pending", "exceptions", "weeklies", "planned"];
 
+/** Home opens as the statement, with every section collapsed under it. */
 export function defaultHomeSectionState() {
-  return Object.fromEntries(HOME_SECTION_IDS.map((id) => [id, true]));
+  return Object.fromEntries(HOME_SECTION_IDS.map((id) => [id, false]));
 }
 
 export function readHomeSectionState(storage) {

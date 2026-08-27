@@ -21,7 +21,9 @@ export const WEEKDAYS = [
   { value: 7, label: "Sunday" },
 ];
 export const MONTHLY_PAID_FROM = ["card", "cash"];
-export const DUE_ROLLS = ["calendar", "nextWorking", "firstWorking"];
+// "First working day of the month" was only ever "day 1, or the next working
+// day" — the same rule with dueDay 1 — so it is no longer its own roll.
+export const DUE_ROLLS = ["calendar", "nextWorking"];
 export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "sacrifice", "pension", "tax", "ni", "extra", "deduction", "parental"];
 export const BUILTIN_PAYSLIP_CATEGORIES = [
   { id: "bonus", label: "Bonus", kind: "bonus" },
@@ -425,6 +427,16 @@ export function weeklyCadenceLabel(rule) {
   return next.timesPerMonth === 1 ? "Once a month" : `${next.timesPerMonth} times a month`;
 }
 
+/** Old records may still say firstWorking; it means day 1, rolled forward. */
+export function normalizeDueRoll(value) {
+  if (value === "firstWorking") return "nextWorking";
+  return DUE_ROLLS.includes(value) ? value : "calendar";
+}
+
+export function dueDayOf(item) {
+  return item?.dueRoll === "firstWorking" ? 1 : item?.dueDay;
+}
+
 export function isUkWeekend(dateStr) {
   if (!DATE.test(String(dateStr || ""))) return false;
   const [year, month, day] = String(dateStr).split("-").map(Number);
@@ -459,11 +471,9 @@ export function calendarDueDate(month, dueDay) {
 }
 
 export function effectiveDueDate(item, month) {
-  const roll = DUE_ROLLS.includes(item?.dueRoll) ? item.dueRoll : "calendar";
-  if (roll === "firstWorking") return firstWorkingDate(month);
-  const calendar = calendarDueDate(month, item?.dueDay);
-  if (roll === "nextWorking") return nextWorkingDate(calendar);
-  return calendar;
+  const roll = normalizeDueRoll(item?.dueRoll);
+  const calendar = calendarDueDate(month, dueDayOf(item));
+  return roll === "nextWorking" ? nextWorkingDate(calendar) : calendar;
 }
 
 export function effectiveDueDay(item, month) {
@@ -474,17 +484,11 @@ export function effectiveDueDay(item, month) {
 }
 
 export function monthlyDueLabel(item, month) {
-  const roll = DUE_ROLLS.includes(item?.dueRoll) ? item.dueRoll : "calendar";
-  if (roll === "firstWorking") {
-    const date = firstWorkingDate(month);
-    return date && date.slice(0, 7) === month
-      ? `First working day · ${ordinalDay(Number(date.slice(8)))}`
-      : "First working day";
-  }
-  const day = ordinalDay(item?.dueDay);
+  const roll = normalizeDueRoll(item?.dueRoll);
+  const day = ordinalDay(dueDayOf(item));
   if (roll === "nextWorking") {
     const effective = effectiveDueDate(item, month);
-    const rolled = effective && effective !== calendarDueDate(month, item?.dueDay);
+    const rolled = effective && effective !== calendarDueDate(month, dueDayOf(item));
     if (rolled && effective.slice(0, 7) === month) {
       return `${day} · next working day ${ordinalDay(Number(effective.slice(8)))}`;
     }
@@ -587,9 +591,11 @@ export function proRateDay(viewMonth, today = new Date()) {
 /**
  * Allowed Expenses in the sheet: what the card is allowed to carry by today.
  * In and Out stay the month plan. Cash monthlies never enter this total.
- * Cash-in-reserve / £30-a-day is a standing Out line only — the sheet
- * pro-rated it by day-of-month; this app does not invent that pro-rate, so
- * reserves stay out of spentSoFar.
+ *
+ * Cash in reserve is the month's spending money — "roughly £30 a day" — so it
+ * is allowed a day at a time, not all at once. It pro-rates by day-of-month,
+ * as the sheet's column L does: a third of the way through the month, a third
+ * of the reserve is allowed.
  */
 export function exceptionMonthKey(item) {
   return coerceMonthKey(item?.month);
@@ -623,9 +629,12 @@ export function spentSoFarForMonth(household, month, today = new Date()) {
     oneOffs.filter((item) => item.purchased),
     (item) => item.estimatePence,
   );
-  const reserveSpentPence = 0;
+  const days = daysInMonthKey(month);
+  const reserveTotalPence = sumPence(household?.reserves, (item) => item.amountPence);
+  const reserveSpentPence = days > 0 ? Math.round((reserveTotalPence * dayOfMonth) / days) : 0;
   return {
     dayOfMonth,
+    reserveTotalPence,
     tickedWeeklyPence,
     dueCardMonthlies,
     dueCardMonthliesPence,
@@ -656,7 +665,11 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const annualReserve = annualReservePence(annualBills);
   const oneOffsPence = sumPence(oneOffs, (item) => item.estimatePence);
   const envelopesMonthlyPence = sumPence(weeklySlots, (item) => item.amountPence);
-  const outPence = billsPence + cardOutPence + annualReserve + reservePence + oneOffsPence + envelopesMonthlyPence;
+  // Out splits the way the money leaves: standing cash and the month's reserve
+  // on one side, everything that lands on a card on the other.
+  const cashOutPence = billsPence + annualReserve + reservePence;
+  const cardPlanPence = cardOutPence + oneOffsPence + envelopesMonthlyPence;
+  const outPence = cashOutPence + cardPlanPence;
   const leftPence = incomePence - outPence;
   const committedOutPence = outPence;
   const potPence = leftPence;
@@ -705,7 +718,10 @@ export function cashflowForMonth(household, month, today = new Date()) {
     incomePence,
     billsPence,
     cardOutPence,
+    cashOutPence,
+    cardPlanPence,
     reservePence,
+    reserveTotalPence: live.reserveTotalPence,
     monthlies,
     cashMonthlies,
     cardMonthlies,
@@ -1183,6 +1199,23 @@ export function oneOffsForMonth(household, month) {
 
 export function oneOffsOutsideMonth(household, month) {
   return (household?.oneOffs || []).filter((item) => oneOffMonthKey(item) !== month);
+}
+
+/**
+ * Planned totals per month, this month and every month after it that has
+ * something in it. Sorted forward, so a month filling up is easy to spot.
+ */
+export function plannedMonthTotals(household, fromMonth) {
+  const byMonth = new Map();
+  for (const item of household?.oneOffs || []) {
+    const month = oneOffMonthKey(item);
+    if (!month || month < fromMonth) continue;
+    const row = byMonth.get(month) || { month, totalPence: 0, count: 0 };
+    row.totalPence += item.estimatePence || 0;
+    row.count += 1;
+    byMonth.set(month, row);
+  }
+  return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
 }
 
 export function clearPendingsForMonth(household, month, today = new Date()) {

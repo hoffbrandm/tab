@@ -17,29 +17,30 @@ function memoryStorage(initial = {}) {
   };
 }
 
-test("home sections default open and persist independently of ticks", () => {
+test("home sections start collapsed and persist independently of ticks", () => {
   const storage = memoryStorage();
   const defaults = defaultHomeSectionState();
   assert.deepEqual(HOME_SECTION_IDS, ["income", "cards", "pending", "exceptions", "weeklies", "planned"]);
-  assert.equal(defaults.planned, true);
-  assert.equal(defaults.income, true);
+  // Home opens as the statement; the sections sit closed under it.
+  assert.equal(defaults.planned, false);
+  assert.equal(defaults.income, false);
   assert.deepEqual(readHomeSectionState(storage), defaults);
 
-  writeHomeSectionOpen(storage, "pending", false);
-  writeHomeSectionOpen(storage, "weeklies", false);
-  const afterCollapse = readHomeSectionState(storage);
-  assert.equal(afterCollapse.pending, false);
-  assert.equal(afterCollapse.weeklies, false);
-  assert.equal(afterCollapse.planned, true);
+  writeHomeSectionOpen(storage, "pending", true);
+  writeHomeSectionOpen(storage, "weeklies", true);
+  const afterOpen = readHomeSectionState(storage);
+  assert.equal(afterOpen.pending, true);
+  assert.equal(afterOpen.weeklies, true);
+  assert.equal(afterOpen.planned, false);
 
   const afterTick = readHomeSectionState(storage);
-  assert.deepEqual(afterTick, afterCollapse);
-  assert.equal(afterTick.planned, true);
+  assert.deepEqual(afterTick, afterOpen);
+  assert.equal(afterTick.pending, true);
 });
 
-test("unknown or corrupt accordion state falls back to open sections", () => {
+test("unknown or corrupt accordion state falls back to collapsed sections", () => {
   const storage = memoryStorage({ "tab.home-sections.v1": "{not-json" });
-  assert.equal(readHomeSectionState(storage).cards, true);
-  writeHomeSectionOpen(storage, "not-a-section", false);
-  assert.equal(readHomeSectionState(storage).cards, true);
+  assert.equal(readHomeSectionState(storage).cards, false);
+  writeHomeSectionOpen(storage, "not-a-section", true);
+  assert.equal(readHomeSectionState(storage).cards, false);
 });

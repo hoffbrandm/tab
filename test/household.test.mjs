@@ -27,6 +27,8 @@ import {
   jumpToCurrentMonthLabel,
   keepPayslipFormRows,
   monthlyIsAllowed,
+  monthlyDueLabel,
+  DUE_ROLLS,
   payslipAniPence,
   payslipCategoriesOf,
   payslipIsConfirmed,
@@ -60,6 +62,7 @@ import {
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
+  plannedMonthTotals,
   exceptionsForMonth,
   exceptionsOutsideMonth,
   exceptionsTotalPence,
@@ -163,9 +166,11 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
   assert.equal(reserved.reservePence, 90000);
   assert.equal(reserved.outPence, 319000);
   assert.equal(reserved.leftPence, 181000);
-  assert.equal(reserved.spentSoFarPence, flow.spentSoFarPence);
-  assert.equal(reserved.cardCheckPence, flow.cardCheckPence);
-  assert.equal(reserved.reserveSpentPence, 0);
+  // Cash in reserve is the month's spending money, allowed a day at a time.
+  // On the 10th of a 31-day month, 10/31 of the £900 is allowed.
+  assert.equal(reserved.reserveSpentPence, Math.round((90000 * 10) / 31));
+  assert.equal(reserved.spentSoFarPence, flow.spentSoFarPence + reserved.reserveSpentPence);
+  assert.equal(reserved.cardCheckPence, flow.cardCheckPence + reserved.reserveSpentPence);
 
   const future = cashflowForMonth(household, "2026-09", today);
   assert.equal(future.billsPence, 140000);
@@ -1363,4 +1368,63 @@ test("a gross that leaves the bonus out counts it once, in net and in ANI", () =
   assert.equal(payslipNetPence(slip), 312000);
   assert.equal(payslipTaxablePayPence(slip), 400000);
   assert.equal(payslipAniPence(slip), 400000);
+});
+
+test("cash in reserve is allowed a day at a time, not all at once", () => {
+  const hh = {
+    ...emptyHousehold(),
+    reserves: [{ id: "r-1", name: "£30 a day", amountPence: 93000 }],
+  };
+  const day = (n) => spentSoFarForMonth(hh, "2026-08", new Date(`2026-08-${String(n).padStart(2, "0")}T12:00:00Z`));
+  assert.equal(day(1).reserveSpentPence, 3000);
+  assert.equal(day(10).reserveSpentPence, 30000);
+  assert.equal(day(31).reserveSpentPence, 93000);
+  assert.equal(day(10).spentSoFarPence, 30000);
+
+  // A month already gone is allowed in full; one still ahead is allowed none.
+  const today = new Date("2026-08-10T12:00:00Z");
+  assert.equal(spentSoFarForMonth(hh, "2026-07", today).reserveSpentPence, 93000);
+  assert.equal(spentSoFarForMonth(hh, "2026-09", today).reserveSpentPence, 0);
+});
+
+test("Out splits into the cash side and the card side", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const flow = cashflowForMonth(household, "2026-08", today);
+  // Cash: standing cash monthlies + the annual reserve + cash in reserve.
+  assert.equal(flow.cashOutPence, flow.billsPence + flow.annualReservePence + flow.reservePence);
+  // Card: card monthlies + this month's planned + every weekly slot.
+  assert.equal(flow.cardPlanPence, flow.cardOutPence + flow.oneOffsPence + flow.envelopesMonthlyPence);
+  assert.equal(flow.cashOutPence + flow.cardPlanPence, flow.outPence);
+});
+
+test("first working day is day 1 rolled forward, not a rule of its own", () => {
+  assert.deepEqual(DUE_ROLLS, ["calendar", "nextWorking"]);
+  // 2026-08-01 is a Saturday, so both spellings land on Monday the 3rd.
+  const legacy = { id: "m-1", name: "Mortgage", amountPence: 1000, dueRoll: "firstWorking", dueDay: 1 };
+  const same = { id: "m-2", name: "Mortgage", amountPence: 1000, dueRoll: "nextWorking", dueDay: 1 };
+  assert.equal(effectiveDueDate(legacy, "2026-08"), "2026-08-03");
+  assert.equal(effectiveDueDate(same, "2026-08"), "2026-08-03");
+  assert.equal(monthlyDueLabel(legacy, "2026-08"), monthlyDueLabel(same, "2026-08"));
+});
+
+test("planned totals per month cover this month and the ones ahead", () => {
+  const hh = {
+    ...emptyHousehold(),
+    oneOffs: [
+      { id: "o-1", name: "MOT", month: "2026-08", estimatePence: 40000 },
+      { id: "o-2", name: "Flights", month: "2026-10", estimatePence: 120000 },
+      { id: "o-3", name: "Hotel", month: "2026-10", estimatePence: 80000 },
+      { id: "o-4", name: "Ski hire", month: "2026-12", estimatePence: 30000 },
+      { id: "o-5", name: "Gone by", month: "2026-05", estimatePence: 99900 },
+    ],
+  };
+  assert.deepEqual(plannedMonthTotals(hh, "2026-08"), [
+    { month: "2026-08", totalPence: 40000, count: 1 },
+    { month: "2026-10", totalPence: 200000, count: 2 },
+    { month: "2026-12", totalPence: 30000, count: 1 },
+  ]);
+  // Months already gone are not something to plan around.
+  assert.equal(plannedMonthTotals(hh, "2026-08").some((row) => row.month === "2026-05"), false);
+  assert.deepEqual(plannedMonthTotals(hh, "2026-11").map((row) => row.month), ["2026-12"]);
+  assert.deepEqual(plannedMonthTotals({ ...emptyHousehold() }, "2026-08"), []);
 });
