@@ -410,8 +410,7 @@ function lineRow({ edit, id, title, detail, amount, tickAction, ticked, tickLabe
     <button class="line-main" type="button" data-action="${edit}" data-id="${esc(id)}">
       <span class="line-copy"><strong>${esc(title)}</strong>${detail ? `<small>${esc(detail)}</small>` : ""}</span>
       <span class="line-amount">${amount}</span>
-    </button>
-    ${removeAction ? `<button class="row-remove" type="button" data-action="${removeAction}" data-id="${esc(id)}" aria-label="${esc(removeLabel)}">×</button>` : ""}`;
+    </button>`;
   if (!removeAction) return `<article class="line">${inner}</article>`;
   return `<div class="swipe-row" data-swipe>
     <div class="swipe-row-actions">
@@ -483,7 +482,6 @@ function cashflowScreen() {
           <div class="pending-head" role="row">
             <span role="columnheader">Amount</span>
             <span role="columnheader">Note</span>
-            <span role="columnheader" class="visually-hidden">Remove</span>
           </div>
           ${pendingRows.map(pendingTableRow).join("")}
         </div>
@@ -503,6 +501,7 @@ function cashflowScreen() {
           tickId: slot.id,
           ticked: slot.ticked,
           tickLabel: slot.ticked ? `Happened in ${period}` : `Not yet in ${period}`,
+          ...(slot.adHoc ? { removeAction: "remove-weekly-extra", removeLabel: "Delete" } : {}),
         })).join("") : emptyLines(`Rules live under Weeklies. ${period} gets one slot per weekday in that month.`, "go-weeklies", "Open Weeklies")}
         <div class="home-section-actions">
           <button class="text-button" type="button" data-action="go-weeklies">Rules</button>
@@ -542,10 +541,14 @@ function homeCardRow(item) {
 }
 
 function pendingTableRow(item) {
-  return `<div class="pending-row" role="row" data-pending-id="${esc(item.id)}">
-    ${moneyControl({ pence: item.amountPence, extra: `data-action="pending-amount" data-id="${esc(item.id)}"` })}
-    <input data-action="pending-note" data-id="${esc(item.id)}" maxlength="80" value="${esc(item.note || "")}" placeholder="Note" autocomplete="off" />
-    <button class="danger-link" type="button" data-action="remove-pending-row" data-id="${esc(item.id)}" aria-label="Remove pending row">×</button>
+  return `<div class="swipe-row" data-swipe>
+    <div class="swipe-row-actions">
+      <button class="swipe-delete" type="button" data-action="remove-pending-row" data-id="${esc(item.id)}">Delete</button>
+    </div>
+    <div class="pending-row swipe-row-front" role="row" data-pending-id="${esc(item.id)}">
+      ${moneyControl({ pence: item.amountPence, extra: `data-action="pending-amount" data-id="${esc(item.id)}"` })}
+      <input data-action="pending-note" data-id="${esc(item.id)}" maxlength="80" value="${esc(item.note || "")}" placeholder="Note" autocomplete="off" />
+    </div>
   </div>`;
 }
 
@@ -567,6 +570,8 @@ function weekliesScreen() {
           title: rule.name,
           detail: weeklyCadenceLabel(rule),
           amount: formatMoney(rule.amountPence),
+          removeAction: "remove-weekly-rule",
+          removeLabel: "Delete",
         })).join("") : emptyLines("Food shop every week on Tuesday. Amazon every week on Friday. Cat litter once a month.", "add-weekly-rule", "Add a weekly rule")}
       </section>
       <section class="block">
@@ -581,6 +586,7 @@ function weekliesScreen() {
           tickId: slot.id,
           ticked: slot.ticked,
           tickLabel: slot.ticked ? "Happened" : "Not yet",
+          ...(slot.adHoc ? { removeAction: "remove-weekly-extra", removeLabel: "Delete" } : {}),
         })).join("") : emptyLines(`No slots in ${period} yet.`, "add-weekly-rule", "Add a rule")}
       </section>
     `,
@@ -618,6 +624,8 @@ function monthliesScreen() {
           title: item.name,
           detail: reserveLineDetail(item),
           amount: formatMoney(item.amountPence),
+          removeAction: "remove-reserve",
+          removeLabel: "Delete",
         })).join("") : emptyLines("Add the daily envelope here. The monthly amount lives in your household, not in this app.", "add-reserve", "Add the daily envelope")}
       </section>
     `,
@@ -688,6 +696,8 @@ function annualScreen() {
           title: item.name,
           detail: item.month ? `Usually ${monthName(item.month)}` : "Any month",
           amount: formatMoney(item.amountPence),
+          removeAction: "remove-annual",
+          removeLabel: "Delete",
         })).join("") : emptyLines("Insurance, MOT, memberships — add each line.", "add-annual", "Add an annual bill")}
       </section>
     `,
@@ -864,6 +874,8 @@ function givingScreen() {
           title: item.charity,
           detail: `${item.who} · ${dateLabel(item.date)} · ${ukTaxYearFromDate(item.date)}${item.giftAid ? " · Gift Aid" : ""}`,
           amount: formatMoney(item.giftAid ? giftAidGrossPence(item.amountPence, true) : item.amountPence),
+          removeAction: "remove-donation",
+          removeLabel: "Delete",
         })).join("") : emptyLines("Add a donation when you give.", "add-donation", "Add a donation")}
       </section>
     `,
@@ -1551,13 +1563,16 @@ function signOut() {
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   const swipeRow = event.target.closest("[data-swipe]");
-  if (!event.target.closest(".swipe-delete, .row-remove")) closeSwipeRows(swipeRow);
+  if (!event.target.closest(".swipe-delete")) closeSwipeRows(swipeRow);
   if (!target) return;
   const { action, id, screen: nextScreen, extra } = target.dataset;
-  if (swipeRow?.classList.contains("open") && action !== "remove-oneoff" && action !== "remove-monthly" && action !== "toggle-oneoff") {
-    event.preventDefault();
-    closeSwipeRows();
-    return;
+  if (swipeRow?.classList.contains("open")) {
+    const keep = action.startsWith("remove-") || action === "toggle-oneoff" || action.startsWith("tick-");
+    if (!keep) {
+      event.preventDefault();
+      closeSwipeRows();
+      return;
+    }
   }
 
   if (action === "go") {
@@ -1636,6 +1651,31 @@ document.addEventListener("click", async (event) => {
     event.stopPropagation();
     removeListedItem("monthlies", id, "monthly");
   }
+  if (action === "remove-weekly-rule") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("weeklyRules", id, "weekly");
+  }
+  if (action === "remove-weekly-extra") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("weeklyExtras", id, "weekly extra");
+  }
+  if (action === "remove-reserve") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("reserves", id, "reserve");
+  }
+  if (action === "remove-annual") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("annualBills", id, "annual bill");
+  }
+  if (action === "remove-donation") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("donations", id, "donation");
+  }
   if (action === "undo-delete") {
     event.preventDefault();
     if (!lastDeleted) return;
@@ -1668,9 +1708,8 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "remove-pending-row") {
     event.preventDefault();
-    applyLocal(() => {
-      household().pendings = (household().pendings || []).filter((item) => item.id !== id);
-    });
+    event.stopPropagation();
+    removeListedItem("pendings", id, "pending row");
   }
   if (action === "remove-payslip-category") {
     event.preventDefault();
@@ -1853,7 +1892,7 @@ document.addEventListener("toggle", (event) => {
 }, true);
 
 document.addEventListener("pointerdown", (event) => {
-  const ignore = event.target.closest(".tick, .row-remove, .swipe-delete, input, select, textarea, .text-button, .primary");
+  const ignore = event.target.closest(".tick, .swipe-delete");
   const row = event.target.closest("[data-swipe]");
   if (ignore || !row) {
     if (!row) closeSwipeRows();

@@ -672,7 +672,7 @@ legend { padding: 0; margin-bottom: 7px; }
 .pending-head,
 .pending-row {
   display: grid;
-  grid-template-columns: 128px 1fr 36px;
+  grid-template-columns: 128px 1fr;
   gap: 8px;
   align-items: center;
 }
@@ -841,22 +841,10 @@ legend { padding: 0; margin-bottom: 7px; }
   background: var(--canvas);
   transition: transform 0.18s ease;
   will-change: transform;
+  touch-action: pan-y;
 }
 .swipe-row.open .swipe-row-front {
   transform: translateX(-88px);
-}
-.row-remove {
-  flex: none;
-  width: 44px;
-  min-height: 52px;
-  margin: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--red);
-  font-size: 1.45rem;
-  font-weight: 500;
-  line-height: 1;
-  border-radius: 12px;
 }
 .line {
   display: flex;

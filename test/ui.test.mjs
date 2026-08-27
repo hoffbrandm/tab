@@ -66,17 +66,48 @@ test("Home Planned and the Planned room keep one add control", () => {
   assert.match(app, /if \(payload\.oneOffsRewritten\) persist\(\)/);
 });
 
-test("planned and monthly rows can swipe left to delete and keep a red X", () => {
+test("regularly cleared lists swipe left to delete; setup entities do not", () => {
   assert.match(app, /removeAction: "remove-oneoff"/);
   assert.match(app, /removeAction: "remove-monthly"/);
+  assert.match(app, /removeAction: "remove-reserve"/);
+  assert.match(app, /removeAction: "remove-weekly-extra"/);
+  assert.match(app, /removeAction: "remove-weekly-rule"/);
+  assert.match(app, /removeAction: "remove-annual"/);
+  assert.match(app, /removeAction: "remove-donation"/);
+  assert.match(app, /data-action="remove-pending-row"/);
   assert.match(app, /class="swipe-row" data-swipe/);
   assert.match(app, /class="swipe-delete"/);
-  assert.match(app, /class="row-remove"/);
+  assert.doesNotMatch(app, /class="row-remove"/);
+  assert.doesNotMatch(app, /Remove pending row">×/);
   assert.match(app, /action === "undo-delete"/);
+  assert.match(app, /action === "remove-weekly-rule"/);
+  assert.match(app, /action === "remove-weekly-extra"/);
+  assert.match(app, /action === "remove-reserve"/);
+  assert.match(app, /action === "remove-annual"/);
+  assert.match(app, /action === "remove-donation"/);
+  assert.match(app, /removeListedItem\("pendings"/);
+  assert.match(app, /action\.startsWith\("remove-"\)/);
+  assert.match(app, /addEventListener\("pointerdown"/);
+  assert.match(app, /\.tick, \.swipe-delete/);
+  assert.match(app, /data-action="clear-pending"/);
   assert.match(css, /\.swipe-delete/);
   assert.match(css, /background:\s*var\(--red\)/);
   assert.match(rule(".swipe-row"), /overflow:\s*hidden/);
+  assert.match(rule(".swipe-row-front"), /touch-action:\s*pan-y/);
   assert.match(rule(".swipe-row.open .swipe-row-front"), /translateX\(-88px\)/);
-  assert.match(app, /action === "remove-oneoff"/);
-  assert.match(app, /action === "remove-monthly"/);
+  assert.match(css, /\.pending-head,\s*\.pending-row\s*\{[^}]*128px 1fr/);
+  assert.doesNotMatch(css, /\.row-remove/);
+
+  const homeCards = app.match(/function homeCardRow\([\s\S]*?\n\}/)?.[0] || "";
+  const pots = app.match(/function potsScreen\(\) \{[\s\S]*?\nfunction pensionLabel/)?.[0] || "";
+  const payslips = app.match(/function payslipsScreen\(\) \{[\s\S]*?\nfunction aniScreen/)?.[0] || "";
+  const more = app.match(/function moreScreen\(\) \{[\s\S]*?\nfunction payslipKindLabel/)?.[0] || "";
+  const tabs = app.match(/function tabsScreen\(\) \{[\s\S]*?\nfunction emptyHome/)?.[0] || "";
+  const income = app.match(/homeAccordion\("income",[\s\S]*?`\)}/)?.[0] || "";
+  assert.doesNotMatch(homeCards, /data-swipe|removeAction/);
+  assert.doesNotMatch(pots, /removeAction/);
+  assert.doesNotMatch(payslips, /removeAction/);
+  assert.doesNotMatch(more, /removeAction/);
+  assert.doesNotMatch(tabs, /data-swipe|removeAction/);
+  assert.doesNotMatch(income, /removeAction/);
 });

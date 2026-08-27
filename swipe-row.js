@@ -1,4 +1,4 @@
-/** iPhone-style swipe-left to reveal delete. Vanilla touch; X is the fallback. */
+/** iPhone-style swipe-left to reveal delete. Pointer events cover iPhone, iPad, and mouse. */
 
 export const SWIPE_DELETE_WIDTH = 88;
 
