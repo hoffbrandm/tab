@@ -1939,9 +1939,10 @@ document.addEventListener("pointerup", (event) => {
 
 document.addEventListener("click", (event) => {
   if (!suppressClick) return;
+  suppressClick = false;
+  if (event.target.closest(".swipe-delete")) return;
   event.preventDefault();
   event.stopPropagation();
-  suppressClick = false;
 }, true);
 
 document.addEventListener("pointercancel", () => {

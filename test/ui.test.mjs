@@ -88,6 +88,7 @@ test("regularly cleared lists swipe left to delete; setup entities do not", () =
   assert.match(app, /removeListedItem\("pendings"/);
   assert.match(app, /action\.startsWith\("remove-"\)/);
   assert.match(app, /addEventListener\("pointerdown"/);
+  assert.match(app, /if \(event\.target\.closest\("\.swipe-delete"\)\) return;/);
   assert.match(app, /\.tick, \.swipe-delete/);
   assert.match(app, /data-action="clear-pending"/);
   assert.match(css, /\.swipe-delete/);
