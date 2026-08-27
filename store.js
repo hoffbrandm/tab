@@ -611,6 +611,7 @@ function parsePayslip(slip, personIds) {
     salarySacrificePensionPence: moneyPence(slip.salarySacrificePensionPence, "Payslip salary sacrifice"),
     reliefAtSourcePensionPence: moneyPence(slip.reliefAtSourcePensionPence, "Payslip relief-at-source pension"),
     grossBeforeSacrifice: Boolean(slip.grossBeforeSacrifice),
+    grossExcludesBonus: Boolean(slip.grossExcludesBonus),
     otherDeductions,
     taxPence: moneyPence(slip.taxPence, "Payslip tax"),
     niPence: moneyPence(slip.niPence, "Payslip NI"),

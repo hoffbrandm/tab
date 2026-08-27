@@ -37,6 +37,7 @@ import {
   payslipDeductionsPence,
   payslipTaxablePayPence,
   basicRateGrossUpPence,
+  payslipNetReadings,
   payslipRecordLabels,
   pendingListTotalPence,
   pendingsForMonth,
@@ -1316,4 +1317,50 @@ test("the sacrifice category says which pension it is", () => {
   assert.ok(labels.includes("Salary sacrifice pension"));
   assert.ok(labels.includes("Pension (relief at source)"));
   assert.equal(labels.includes("Pensions"), false);
+});
+
+test("every way of reading Gross is offered with its own net", () => {
+  const slip = {
+    grossPence: 350000,
+    bonusPence: 50000,
+    salarySacrificePensionPence: 20000,
+    taxPence: 60000,
+    niPence: 28000,
+    statedNetPence: 242000,
+  };
+  const readings = payslipNetReadings(slip);
+  const byId = Object.fromEntries(readings.map((item) => [item.id, item]));
+  assert.equal(readings.length, 4, "two independent facts about Gross, so four readings");
+  // 3500 − 880 of deductions.
+  assert.equal(byId["post-sacrifice-with-bonus"].netPence, 262000);
+  // …plus the bonus that sits outside a basic-pay gross.
+  assert.equal(byId["post-sacrifice-without-bonus"].netPence, 312000);
+  // …less the sacrifice a pre-sacrifice gross has not yet had taken off.
+  assert.equal(byId["pre-sacrifice-with-bonus"].netPence, 242000);
+  assert.equal(byId["pre-sacrifice-without-bonus"].netPence, 292000);
+
+  // The stated net picks one out, and the slip's own flags mark the current one.
+  assert.equal(byId["pre-sacrifice-with-bonus"].matchesStated, true);
+  assert.equal(byId["post-sacrifice-with-bonus"].matchesStated, false);
+  assert.equal(byId["post-sacrifice-with-bonus"].current, true);
+  assert.equal(byId["pre-sacrifice-with-bonus"].current, false);
+
+  // Nothing ambiguous to offer when there is no bonus and no sacrifice.
+  assert.equal(payslipNetReadings({ grossPence: 350000, taxPence: 60000 }).length, 1);
+  // One fact in play means one either-or.
+  assert.equal(payslipNetReadings({ grossPence: 350000, salarySacrificePensionPence: 20000 }).length, 2);
+});
+
+test("a gross that leaves the bonus out counts it once, in net and in ANI", () => {
+  const slip = {
+    grossPence: 350000,
+    bonusPence: 50000,
+    taxPence: 60000,
+    niPence: 28000,
+    grossExcludesBonus: true,
+  };
+  assert.equal(payslipGrossPaidPence(slip), 400000);
+  assert.equal(payslipNetPence(slip), 312000);
+  assert.equal(payslipTaxablePayPence(slip), 400000);
+  assert.equal(payslipAniPence(slip), 400000);
 });

@@ -174,7 +174,9 @@ test("the £100k helper takes grossed-up Gift Aid off, and never adds it on", ()
 test("the payslip form says what Gross means and checks it against the slip", () => {
   assert.match(app, /Gross is the Payments total on the slip/);
   assert.match(app, /name="grossBeforeSacrifice"/);
-  assert.match(app, /Gross is before salary sacrifice/);
+  assert.match(app, /name="grossExcludesBonus"/);
+  assert.match(app, /Which of these is the net on your payslip\?/);
+  assert.match(app, /data-action="payslip-reading"/);
   assert.match(app, /moneyLabel\("Net on the payslip", "statedNet"/);
   assert.match(app, /data-payslip-net-block/);
   assert.match(app, /payslipNetHints\(live\)/);

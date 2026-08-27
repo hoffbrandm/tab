@@ -35,6 +35,7 @@ import {
   payslipNetHints,
   payslipGrossPaidPence,
   payslipDeductionsPence,
+  payslipNetReadings,
   payslipRecordLabels,
   pendingListTotalPence,
   pendingsForMonth,
@@ -1428,8 +1429,9 @@ function payslipForm() {
     <label>Month the money lands<input required type="month" name="moneyLandsMonth" value="${item.moneyLandsMonth || item.periodMonth || viewMonth}" /></label>
     ${moneyLabel("Salary", "salary", item.salaryPence)}
     ${moneyLabel("Gross", "gross", item.grossPence)}
-    <p class="helper">Gross is the Payments total on the slip — basic, bonus, and any parental pay — after any salary sacrifice has come off. Tax and NI go in Categories below.</p>
-    <label class="check-row"><input type="checkbox" name="grossBeforeSacrifice" data-action="payslip-field" ${item.grossBeforeSacrifice ? "checked" : ""} /><span>Gross is before salary sacrifice</span></label>
+    <p class="helper">Gross is the Payments total on the slip — basic, bonus, and any parental pay — after any salary sacrifice has come off. Tax and NI go in Categories below. If your slip writes it another way, say so under Net.</p>
+    <input type="hidden" name="grossBeforeSacrifice" value="${item.grossBeforeSacrifice ? "on" : ""}" />
+    <input type="hidden" name="grossExcludesBonus" value="${item.grossExcludesBonus ? "on" : ""}" />
     <section class="payslip-cats">
       <h3>Categories</h3>
       <p class="helper">Pick a category and enter the amount. Names live in Account. Net is calculated.</p>
@@ -1471,6 +1473,26 @@ function payslipNetBlock(live) {
         : `<p class="payslip-net-check off">${esc(`${formatMoney(Math.abs(check.differencePence))} ${check.differencePence > 0 ? "more" : "less"} than the ${formatMoney(check.statedPence)} on the slip.`)}</p>
            ${hints.map((hint) => `<p class="payslip-net-hint">${esc(hint)}</p>`).join("")}`)
       : ""}
+    ${payslipReadings(live)}
+  </div>`;
+}
+
+/**
+ * Which net these figures mean depends on how the slip writes Gross, and that
+ * is a fact about the payslip. Show every reading with its number so the one
+ * that matches the payslip can be picked by eye, with no convention to learn.
+ */
+function payslipReadings(live) {
+  const readings = payslipNetReadings(live);
+  if (readings.length < 2) return "";
+  return `<div class="payslip-readings">
+    <p class="payslip-readings-head">Which of these is the net on your payslip?</p>
+    ${readings.map((reading) => `<button type="button" class="payslip-reading${reading.current ? " on" : ""}${reading.matchesStated ? " match" : ""}"
+      data-action="payslip-reading" data-before-sacrifice="${reading.grossBeforeSacrifice ? "1" : "0"}" data-excludes-bonus="${reading.grossExcludesBonus ? "1" : "0"}">
+      <span class="payslip-reading-net">${formatMoney(reading.netPence)}</span>
+      <span class="payslip-reading-label">${esc(reading.label)}</span>
+    </button>`).join("")}
+    <p class="helper">Picking one just says how to read Gross. It never changes the figures you typed.</p>
   </div>`;
 }
 
@@ -1512,6 +1534,7 @@ function livePayslipFromForm(slip, categories) {
     salaryPence: readMoney("salary"),
     statedNetPence: readMoney("statedNet"),
     grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
+    grossExcludesBonus: data.get("grossExcludesBonus") === "on",
   }, modal.slipCategories || categories || [], form);
 }
 
@@ -1522,6 +1545,8 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
     benefitsPence: 0,
     salarySacrificePensionPence: 0,
     reliefAtSourcePensionPence: 0,
+    grossBeforeSacrifice: Boolean(slip?.grossBeforeSacrifice),
+    grossExcludesBonus: Boolean(slip?.grossExcludesBonus),
     taxPence: 0,
     niPence: 0,
     otherDeductions: [],
@@ -1756,6 +1781,15 @@ document.addEventListener("click", async (event) => {
   if (action === "edit-sub") openItem("sub", "cardSubs", id);
   if (action === "add-oneoff") openItem("oneoff");
   if (action === "edit-oneoff") openItem("oneoff", "oneOffs", id);
+  if (action === "payslip-reading") {
+    event.preventDefault();
+    const form = document.querySelector("#payslip-form");
+    if (form) {
+      form.elements.grossBeforeSacrifice.value = event.target.closest("[data-before-sacrifice]").dataset.beforeSacrifice === "1" ? "on" : "";
+      form.elements.grossExcludesBonus.value = event.target.closest("[data-excludes-bonus]").dataset.excludesBonus === "1" ? "on" : "";
+      updatePayslipNet();
+    }
+  }
   if (action === "add-exception") openItem("exception");
   if (action === "edit-exception") openItem("exception", "exceptions", id);
   if (action === "add-annual") openItem("annual");
@@ -2554,6 +2588,7 @@ async function savePayslip(event) {
     salaryPence,
     grossPence,
     grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
+    grossExcludesBonus: data.get("grossExcludesBonus") === "on",
   }, modal.slipCategories || [], event.target);
   if ((amounts.otherDeductions || []).some((row) => row.amountPence == null)) {
     return showFormError("Use a valid amount, such as 12.50.");
@@ -2572,6 +2607,7 @@ async function savePayslip(event) {
     taxPence: amounts.taxPence,
     niPence: amounts.niPence,
     grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
+    grossExcludesBonus: data.get("grossExcludesBonus") === "on",
     netPence: amounts.netPence,
     statedNetPence,
     note: String(data.get("note") || "").trim(),

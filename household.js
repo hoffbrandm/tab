@@ -961,9 +961,53 @@ export function payslipAmountOutsideNet(row) {
  * sets grossBeforeSacrifice, and only then does the sacrifice come off.
  */
 export function payslipGrossPaidPence(slip) {
-  const gross = slip?.grossPence || 0;
-  if (!slip?.grossBeforeSacrifice) return gross;
-  return gross - (slip.salarySacrificePensionPence || 0);
+  let gross = slip?.grossPence || 0;
+  // Some slips (and the sheet's "Gross Per Month") show basic pay with the
+  // bonus as its own column rather than inside the Payments total.
+  if (slip?.grossExcludesBonus) gross += slip.bonusPence || 0;
+  if (slip?.grossBeforeSacrifice) gross -= slip.salarySacrificePensionPence || 0;
+  return gross;
+}
+
+/**
+ * Every net these figures could mean, one per way of reading Gross. Which one
+ * a slip uses is a fact about the payslip, not about the person filling this
+ * in — so rather than ask, show each reading with its number and let the one
+ * that matches the payslip be picked by eye.
+ */
+export function payslipNetReadings(slip) {
+  const sacrifice = slip?.salarySacrificePensionPence || 0;
+  const bonus = slip?.bonusPence || 0;
+  const sacrificeWays = sacrifice > 0 ? [false, true] : [false];
+  const bonusWays = bonus > 0 ? [false, true] : [false];
+  const readings = [];
+  for (const grossBeforeSacrifice of sacrificeWays) {
+    for (const grossExcludesBonus of bonusWays) {
+      const shape = { ...slip, grossBeforeSacrifice, grossExcludesBonus };
+      readings.push({
+        id: `${grossBeforeSacrifice ? "pre" : "post"}-sacrifice-${grossExcludesBonus ? "without" : "with"}-bonus`,
+        grossBeforeSacrifice,
+        grossExcludesBonus,
+        label: payslipReadingLabel(grossBeforeSacrifice, grossExcludesBonus),
+        grossPaidPence: payslipGrossPaidPence(shape),
+        netPence: payslipNetPence(shape),
+        current: Boolean(slip?.grossBeforeSacrifice) === grossBeforeSacrifice
+          && Boolean(slip?.grossExcludesBonus) === grossExcludesBonus,
+      });
+    }
+  }
+  const stated = slip?.statedNetPence;
+  if (Number.isInteger(stated) && stated > 0) {
+    for (const reading of readings) reading.matchesStated = reading.netPence === stated;
+  }
+  return readings;
+}
+
+function payslipReadingLabel(grossBeforeSacrifice, grossExcludesBonus) {
+  if (!grossBeforeSacrifice && !grossExcludesBonus) return "Gross is the Payments total on the slip";
+  if (grossBeforeSacrifice && !grossExcludesBonus) return "Gross is before the salary sacrifice";
+  if (!grossBeforeSacrifice && grossExcludesBonus) return "Gross is basic pay, with the bonus on top";
+  return "Gross is basic pay before the sacrifice, with the bonus on top";
 }
 
 /**
@@ -1012,6 +1056,11 @@ export function payslipTaxablePayPence(slip) {
   return (slip.salaryPence || 0) + (slip.bonusPence || 0) - (slip.salarySacrificePensionPence || 0);
 }
 
+/** True when more than one reading of Gross is possible for this slip. */
+export function payslipHasSeveralReadings(slip) {
+  return payslipNetReadings(slip).length > 1;
+}
+
 /**
  * The net the payslip itself states, against the net these figures produce.
  * A mismatch means a category is missing, misfiled, or gross was typed on the
@@ -1048,8 +1097,11 @@ export function payslipNetHints(slip) {
   if (sacrifice > 0 && difference === -sacrifice && slip?.grossBeforeSacrifice) {
     hints.push("That is exactly the salary sacrifice, and it is being taken off twice. Untick “Gross is before salary sacrifice”.");
   }
-  if (bonus > 0 && difference === -bonus) {
-    hints.push("That is exactly the bonus. Gross should be the Payments total on the slip, which already includes it.");
+  if (bonus > 0 && difference === -bonus && !slip?.grossExcludesBonus) {
+    hints.push("That is exactly the bonus, so the Gross typed here looks like basic pay with the bonus alongside it.");
+  }
+  if (bonus > 0 && difference === bonus && slip?.grossExcludesBonus) {
+    hints.push("That is exactly the bonus, and it is being counted twice — the Payments total already has it.");
   }
   if (benefits > 0 && difference === -benefits) {
     hints.push("That is exactly the taxable benefit. A benefit in kind is never paid to you, so it does not belong in Gross — it counts for the £100k line only.");
