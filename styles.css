@@ -406,7 +406,7 @@ select { appearance: auto; }
   flex: none;
   display: inline-flex;
   align-items: center;
-  padding: 0 0 0 13px;
+  padding: 0 6px 0 13px;
   font-size: 1.12rem;
   color: var(--muted);
   line-height: 1;
@@ -419,7 +419,7 @@ select { appearance: auto; }
   border: 0;
   background: transparent;
   min-height: 51px;
-  padding: 0 12px 0 8px;
+  padding: 0 12px 0 0;
   border-radius: 0;
   font-size: 1.22rem;
   font-weight: 750;
