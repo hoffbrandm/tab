@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { applyHouseholdImport, householdFromWorkbook, importHasData, reportLines } from "../workbook-import.js";
-import { cashflowForMonth } from "../household.js";
+import { cashflowForMonth, payslipNetCheck } from "../household.js";
 import { parseStore } from "../store.js";
 import { readXlsx } from "../xlsx.js";
 import { buildWorkbookXlsx, fakeHouseholdWorkbook } from "./xlsx-fixture.mjs";
@@ -103,7 +103,17 @@ test("a synthetic workbook maps into household lines and keeps friend tabs", asy
   assert.equal(kept.household.bills[0].id, "keep-me");
 
   const flow = cashflowForMonth(store.household, "2026-04", new Date("2026-04-10T12:00:00Z"));
-  assert.equal(flow.incomePence, 238000);
+  // Gross 3500 less tax 600, NI 280 and the 40 cycle scheme. The sacrifice is
+  // already out of gross and SMP is parental, so neither moves take-home.
+  assert.equal(flow.incomePence, 258000);
+
+  // The sheet's own Net column is carried in as the stated net, so where the
+  // sheet's maths and the app's disagree the slip says so instead of hiding it.
+  const imported = store.household.payslips.find((slip) => slip.periodMonth === "2026-04");
+  assert.equal(imported.statedNetPence, 242000);
+  const check = payslipNetCheck(imported);
+  assert.equal(check.matches, false);
+  assert.equal(check.differencePence, 16000);
   assert.ok(store.household.payslips[0].otherDeductions.some((row) => row.label === "Smp" || row.label === "SMP"));
   assert.equal(store.household.payslips[0].otherDeductions.find((row) => /smp/i.test(row.label)).inNet, false);
   assert.ok(flow.pendingPence >= 6000);

@@ -15,6 +15,8 @@ import {
   donationGrossPence,
   keepPayslipFormRows,
   emptyHousehold,
+  exceptionsForMonth,
+  exceptionsOutsideMonth,
   giftAidGrossPence,
   isCurrentMonth,
   jumpToCurrentMonthLabel,
@@ -29,6 +31,11 @@ import {
   masterPayslipCategories,
   payslipIsConfirmed,
   payslipNetPence,
+  payslipNetCheck,
+  payslipNetHints,
+  payslipGrossPaidPence,
+  payslipDeductionsPence,
+  payslipNetReadings,
   payslipRecordLabels,
   pendingListTotalPence,
   pendingsForMonth,
@@ -67,7 +74,6 @@ let screen = parseHash();
 let modal = null;
 let boot = { name: "loading" };
 let sync = { name: "saved" };
-let isSaving = false;
 let storeGeneration = 0;
 let localImportOffered = false;
 let localSession = false;
@@ -235,22 +241,23 @@ async function persist() {
   }
 }
 
+/**
+ * Modal saves flip in memory, close, and write to the gist in the background —
+ * the same path ticks and table edits already take. Holding the form open on a
+ * round trip made every add and edit feel slow. A write that fails shows on the
+ * sync chip with a retry, and the queue keeps the change until it lands.
+ */
 async function withStoreUpdate(mutator) {
-  await persistQueue.flush();
-  if (isSaving) return false;
-  isSaving = true;
   const previous = structuredClone(store);
   try {
     mutator();
-    storeGeneration += 1;
-    await persist();
-    return true;
   } catch {
     store = previous;
     return false;
-  } finally {
-    isSaving = false;
   }
+  storeGeneration += 1;
+  persistQueue.schedule();
+  return true;
 }
 
 function applyLocal(mutator, { render: shouldRender = true } = {}) {
@@ -424,16 +431,98 @@ function emptyLines(text, action, label) {
   return `<div class="empty-lines"><p>${esc(text)}</p>${action ? `<button class="text-button" type="button" data-action="${action}">${esc(label)}</button>` : ""}</div>`;
 }
 
+
+function moneyClass(pence) {
+  return pence < 0 ? "negative" : "neutral";
+}
+
+function overUnderLabel(flow) {
+  if (!flow.cardCheckKnown) return "Under / overspend";
+  if (flow.overUnderPence < 0) return "Overspend";
+  if (flow.overUnderPence > 0) return "Underspend";
+  return "On budget";
+}
+
+function overUnderAmount(flow) {
+  if (!flow.cardCheckKnown) return "—";
+  return formatMoney(Math.abs(flow.overUnderPence));
+}
+
+/**
+ * The check is two numbers and people need to see both to trust it: what the
+ * card is allowed to carry by today, against what it really carries.
+ */
+function statementNote(flow) {
+  if (!flow.cardCheckKnown) {
+    const names = flow.cardsMissingSnapshot.map((card) => card.name).join(", ");
+    return `No balance for ${monthLabel(flow.month)} on ${names}. Total savings is In − Out until one is in.`;
+  }
+  const allowed = `Allowed ${formatMoney(flow.allowanceSoFarPence)}`;
+  const exceptions = flow.exceptionsPence ? ` (incl. ${formatMoney(flow.exceptionsPence)} exceptions)` : "";
+  return `${allowed}${exceptions} · on cards ${formatMoney(flow.actualOnCardsPence)}`;
+}
+
+function statementSection(flow) {
+  return `<section class="statement" aria-label="Month statement" data-statement>
+        <div class="statement-row in">
+          <span>In</span>
+          <strong data-statement-in>${formatMoney(flow.incomePence)}</strong>
+        </div>
+        <div class="statement-row out">
+          <span>Out</span>
+          <strong data-statement-out>${formatMoney(flow.outPence)}</strong>
+        </div>
+        <div class="statement-row savings">
+          <span>Savings</span>
+          <strong class="${moneyClass(flow.savingsPence)}" data-statement-savings>${formatMoney(flow.savingsPence)}</strong>
+        </div>
+        <div class="statement-row check">
+          <span data-statement-check-label>${overUnderLabel(flow)}</span>
+          <strong class="${moneyClass(flow.overUnderPence)}" data-statement-check>${overUnderAmount(flow)}</strong>
+        </div>
+        <p class="statement-note" data-statement-note>${esc(statementNote(flow))}</p>
+        <div class="statement-row left">
+          <span>Total savings</span>
+          <strong class="${moneyClass(flow.totalSavingsPence)}" data-statement-total>${formatMoney(flow.totalSavingsPence)}</strong>
+        </div>
+      </section>`;
+}
+
+/**
+ * Card balances, pending rows, and exception amounts are typed into inputs that
+ * stay on screen. A full render would take the caret with it, so the statement
+ * is patched in place on every keystroke instead of waiting for a refresh.
+ */
+function refreshStatement() {
+  const section = document.querySelector("[data-statement]");
+  if (!section) return;
+  const flow = cashflowForMonth(household(), viewMonth, new Date());
+  const set = (selector, text, pence) => {
+    const node = section.querySelector(selector);
+    if (!node) return;
+    node.textContent = text;
+    if (pence != null) node.className = moneyClass(pence);
+  };
+  set("[data-statement-in]", formatMoney(flow.incomePence));
+  set("[data-statement-out]", formatMoney(flow.outPence));
+  set("[data-statement-savings]", formatMoney(flow.savingsPence), flow.savingsPence);
+  set("[data-statement-check-label]", overUnderLabel(flow));
+  set("[data-statement-check]", overUnderAmount(flow), flow.overUnderPence);
+  set("[data-statement-note]", statementNote(flow));
+  set("[data-statement-total]", formatMoney(flow.totalSavingsPence), flow.totalSavingsPence);
+}
+
 function cashflowScreen() {
   const hh = household();
   const now = new Date();
   const flow = cashflowForMonth(hh, viewMonth, now);
-  const leftClass = flow.savingsPence < 0 ? "negative" : "neutral";
   const period = monthLabel(viewMonth);
   const weeklySlots = flow.weeklySlots || weeklySlotsForMonth(hh, viewMonth);
   const cards = cardsForMonth(hh, viewMonth, now);
   const pendingRows = flow.pendingRows || pendingsForMonth(hh, viewMonth, now);
   const planned = plannedForViewedMonth(hh);
+  const exceptions = exceptionsForMonth(hh, viewMonth);
+  const otherExceptionCount = exceptionsOutsideMonth(hh, viewMonth).length;
   const otherPlannedCount = oneOffsOutsideMonth(hh, viewMonth).length;
   const incomeLines = flow.incomeLines || [];
 
@@ -441,20 +530,7 @@ function cashflowScreen() {
     eyebrow: "",
     title: "",
     month: true,
-    extra: `<section class="statement" aria-label="Month statement">
-        <div class="statement-row in">
-          <span>In</span>
-          <strong>${formatMoney(flow.incomePence)}</strong>
-        </div>
-        <div class="statement-row out">
-          <span>Out</span>
-          <strong>${formatMoney(flow.outPence)}</strong>
-        </div>
-        <div class="statement-row left">
-          <span>Left / savings</span>
-          <strong class="${leftClass}">${formatMoney(flow.savingsPence)}</strong>
-        </div>
-      </section>`,
+    extra: statementSection(flow),
     body: `
       ${homeAccordion("income", "Income", `
         ${incomeLines.length ? incomeLines.map((line) => lineRow({
@@ -477,7 +553,7 @@ function cashflowScreen() {
         </form>
       `)}
       ${homeAccordion("pending", "Pending", `
-        <p class="helper">Amounts from the statement. Total <strong data-pending-total>${formatMoney(pendingListTotalPence(pendingRows))}</strong>.</p>
+        <p class="helper">Amounts from the statement. Total <strong data-pending-total>${formatMoney(pendingListTotalPence(pendingRows))}</strong>.${flow.cardPendingPence ? ` A further <strong>${formatMoney(flow.cardPendingPence)}</strong> is typed as pending on the cards themselves, and both count. Keep each amount in one place only.` : ""}</p>
         <div class="pending-table" role="table" aria-label="Pending amounts">
           <div class="pending-head" role="row">
             <span role="columnheader">Amount</span>
@@ -489,6 +565,20 @@ function cashflowScreen() {
           <button class="text-button" type="button" data-action="add-pending-row">Add a row</button>
           <button class="text-button" type="button" data-action="clear-pending">Clear all</button>
         </div>
+      `)}
+      ${homeAccordion("exceptions", `Exceptions · ${period}`, `
+        <p class="helper">Spending that came from another pot. The card is allowed to be this much higher, and it does not change Savings.</p>
+        ${exceptions.length ? exceptions.map((item) => lineRow({
+          edit: "edit-exception",
+          id: item.id,
+          title: item.name,
+          detail: `Not from the normal amount`,
+          amount: formatMoney(item.amountPence),
+          removeAction: "remove-exception",
+          removeLabel: "Delete",
+        })).join("") : `<p class="helper">Nothing set aside in ${esc(period)}.</p>`}
+        ${otherExceptionCount ? `<p class="helper">${otherExceptionCount} exception${otherExceptionCount === 1 ? "" : "s"} in other months.</p>` : ""}
+        <button class="text-button" type="button" data-action="add-exception">Add an exception</button>
       `)}
       ${homeAccordion("weeklies", "Weeklies", `
         ${weeklySlots.length ? weeklySlots.map((slot) => lineRow({
@@ -600,7 +690,7 @@ function monthliesScreen() {
   return shell({
     eyebrow: "Monthlies",
     title: "Standing outs.",
-    lede: "Name, amount, and due day. Optional first working day. These are config — they are not ticked. Cash lines, card lines, and reserve lines count in Out for the whole month on screen. Cash lines do not move Left / savings. Card lines do, on the due date, with no tick.",
+    lede: "Name, amount, and due day. Optional first working day. These are config — they are not ticked. Cash lines, card lines, and reserve lines count in Out for the whole month on screen. Cash lines do not move the card allowance. Card lines do, on the due date, with no tick.",
     month: true,
     body: `
       <section class="block">
@@ -802,7 +892,7 @@ function payslipsScreen() {
             edit: "edit-payslip",
             id: slip.id,
             title: `${personById(slip.personId)?.name || "Person"} · ${labels.period}`,
-            detail: `${confirmed ? "Confirmed" : "Forecast"} · ${labels.taxYear} · lands ${labels.lands} · net ${formatMoney(slip.netPence)}`,
+            detail: `${confirmed ? "Confirmed" : "Forecast"} · ${labels.taxYear} · lands ${labels.lands} · net ${formatMoney(payslipNetPence(slip))}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
             amount: formatMoney(slip.grossPence || slip.salaryPence),
           });
         }).join("") : emptyLines("Add a month when you have a slip — or a forecast row you do not treat as fact.", "add-payslip", "Add a payslip")}
@@ -823,7 +913,7 @@ function aniScreen() {
   return shell({
     eyebrow: "Childcare cliff",
     title: "£100k ANI.",
-    lede: "Stay at or under £100,000 adjusted net income. YTD and the projection come from payslips. Gift Aid from giving in this tax year is included automatically.",
+    lede: "Stay at or under £100,000 adjusted net income. YTD and the projection come from payslips. Grossed-up Gift Aid from giving in this tax year comes off automatically.",
     back: "",
     extra: `
       <div class="ani-controls">
@@ -848,7 +938,7 @@ function aniScreen() {
           : result.overLimit
             ? `<p>Sacrifice another ${formatMoney(result.extraSacrificePence)} this tax year${formatExtraPercent(result)} to stay at £100k.${result.remainingMonths ? ` That’s ${formatMoney(result.extraPerRemainingMonthPence)} in each of the ${result.remainingMonths} remaining months.` : ""}</p>`
             : `<p>On this projection you’re ${formatMoney(result.underByPence)} under the £100k cliff.</p>`}
-        <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Gift Aid from giving ${formatMoney(result.giftAidAddBackPence)}.</p>
+        <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Grossed-up Gift Aid taken off: ${formatMoney(result.giftAidReliefPence)}.</p>
       </section>
     `,
   });
@@ -1042,6 +1132,7 @@ function modalMarkup() {
     reserve: reserveForm,
     "payslip-category": payslipCategoryForm,
     oneoff: oneOffForm,
+    exception: exceptionForm,
     annual: annualForm,
     pot: potForm,
     pension: pensionForm,
@@ -1269,6 +1360,19 @@ function oneOffForm() {
   </form>`;
 }
 
+function exceptionForm() {
+  const item = modal.item || {};
+  return `<form id="exception-form">${modalHead(item.id ? "Exception" : "New exception", item.id ? "Edit exception" : "Add an exception")}
+    <label>What<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Travel insurance, school trip…" /></label>
+    <label>Month<input required type="month" name="month" value="${item.month || viewMonth}" /></label>
+    ${moneyLabel("Amount", "amount", item.amountPence, { required: true })}
+    <p class="helper">This came from another pot, so the card is allowed to be this much higher without it reading as overspend.</p>
+    <p class="form-error" id="form-error"></p>
+    <button class="primary wide" type="submit">${item.id ? "Save exception" : "Add exception"}</button>
+    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-exception">Delete exception</button>' : ""}
+  </form>`;
+}
+
 function annualForm() {
   const item = modal.item || {};
   return `<form id="annual-form">${modalHead(item.id ? "Annual bill" : "New annual bill", item.id ? "Edit annual bill" : "Add an annual bill")}
@@ -1325,6 +1429,9 @@ function payslipForm() {
     <label>Month the money lands<input required type="month" name="moneyLandsMonth" value="${item.moneyLandsMonth || item.periodMonth || viewMonth}" /></label>
     ${moneyLabel("Salary", "salary", item.salaryPence)}
     ${moneyLabel("Gross", "gross", item.grossPence)}
+    <p class="helper">Gross is the Payments total on the slip — basic, bonus, and any parental pay — after any salary sacrifice has come off. Tax and NI go in Categories below. If your slip writes it another way, say so under Net.</p>
+    <input type="hidden" name="grossBeforeSacrifice" value="${item.grossBeforeSacrifice ? "on" : ""}" />
+    <input type="hidden" name="grossExcludesBonus" value="${item.grossExcludesBonus ? "on" : ""}" />
     <section class="payslip-cats">
       <h3>Categories</h3>
       <p class="helper">Pick a category and enter the amount. Names live in Account. Net is calculated.</p>
@@ -1336,7 +1443,9 @@ function payslipForm() {
         </select>
       </label>` : `<p class="helper">Every category from Account is already on this slip.</p>`}
     </section>
-    <p class="payslip-net">Net <strong data-payslip-net>${formatMoney(payslipNetPence(live))}</strong></p>
+    ${payslipNetBlock(live)}
+    ${moneyLabel("Net on the payslip", "statedNet", item.statedNetPence)}
+    <p class="helper">Optional. Type what the slip says and the figures above get checked against it.</p>
     <label>Tax code <span class="optional">optional</span><input maxlength="20" name="taxCode" value="${esc(item.taxCode || "")}" autocomplete="off" /></label>
     <label>Note <span class="optional">optional</span><input maxlength="200" name="note" value="${esc(item.note || "")}" /></label>
     <label class="check-row"><input type="checkbox" name="forecast" ${item.forecast ? "checked" : ""} /><span>This is a forecast — do not treat it as confirmed</span></label>
@@ -1344,6 +1453,47 @@ function payslipForm() {
     <button class="primary wide" type="submit">${item.id ? "Save payslip" : "Add payslip"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-payslip">Delete payslip</button>' : ""}
   </form>`;
+}
+
+/**
+ * Net with its working shown, and — when the slip's own net is typed in — the
+ * check against it. Seeing gross, deductions, and the gap is what makes a
+ * mistyped figure obvious.
+ */
+function payslipNetBlock(live) {
+  const check = payslipNetCheck(live);
+  const hints = payslipNetHints(live);
+  return `<div class="payslip-net" data-payslip-net-block>
+    <p class="payslip-net-line"><span>Gross paid</span><strong>${formatMoney(payslipGrossPaidPence(live))}</strong></p>
+    <p class="payslip-net-line"><span>Deductions</span><strong>−${formatMoney(payslipDeductionsPence(live))}</strong></p>
+    <p class="payslip-net-line total"><span>Net</span><strong data-payslip-net>${formatMoney(payslipNetPence(live))}</strong></p>
+    ${check
+      ? (check.matches
+        ? `<p class="payslip-net-check ok">Matches the net on the slip.</p>`
+        : `<p class="payslip-net-check off">${esc(`${formatMoney(Math.abs(check.differencePence))} ${check.differencePence > 0 ? "more" : "less"} than the ${formatMoney(check.statedPence)} on the slip.`)}</p>
+           ${hints.map((hint) => `<p class="payslip-net-hint">${esc(hint)}</p>`).join("")}`)
+      : ""}
+    ${payslipReadings(live)}
+  </div>`;
+}
+
+/**
+ * Which net these figures mean depends on how the slip writes Gross, and that
+ * is a fact about the payslip. Show every reading with its number so the one
+ * that matches the payslip can be picked by eye, with no convention to learn.
+ */
+function payslipReadings(live) {
+  const readings = payslipNetReadings(live);
+  if (readings.length < 2) return "";
+  return `<div class="payslip-readings">
+    <p class="payslip-readings-head">Which of these is the net on your payslip?</p>
+    ${readings.map((reading) => `<button type="button" class="payslip-reading${reading.current ? " on" : ""}${reading.matchesStated ? " match" : ""}"
+      data-action="payslip-reading" data-before-sacrifice="${reading.grossBeforeSacrifice ? "1" : "0"}" data-excludes-bonus="${reading.grossExcludesBonus ? "1" : "0"}">
+      <span class="payslip-reading-net">${formatMoney(reading.netPence)}</span>
+      <span class="payslip-reading-label">${esc(reading.label)}</span>
+    </button>`).join("")}
+    <p class="helper">Picking one just says how to read Gross. It never changes the figures you typed.</p>
+  </div>`;
 }
 
 function payslipFormCategories(slip, personId) {
@@ -1381,6 +1531,10 @@ function livePayslipFromForm(slip, categories) {
   return applyPayslipCategoryAmounts({
     ...base,
     grossPence: readMoney("gross"),
+    salaryPence: readMoney("salary"),
+    statedNetPence: readMoney("statedNet"),
+    grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
+    grossExcludesBonus: data.get("grossExcludesBonus") === "on",
   }, modal.slipCategories || categories || [], form);
 }
 
@@ -1390,6 +1544,9 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
     bonusPence: 0,
     benefitsPence: 0,
     salarySacrificePensionPence: 0,
+    reliefAtSourcePensionPence: 0,
+    grossBeforeSacrifice: Boolean(slip?.grossBeforeSacrifice),
+    grossExcludesBonus: Boolean(slip?.grossExcludesBonus),
     taxPence: 0,
     niPence: 0,
     otherDeductions: [],
@@ -1400,6 +1557,7 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
     if (category.kind === "bonus") next.bonusPence = amount;
     else if (category.kind === "benefits") next.benefitsPence = amount;
     else if (category.kind === "sacrifice") next.salarySacrificePensionPence = amount;
+    else if (category.kind === "pension") next.reliefAtSourcePensionPence = amount;
     else if (category.kind === "tax") next.taxPence = amount;
     else if (category.kind === "ni") next.niPence = amount;
     else {
@@ -1623,6 +1781,17 @@ document.addEventListener("click", async (event) => {
   if (action === "edit-sub") openItem("sub", "cardSubs", id);
   if (action === "add-oneoff") openItem("oneoff");
   if (action === "edit-oneoff") openItem("oneoff", "oneOffs", id);
+  if (action === "payslip-reading") {
+    event.preventDefault();
+    const form = document.querySelector("#payslip-form");
+    if (form) {
+      form.elements.grossBeforeSacrifice.value = event.target.closest("[data-before-sacrifice]").dataset.beforeSacrifice === "1" ? "on" : "";
+      form.elements.grossExcludesBonus.value = event.target.closest("[data-excludes-bonus]").dataset.excludesBonus === "1" ? "on" : "";
+      updatePayslipNet();
+    }
+  }
+  if (action === "add-exception") openItem("exception");
+  if (action === "edit-exception") openItem("exception", "exceptions", id);
   if (action === "add-annual") openItem("annual");
   if (action === "edit-annual") openItem("annual", "annualBills", id);
   if (action === "add-pot") openItem("pot");
@@ -1645,6 +1814,11 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     removeListedItem("oneOffs", id, "one-off");
+  }
+  if (action === "remove-exception") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("exceptions", id, "exception");
   }
   if (action === "remove-monthly") {
     event.preventDefault();
@@ -1738,6 +1912,7 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-delete-payslip-category") askDelete("payslip-category", modal.item.id, "this category");
   if (action === "confirm-delete-sub") askDelete("sub", modal.item.id, "this subscription");
   if (action === "confirm-delete-oneoff") askDelete("oneoff", modal.item.id, "this one-off");
+  if (action === "confirm-delete-exception") askDelete("exception", modal.item.id, "this exception");
   if (action === "confirm-delete-annual") askDelete("annual", modal.item.id, "this annual bill");
   if (action === "confirm-delete-pot") askDelete("pot", modal.item.id, "this pot");
   if (action === "confirm-delete-pension") askDelete("pension", modal.item.id, "this pension name");
@@ -1790,6 +1965,7 @@ document.addEventListener("click", async (event) => {
       }
       if (targetModal.target === "sub") hh.cardSubs = hh.cardSubs.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "oneoff") hh.oneOffs = hh.oneOffs.filter((item) => item.id !== targetModal.id);
+      if (targetModal.target === "exception") hh.exceptions = (hh.exceptions || []).filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "annual") hh.annualBills = hh.annualBills.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "pot") hh.pots = hh.pots.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "pension") hh.pensions = hh.pensions.filter((item) => item.id !== targetModal.id);
@@ -1866,6 +2042,7 @@ document.addEventListener("submit", (event) => {
     "payslip-category-form": savePayslipCategory,
     "home-card-form": saveHomeCard,
     "oneoff-form": saveOneOff,
+    "exception-form": saveException,
     "annual-form": saveAnnual,
     "pot-form": savePot,
     "pension-form": savePension,
@@ -2329,6 +2506,19 @@ async function saveOneOff(event) {
   });
 }
 
+async function saveException(event) {
+  return saveNamedMoney(event, {
+    list: "exceptions",
+    toastAdd: "Exception added",
+    toastEdit: "Exception updated",
+    build: (data) => ({
+      name: requireName(data.get("name"), "exception"),
+      month: coerceMonthKey(data.get("month")) || viewMonth,
+      amountPence: requireMoney(data.get("amount"), "amount"),
+    }),
+  });
+}
+
 async function saveAnnual(event) {
   return saveNamedMoney(event, {
     list: "annualBills",
@@ -2391,10 +2581,14 @@ async function savePayslip(event) {
   } catch (error) {
     return showFormError(error.message);
   }
+  const statedNetPence = parseMoneyAllowZero(data.get("statedNet"));
+  if (statedNetPence === null) return showFormError("Use a valid net, such as 2420.00.");
   const amounts = applyPayslipCategoryAmounts({
     ...(modal.payslip || {}),
     salaryPence,
     grossPence,
+    grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
+    grossExcludesBonus: data.get("grossExcludesBonus") === "on",
   }, modal.slipCategories || [], event.target);
   if ((amounts.otherDeductions || []).some((row) => row.amountPence == null)) {
     return showFormError("Use a valid amount, such as 12.50.");
@@ -2408,10 +2602,14 @@ async function savePayslip(event) {
     bonusPence: amounts.bonusPence,
     benefitsPence: amounts.benefitsPence,
     salarySacrificePensionPence: amounts.salarySacrificePensionPence,
+    reliefAtSourcePensionPence: amounts.reliefAtSourcePensionPence,
     otherDeductions: amounts.otherDeductions,
     taxPence: amounts.taxPence,
     niPence: amounts.niPence,
+    grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
+    grossExcludesBonus: data.get("grossExcludesBonus") === "on",
     netPence: amounts.netPence,
+    statedNetPence,
     note: String(data.get("note") || "").trim(),
     moneyLandsMonth: data.get("moneyLandsMonth") || data.get("periodMonth"),
     forecast: data.get("forecast") === "on",
@@ -2475,10 +2673,10 @@ function snapshotPayslipForm() {
 }
 
 function updatePayslipNet() {
-  const output = document.querySelector("[data-payslip-net]");
-  if (!output) return;
+  const block = document.querySelector("[data-payslip-net-block]");
+  if (!block) return;
   const live = livePayslipFromForm(modal?.payslip || {}, modal?.slipCategories || []);
-  output.textContent = formatMoney(payslipNetPence(live));
+  block.outerHTML = payslipNetBlock(live);
 }
 
 function updatePendingField(input) {
@@ -2498,6 +2696,7 @@ function updatePendingField(input) {
   if (total) {
     total.textContent = formatMoney(pendingListTotalPence(pendingsForMonth(household(), viewMonth)));
   }
+  refreshStatement();
   persistQueue.schedule();
 }
 
@@ -2518,6 +2717,7 @@ function updateCardBalance(input) {
     card.updatedOn = today();
   }
   storeGeneration += 1;
+  refreshStatement();
   persistQueue.schedule();
 }
 

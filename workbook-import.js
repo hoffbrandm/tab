@@ -354,6 +354,7 @@ function importPayslips(grid, household, report) {
     bonus: headerIndex(row, ["bonus"], inLedger),
     benefits: headerIndex(row, ["benefits"], inLedger),
     sacrifice: headerIndex(row, ["salary sacrifice pension"], inLedger),
+    nonSacrifice: headerIndex(row, ["non salary sacrifice pension"], inLedger),
     tax: headerIndex(row, ["tax"], inLedger),
     ni: headerIndex(row, ["ni"], inLedger),
     net: headerIndex(row, ["net"], inLedger),
@@ -373,7 +374,6 @@ function importPayslips(grid, household, report) {
     "enhanced maternity",
     "enhanced paternity",
     "ospp",
-    "non salary sacrifice pension",
   ];
   const deductionCols = deductionHeaders
     .map((label) => ({ label, index: headerIndex(row, [label], inLedger) }))
@@ -409,10 +409,13 @@ function importPayslips(grid, household, report) {
       bonusPence: moneyToPence(cells[col.bonus]),
       benefitsPence: moneyToPence(cells[col.benefits]),
       salarySacrificePensionPence: moneyToPence(cells[col.sacrifice]),
+      reliefAtSourcePensionPence: moneyToPence(cells[col.nonSacrifice]),
       otherDeductions,
       taxPence: moneyToPence(cells[col.tax]),
       niPence: moneyToPence(cells[col.ni]),
-      netPence: moneyToPence(cells[col.net]),
+      // The sheet's own Net column is what the slip states, not a derived
+      // figure — it is the thing the app's calculation gets checked against.
+      statedNetPence: moneyToPence(cells[col.net]),
       note,
       moneyLandsMonth: asMonth(cells[col.lands]) || periodMonth,
       forecast,

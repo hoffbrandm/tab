@@ -51,6 +51,7 @@ test("Home has income, pending clear-all, and planned accordion hooks", () => {
   assert.match(app, /homeAccordion\("income"/);
   assert.match(app, /homeAccordion\("cards"/);
   assert.match(app, /homeAccordion\("pending"/);
+  assert.match(app, /homeAccordion\("exceptions"/);
   assert.match(app, /homeAccordion\("weeklies"/);
   assert.match(app, /homeAccordion\("planned"/);
   assert.match(app, /data-home-section="\$\{esc\(id\)}"/);
@@ -58,8 +59,11 @@ test("Home has income, pending clear-all, and planned accordion hooks", () => {
   assert.match(app, /data-action="add-payslip"/);
   assert.match(app, /class="primary home-add-payslip"/);
   assert.match(app, /formatMoney\(flow\.savingsPence\)/);
-  assert.match(app, /Left \/ savings/);
-  assert.doesNotMatch(app, /Allowed/);
+  assert.match(app, /formatMoney\(flow\.totalSavingsPence\)/);
+  // Allowed is not a statement row of its own; it reads as the small note that
+  // shows both sides of the check.
+  assert.doesNotMatch(app, /<span>Allowed<\/span>/);
+  assert.match(app, /data-statement-note/);
   assert.doesNotMatch(app, /flow\.leftPence/);
 });
 
@@ -123,4 +127,62 @@ test("regularly cleared lists swipe left to delete; setup entities do not", () =
   assert.doesNotMatch(more, /removeAction/);
   assert.doesNotMatch(tabs, /data-swipe|removeAction/);
   assert.doesNotMatch(income, /removeAction/);
+});
+
+test("Home statement shows Savings, the under/overspend, and Total savings", () => {
+  assert.match(app, /<span>Savings<\/span>/);
+  assert.match(app, /data-statement-savings/);
+  assert.match(app, /data-statement-check-label/);
+  assert.match(app, /<span>Total savings<\/span>/);
+  assert.match(app, /data-statement-total/);
+  assert.doesNotMatch(app, /<span>Left \/ savings<\/span>/);
+  assert.match(app, /return "Overspend";/);
+  assert.match(app, /return "Underspend";/);
+  assert.match(app, /return "Under \/ overspend";/);
+});
+
+test("typing a card balance or a pending amount repaints the statement without a refresh", () => {
+  assert.match(app, /function refreshStatement\(\)/);
+  const cardBalance = app.slice(app.indexOf("function updateCardBalance"), app.indexOf("function updateLiveSplit"));
+  assert.match(cardBalance, /refreshStatement\(\);/);
+  const pending = app.slice(app.indexOf("function updatePendingField"), app.indexOf("function updateCardBalance"));
+  assert.match(pending, /refreshStatement\(\);/);
+});
+
+test("Home has an Exceptions section that can add, edit, and delete", () => {
+  assert.match(app, /homeAccordion\("exceptions"/);
+  assert.match(app, /data-action="add-exception"/);
+  assert.match(app, /edit: "edit-exception"/);
+  assert.match(app, /removeAction: "remove-exception"/);
+  assert.match(app, /"exception-form": saveException/);
+});
+
+test("modal saves flip in memory and write in the background", () => {
+  const update = app.slice(app.indexOf("async function withStoreUpdate"), app.indexOf("function applyLocal"));
+  assert.doesNotMatch(update, /await persist\(\)/);
+  assert.doesNotMatch(update, /await persistQueue\.flush\(\)/);
+  assert.match(update, /persistQueue\.schedule\(\)/);
+  assert.doesNotMatch(app, /let isSaving/);
+});
+
+test("the £100k helper takes grossed-up Gift Aid off, and never adds it on", () => {
+  assert.match(app, /giftAidReliefPence/);
+  assert.doesNotMatch(app, /giftAidAddBackPence/);
+  assert.match(app, /Grossed-up Gift Aid taken off/);
+});
+
+test("the payslip form says what Gross means and checks it against the slip", () => {
+  assert.match(app, /Gross is the Payments total on the slip/);
+  assert.match(app, /name="grossBeforeSacrifice"/);
+  assert.match(app, /name="grossExcludesBonus"/);
+  assert.match(app, /Which of these is the net on your payslip\?/);
+  assert.match(app, /data-action="payslip-reading"/);
+  assert.match(app, /moneyLabel\("Net on the payslip", "statedNet"/);
+  assert.match(app, /data-payslip-net-block/);
+  assert.match(app, /payslipNetHints\(live\)/);
+});
+
+test("the payslips list shows the live net, never a stale cached one", () => {
+  assert.doesNotMatch(app, /formatMoney\(slip\.netPence\)/);
+  assert.match(app, /net \$\{formatMoney\(payslipNetPence\(slip\)\)\}/);
 });

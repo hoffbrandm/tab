@@ -22,11 +22,13 @@ export const WEEKDAYS = [
 ];
 export const MONTHLY_PAID_FROM = ["card", "cash"];
 export const DUE_ROLLS = ["calendar", "nextWorking", "firstWorking"];
-export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "sacrifice", "tax", "ni", "extra", "deduction", "parental"];
+export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "sacrifice", "pension", "tax", "ni", "extra", "deduction", "parental"];
 export const BUILTIN_PAYSLIP_CATEGORIES = [
   { id: "bonus", label: "Bonus", kind: "bonus" },
   { id: "benefits", label: "Benefits", kind: "benefits" },
-  { id: "sacrifice", label: "Pensions", kind: "sacrifice" },
+  // "Pensions" said nothing about which kind, and the two behave differently.
+  { id: "sacrifice", label: "Salary sacrifice pension", kind: "sacrifice" },
+  { id: "pension", label: "Pension (relief at source)", kind: "pension" },
   { id: "tax", label: "Tax", kind: "tax" },
   { id: "ni", label: "NI", kind: "ni" },
 ];
@@ -81,6 +83,7 @@ export function emptyHousehold() {
     pendings: [],
     reserves: [],
     oneOffs: [],
+    exceptions: [],
     annualBills: [],
     pots: [],
     pensions: [],
@@ -105,6 +108,7 @@ export function householdHasData(household) {
     "pendings",
     "reserves",
     "oneOffs",
+    "exceptions",
     "annualBills",
     "pots",
     "pensions",
@@ -536,6 +540,12 @@ export function giftAidGrossPence(amountPence, giftAid) {
   return Math.round((amountPence * 5) / 4);
 }
 
+/** Basic-rate gross-up: a contribution paid from net pay is worth 100/80. */
+export function basicRateGrossUpPence(amountPence) {
+  if (!Number.isInteger(amountPence) || amountPence <= 0) return 0;
+  return Math.round((amountPence * 5) / 4);
+}
+
 export function donationGrossPence(donation) {
   return giftAidGrossPence(donation.amountPence, donation.giftAid);
 }
@@ -575,11 +585,28 @@ export function proRateDay(viewMonth, today = new Date()) {
 }
 
 /**
- * Live spend versus cards (sheet column L / footer). In and Out stay the month
- * plan. Cash monthlies never enter this total. Cash-in-reserve / £30-a-day is
- * a standing Out line only — the sheet pro-rated it by day-of-month; this app
- * does not invent that pro-rate, so reserves stay out of spentSoFar.
+ * Allowed Expenses in the sheet: what the card is allowed to carry by today.
+ * In and Out stay the month plan. Cash monthlies never enter this total.
+ * Cash-in-reserve / £30-a-day is a standing Out line only — the sheet
+ * pro-rated it by day-of-month; this app does not invent that pro-rate, so
+ * reserves stay out of spentSoFar.
  */
+export function exceptionMonthKey(item) {
+  return coerceMonthKey(item?.month);
+}
+
+export function exceptionsForMonth(household, month) {
+  return (household?.exceptions || []).filter((item) => exceptionMonthKey(item) === month);
+}
+
+export function exceptionsOutsideMonth(household, month) {
+  return (household?.exceptions || []).filter((item) => exceptionMonthKey(item) !== month);
+}
+
+export function exceptionsTotalPence(household, month) {
+  return sumPence(exceptionsForMonth(household, month), (item) => item.amountPence);
+}
+
 export function spentSoFarForMonth(household, month, today = new Date()) {
   const dayOfMonth = proRateDay(month, today);
   const monthlies = monthliesOf(household);
@@ -641,17 +668,33 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const allowedWithSubsPence = allowedPence;
   const cardBalancesPence = sumPence(cards, (item) => item.balancePence);
   const pendingRows = pendingsForMonth(household, month, today);
-  const pendingPence = sumPence(cards, (item) => item.pendingPence || 0)
-    + pendingListTotalPence(pendingRows);
+  const cardPendingPence = sumPence(cards, (item) => item.pendingPence || 0);
+  const pendingTablePence = pendingListTotalPence(pendingRows);
+  const pendingPence = cardPendingPence + pendingTablePence;
   const cardSidePence = cardBalancesPence + pendingPence;
+  // A card with no balance recorded for this month reads as £0, which would
+  // report the whole allowance as underspend. The check is unknown instead.
+  const cardsMissingSnapshot = cards.filter((item) => item.missingSnapshot);
+  const cardCheckKnown = cardsMissingSnapshot.length === 0;
   const tickedWeeklyPence = live.tickedWeeklyPence;
   const purchasedOneOffsPence = live.purchasedOneOffsPence;
   const dueCardMonthliesPence = live.dueCardMonthliesPence;
   const reserveSpentPence = live.reserveSpentPence;
   const spentSoFarPence = live.spentSoFarPence;
   const actualOnCardsPence = cardSidePence;
-  const savingsPence = spentSoFarPence - actualOnCardsPence;
-  const overUnderPence = savingsPence;
+  // Exceptions are paid from another pot, so the card is allowed to be that
+  // much higher without it reading as overspend, and they never touch savings.
+  const exceptions = exceptionsForMonth(household, month);
+  const exceptionsPence = sumPence(exceptions, (item) => item.amountPence);
+  const allowanceSoFarPence = spentSoFarPence + exceptionsPence;
+  // Sheet footer: Savings is In minus Out; the card check is the over/underspend
+  // against the allowance; Total Savings adds the two.
+  const savingsPence = leftPence;
+  const cardCheckPence = allowanceSoFarPence - actualOnCardsPence;
+  const overUnderPence = cardCheckKnown ? cardCheckPence : 0;
+  const totalSavingsPence = savingsPence + overUnderPence;
+  const overspendPence = overUnderPence < 0 ? -overUnderPence : 0;
+  const underspendPence = overUnderPence > 0 ? overUnderPence : 0;
 
   return {
     month,
@@ -682,8 +725,12 @@ export function cashflowForMonth(household, month, today = new Date()) {
     subsAllowedPence,
     allowedWithSubsPence,
     cardBalancesPence,
+    cardsMissingSnapshot,
+    cardCheckKnown,
     pendingRows,
     pendingPence,
+    cardPendingPence,
+    pendingTablePence,
     cardSidePence,
     overUnderPence,
     tickedWeeklyPence,
@@ -692,7 +739,14 @@ export function cashflowForMonth(household, month, today = new Date()) {
     reserveSpentPence,
     spentSoFarPence,
     actualOnCardsPence,
+    exceptions,
+    exceptionsPence,
+    allowanceSoFarPence,
     savingsPence,
+    cardCheckPence,
+    overspendPence,
+    underspendPence,
+    totalSavingsPence,
   };
 }
 
@@ -815,8 +869,9 @@ export function payslipCategoriesOf(household) {
     if (slip.bonusPence) remember(BUILTIN_PAYSLIP_CATEGORIES[0]);
     if (slip.benefitsPence) remember(BUILTIN_PAYSLIP_CATEGORIES[1]);
     if (slip.salarySacrificePensionPence) remember(BUILTIN_PAYSLIP_CATEGORIES[2]);
-    if (slip.taxPence) remember(BUILTIN_PAYSLIP_CATEGORIES[3]);
-    if (slip.niPence) remember(BUILTIN_PAYSLIP_CATEGORIES[4]);
+    if (slip.reliefAtSourcePensionPence) remember(BUILTIN_PAYSLIP_CATEGORIES[3]);
+    if (slip.taxPence) remember(BUILTIN_PAYSLIP_CATEGORIES[4]);
+    if (slip.niPence) remember(BUILTIN_PAYSLIP_CATEGORIES[5]);
     for (const row of slip.otherDeductions || []) {
       if (row.label) remember({
         id: row.id,
@@ -870,6 +925,7 @@ export function payslipAmountForCategory(slip, category) {
   if (category.kind === "bonus") return slip.bonusPence || 0;
   if (category.kind === "benefits") return slip.benefitsPence || 0;
   if (category.kind === "sacrifice") return slip.salarySacrificePensionPence || 0;
+  if (category.kind === "pension") return slip.reliefAtSourcePensionPence || 0;
   if (category.kind === "tax") return slip.taxPence || 0;
   if (category.kind === "ni") return slip.niPence || 0;
   const label = String(category.label || "").trim().toLowerCase();
@@ -894,21 +950,168 @@ export function payslipAmountOutsideNet(row) {
   return isParentalPayLabel(row.label);
 }
 
+/**
+ * Gross actually paid. `grossPence` is the payslip's Payments total, so it
+ * already carries basic salary, bonus, and any statutory or enhanced parental
+ * pay — that is why those are not added again anywhere below.
+ *
+ * Salary sacrifice is not an employee deduction: the employee gives up
+ * contractual pay and the employer pays the pension, so the Payments total is
+ * already reduced by it. A slip that instead shows gross before the sacrifice
+ * sets grossBeforeSacrifice, and only then does the sacrifice come off.
+ */
+export function payslipGrossPaidPence(slip) {
+  let gross = slip?.grossPence || 0;
+  // Some slips (and the sheet's "Gross Per Month") show basic pay with the
+  // bonus as its own column rather than inside the Payments total.
+  if (slip?.grossExcludesBonus) gross += slip.bonusPence || 0;
+  if (slip?.grossBeforeSacrifice) gross -= slip.salarySacrificePensionPence || 0;
+  return gross;
+}
+
+/**
+ * Every net these figures could mean, one per way of reading Gross. Which one
+ * a slip uses is a fact about the payslip, not about the person filling this
+ * in — so rather than ask, show each reading with its number and let the one
+ * that matches the payslip be picked by eye.
+ */
+export function payslipNetReadings(slip) {
+  const sacrifice = slip?.salarySacrificePensionPence || 0;
+  const bonus = slip?.bonusPence || 0;
+  const sacrificeWays = sacrifice > 0 ? [false, true] : [false];
+  const bonusWays = bonus > 0 ? [false, true] : [false];
+  const readings = [];
+  for (const grossBeforeSacrifice of sacrificeWays) {
+    for (const grossExcludesBonus of bonusWays) {
+      const shape = { ...slip, grossBeforeSacrifice, grossExcludesBonus };
+      readings.push({
+        id: `${grossBeforeSacrifice ? "pre" : "post"}-sacrifice-${grossExcludesBonus ? "without" : "with"}-bonus`,
+        grossBeforeSacrifice,
+        grossExcludesBonus,
+        label: payslipReadingLabel(grossBeforeSacrifice, grossExcludesBonus),
+        grossPaidPence: payslipGrossPaidPence(shape),
+        netPence: payslipNetPence(shape),
+        current: Boolean(slip?.grossBeforeSacrifice) === grossBeforeSacrifice
+          && Boolean(slip?.grossExcludesBonus) === grossExcludesBonus,
+      });
+    }
+  }
+  const stated = slip?.statedNetPence;
+  if (Number.isInteger(stated) && stated > 0) {
+    for (const reading of readings) reading.matchesStated = reading.netPence === stated;
+  }
+  return readings;
+}
+
+function payslipReadingLabel(grossBeforeSacrifice, grossExcludesBonus) {
+  if (!grossBeforeSacrifice && !grossExcludesBonus) return "Gross is the Payments total on the slip";
+  if (grossBeforeSacrifice && !grossExcludesBonus) return "Gross is before the salary sacrifice";
+  if (!grossBeforeSacrifice && grossExcludesBonus) return "Gross is basic pay, with the bonus on top";
+  return "Gross is basic pay before the sacrifice, with the bonus on top";
+}
+
+/**
+ * Deductions the payslip takes off gross: tax, NI, a relief-at-source pension
+ * (paid out of pay, unlike a sacrifice), and the deduction rows.
+ */
+export function payslipDeductionsPence(slip) {
+  return (slip?.taxPence || 0)
+    + (slip?.niPence || 0)
+    + (slip?.reliefAtSourcePensionPence || 0)
+    + sumPence(
+      (slip?.otherDeductions || []).filter((row) => !row.extra && !payslipAmountOutsideNet(row)),
+      (row) => row.amountPence,
+    );
+}
+
+/** Additions paid on top of the Payments total, if a slip is built that way. */
+export function payslipAdditionsPence(slip) {
+  return sumPence(
+    (slip?.otherDeductions || []).filter((row) => row.extra && !payslipAmountOutsideNet(row)),
+    (row) => row.amountPence,
+  );
+}
+
+/**
+ * The payslip's own arithmetic: Net pay = Total gross pay − Total deductions.
+ *
+ * Taxable benefits are deliberately absent. A benefit in kind is notional — it
+ * is taxed but never paid, so it cannot raise the money that lands in the bank.
+ * It belongs in adjusted net income, and only there.
+ */
 export function payslipNetPence(slip) {
   if (!slip) return 0;
-  const extras = (slip.bonusPence || 0) + (slip.benefitsPence || 0)
-    + sumPence(
-      (slip.otherDeductions || []).filter((row) => row.extra && !payslipAmountOutsideNet(row)),
-      (row) => row.amountPence,
-    );
-  const deductions = (slip.salarySacrificePensionPence || 0)
-    + (slip.taxPence || 0)
-    + (slip.niPence || 0)
-    + sumPence(
-      (slip.otherDeductions || []).filter((row) => !row.extra && !payslipAmountOutsideNet(row)),
-      (row) => row.amountPence,
-    );
-  return (slip.grossPence || 0) + extras - deductions;
+  return payslipGrossPaidPence(slip) + payslipAdditionsPence(slip) - payslipDeductionsPence(slip);
+}
+
+/**
+ * What the slip is worth for the £100k line: taxable pay plus taxable benefits.
+ * Taxable pay is already net of any salary sacrifice, so the sacrifice is not
+ * subtracted a second time here.
+ */
+export function payslipTaxablePayPence(slip) {
+  if (!slip) return 0;
+  if ((slip.grossPence || 0) > 0) return payslipGrossPaidPence(slip);
+  // No gross typed. Salary is contractual, so it is a before-sacrifice figure.
+  return (slip.salaryPence || 0) + (slip.bonusPence || 0) - (slip.salarySacrificePensionPence || 0);
+}
+
+/** True when more than one reading of Gross is possible for this slip. */
+export function payslipHasSeveralReadings(slip) {
+  return payslipNetReadings(slip).length > 1;
+}
+
+/**
+ * The net the payslip itself states, against the net these figures produce.
+ * A mismatch means a category is missing, misfiled, or gross was typed on the
+ * wrong side of the sacrifice — better caught here than carried into Home.
+ */
+export function payslipNetCheck(slip) {
+  const statedPence = slip?.statedNetPence;
+  if (!Number.isInteger(statedPence) || statedPence <= 0) return null;
+  const calculatedPence = payslipNetPence(slip);
+  return {
+    statedPence,
+    calculatedPence,
+    differencePence: calculatedPence - statedPence,
+    matches: calculatedPence === statedPence,
+  };
+}
+
+/**
+ * Why a stated net and a calculated net disagree. The gap is usually exactly
+ * one figure on the slip, and naming which one is more use than "does not
+ * match" — the conventions here are the part people get wrong.
+ */
+export function payslipNetHints(slip) {
+  const check = payslipNetCheck(slip);
+  if (!check || check.matches) return [];
+  const difference = check.differencePence;
+  const sacrifice = slip?.salarySacrificePensionPence || 0;
+  const bonus = slip?.bonusPence || 0;
+  const benefits = slip?.benefitsPence || 0;
+  const hints = [];
+  if (sacrifice > 0 && difference === sacrifice && !slip?.grossBeforeSacrifice) {
+    hints.push("That is exactly the salary sacrifice, so the Gross typed here looks like the figure before it came off. Tick “Gross is before salary sacrifice”.");
+  }
+  if (sacrifice > 0 && difference === -sacrifice && slip?.grossBeforeSacrifice) {
+    hints.push("That is exactly the salary sacrifice, and it is being taken off twice. Untick “Gross is before salary sacrifice”.");
+  }
+  if (bonus > 0 && difference === -bonus && !slip?.grossExcludesBonus) {
+    hints.push("That is exactly the bonus, so the Gross typed here looks like basic pay with the bonus alongside it.");
+  }
+  if (bonus > 0 && difference === bonus && slip?.grossExcludesBonus) {
+    hints.push("That is exactly the bonus, and it is being counted twice — the Payments total already has it.");
+  }
+  if (benefits > 0 && difference === -benefits) {
+    hints.push("That is exactly the taxable benefit. A benefit in kind is never paid to you, so it does not belong in Gross — it counts for the £100k line only.");
+  }
+  if (!hints.length) {
+    hints.push(difference > 0
+      ? "The calculation pays out more than the slip does, so a deduction is probably missing from Categories."
+      : "The calculation pays out less than the slip does, so a deduction is probably too large, or Gross is too low.");
+  }
+  return hints;
 }
 
 export function usedPayslipCategories(slip, categories) {
@@ -1029,14 +1232,24 @@ export function payslipIsConfirmed(payslip, today = new Date()) {
   return Boolean(lands) && lands <= monthKey(today);
 }
 
+/**
+ * Adjusted net income for one slip: taxable pay plus taxable benefits, less the
+ * grossed-up relief-at-source pension. A sacrifice needs no line here — it
+ * never reached taxable pay. Grossed-up Gift Aid comes off across the year, in
+ * aniProjection, because giving is not tied to a slip.
+ */
 export function payslipAniPence(payslip) {
   if (!payslip) return 0;
-  const income = payslip.grossPence > 0
-    ? payslip.grossPence
-    : (payslip.salaryPence || 0) + (payslip.bonusPence || 0);
-  return income + (payslip.benefitsPence || 0) - (payslip.salarySacrificePensionPence || 0);
+  return payslipTaxablePayPence(payslip)
+    + (payslip.benefitsPence || 0)
+    - basicRateGrossUpPence(payslip.reliefAtSourcePensionPence || 0);
 }
 
+/**
+ * Grossed-up Gift Aid donations for the tax year. Adjusted net income is net
+ * income less the *gross* donation (ITA 2007 s58), so an £80 gift with Gift
+ * Aid takes £100 off adjusted net income — it does not add the £20 uplift on.
+ */
 export function giftAidForTaxYear(donations, taxYear, { who } = {}) {
   const wanted = String(who || "").trim().toLowerCase();
   return sumPence(
@@ -1045,7 +1258,7 @@ export function giftAidForTaxYear(donations, taxYear, { who } = {}) {
       if (wanted && String(donation.who || "").trim().toLowerCase() !== wanted) return false;
       return true;
     }),
-    (donation) => giftAidGrossPence(donation.amountPence, true) - donation.amountPence,
+    (donation) => giftAidGrossPence(donation.amountPence, true),
   );
 }
 
@@ -1068,10 +1281,10 @@ export function aniProjection({
   const last = confirmed[confirmed.length - 1];
   const lastMonthlyPence = last ? payslipAniPence(last) : 0;
   const projectedRestPence = lastMonthlyPence * remainingMonths;
-  const giftAidAddBackPence = includeGiftAid
+  const giftAidReliefPence = includeGiftAid
     ? giftAidForTaxYear(donations, taxYear, { who: personName })
     : 0;
-  const projectedPence = ytdPence + projectedRestPence + giftAidAddBackPence;
+  const projectedPence = Math.max(0, ytdPence + projectedRestPence - giftAidReliefPence);
   const extraSacrificePence = Math.max(0, projectedPence - ANI_LIMIT_PENCE);
   const extraPerRemainingMonthPence = remainingMonths > 0
     ? Math.round(extraSacrificePence / remainingMonths)
@@ -1089,7 +1302,7 @@ export function aniProjection({
     ytdPence,
     lastMonthlyPence,
     projectedRestPence,
-    giftAidAddBackPence,
+    giftAidReliefPence,
     projectedPence,
     extraSacrificePence,
     extraPerRemainingMonthPence,

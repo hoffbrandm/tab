@@ -31,6 +31,13 @@ import {
   payslipCategoriesOf,
   payslipIsConfirmed,
   payslipNetPence,
+  payslipNetCheck,
+  payslipNetHints,
+  payslipGrossPaidPence,
+  payslipDeductionsPence,
+  payslipTaxablePayPence,
+  basicRateGrossUpPence,
+  payslipNetReadings,
   payslipRecordLabels,
   pendingListTotalPence,
   pendingsForMonth,
@@ -53,6 +60,9 @@ import {
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
+  exceptionsForMonth,
+  exceptionsOutsideMonth,
+  exceptionsTotalPence,
 } from "../household.js";
 
 const household = {
@@ -140,7 +150,7 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
   assert.equal(flow.reserveSpentPence, 0);
   assert.equal(flow.spentSoFarPence, 9000);
   assert.equal(flow.actualOnCardsPence, 100000);
-  assert.equal(flow.savingsPence, -91000);
+  assert.equal(flow.cardCheckPence, -91000);
   assert.equal(flow.committedOutPence, 229000);
   assert.equal(flow.potPence, 271000);
   assert.equal(flow.daysInMonth, 31);
@@ -154,7 +164,7 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
   assert.equal(reserved.outPence, 319000);
   assert.equal(reserved.leftPence, 181000);
   assert.equal(reserved.spentSoFarPence, flow.spentSoFarPence);
-  assert.equal(reserved.savingsPence, flow.savingsPence);
+  assert.equal(reserved.cardCheckPence, flow.cardCheckPence);
   assert.equal(reserved.reserveSpentPence, 0);
 
   const future = cashflowForMonth(household, "2026-09", today);
@@ -232,8 +242,8 @@ test("pending amounts sit with card balances against the allowed-so-far", () => 
   assert.equal(flow.cardSidePence, 108000);
   assert.equal(flow.actualOnCardsPence, 108000);
   assert.equal(flow.spentSoFarPence, 9000);
-  assert.equal(flow.savingsPence, -99000);
-  assert.equal(flow.overUnderPence, flow.savingsPence);
+  assert.equal(flow.cardCheckPence, -99000);
+  assert.equal(flow.overUnderPence, flow.cardCheckPence);
 });
 
 test("a new-month reset clears ticks for that month only", () => {
@@ -303,11 +313,11 @@ test("viewing the current month leaves previous-month ticks and the card picture
   assert.equal(july.tickedWeeklyPence, 14000);
   assert.equal(july.spentSoFarPence, 16000);
   assert.equal(july.cardBalancesPence, 2000);
-  assert.equal(july.savingsPence, 14000);
+  assert.equal(july.cardCheckPence, 14000);
   assert.equal(august.cardBalancesPence, 9000);
   assert.equal(august.dueCardMonthliesPence, 0);
   assert.equal(august.spentSoFarPence, 0);
-  assert.equal(august.savingsPence, -9000);
+  assert.equal(august.cardCheckPence, -9000);
 
   toggleWeeklySlotTick(hh, august.weeklySlots[0].id, "2026-08");
   assert.deepEqual(
@@ -547,7 +557,7 @@ test("£100k helper ignores forecast rows and can stay under the cliff", () => {
   assert.equal(result.overLimit, false);
 });
 
-test("Gift Aid from giving in the tax year feeds the £100k helper", () => {
+test("grossed-up Gift Aid comes off adjusted net income", () => {
   const donations = [{
     id: "d-1",
     who: "you",
@@ -565,12 +575,14 @@ test("Gift Aid from giving in the tax year feeds the £100k helper", () => {
     taxYear: "2026-27",
     today: new Date("2026-08-26T12:00:00Z"),
   });
-  assert.equal(result.giftAidAddBackPence, 20000);
+  // £800 given with Gift Aid is £1,000 gross, and adjusted net income is net
+  // income less the gross donation — so it takes £1,000 off, not £200 on.
+  assert.equal(result.giftAidReliefPence, 100000);
   assert.equal(result.ytdPence, 900000);
-  assert.equal(result.projectedPence, result.ytdPence + result.projectedRestPence + 20000);
+  assert.equal(result.projectedPence, result.ytdPence + result.projectedRestPence - 100000);
 });
 
-test("Gift Aid add-back is off unless the planner asks for it", () => {
+test("Gift Aid relief is off unless the planner asks for it", () => {
   const donations = [{
     id: "d-1",
     who: "You",
@@ -598,8 +610,10 @@ test("Gift Aid add-back is off unless the planner asks for it", () => {
     includeGiftAid: true,
     today: new Date("2026-08-26T12:00:00Z"),
   });
-  assert.equal(off.giftAidAddBackPence, 0);
-  assert.equal(on.giftAidAddBackPence, 20000);
+  assert.equal(off.giftAidReliefPence, 0);
+  assert.equal(on.giftAidReliefPence, 100000);
+  assert.equal(on.projectedPence, off.projectedPence - 100000);
+  assert.ok(on.extraSacrificePence < off.extraSacrificePence);
 });
 
 test("pots remind quietly when this calendar month has no snapshot", () => {
@@ -644,12 +658,12 @@ test("payslip categories stay available after a later slip leaves them unused", 
   assert.ok(later.some((item) => item.label === "Cycle scheme"));
 });
 
-test("payslip net is gross through jury-service deductions and skips parental pay", () => {
+test("payslip net is the slip's own arithmetic: gross paid less deductions", () => {
   assert.equal(isParentalPayLabel("SMP"), true);
   assert.equal(isParentalPayLabel("Enhanced maternity"), true);
   assert.equal(isParentalPayLabel("OSPP"), true);
   assert.equal(isParentalPayLabel("Jury service"), false);
-  assert.equal(payslipNetPence({
+  const slip = {
     grossPence: 400000,
     bonusPence: 20000,
     benefitsPence: 5000,
@@ -663,7 +677,17 @@ test("payslip net is gross through jury-service deductions and skips parental pa
       { id: "smp", label: "SMP", amountPence: 15000 },
       { id: "mat", label: "Enhanced maternity", amountPence: 80000, inNet: false },
     ],
-  }), 301000);
+  };
+  // Gross is the Payments total, so the bonus is already inside it. A taxable
+  // benefit is never paid, so it is not in there and is not added. The salary
+  // sacrifice reduced gross before it was struck, so it is not a deduction.
+  // 4000 gross − (600 tax + 200 NI + 40 gym + 80 cycle + 20 jury) = 3060.
+  assert.equal(payslipGrossPaidPence(slip), 400000);
+  assert.equal(payslipDeductionsPence(slip), 94000);
+  assert.equal(payslipNetPence(slip), 306000);
+
+  // The same slip, but the gross typed in is the figure before the sacrifice.
+  assert.equal(payslipNetPence({ ...slip, grossBeforeSacrifice: true }), 276000);
   assert.equal(payslipNetPence({
     grossPence: 400000,
     netPence: 999999,
@@ -739,7 +763,7 @@ test("ticking a £100 weekly leaves In and Out the same and raises savings by £
   assert.equal(before.outPence, 10000);
   assert.equal(before.spentSoFarPence, 0);
   assert.equal(before.actualOnCardsPence, 30500);
-  assert.equal(before.savingsPence, -30500);
+  assert.equal(before.cardCheckPence, -30500);
   assert.equal(before.weeklySlots[0].paidFrom, "card");
   toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
   const after = cashflowForMonth(hh, "2026-08", today);
@@ -747,10 +771,10 @@ test("ticking a £100 weekly leaves In and Out the same and raises savings by £
   assert.equal(after.outPence, before.outPence);
   assert.equal(after.actualOnCardsPence, before.actualOnCardsPence);
   assert.equal(after.spentSoFarPence, 10000);
-  assert.equal(after.savingsPence, before.savingsPence + 10000);
+  assert.equal(after.cardCheckPence, before.cardCheckPence + 10000);
   toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
   const undone = cashflowForMonth(hh, "2026-08", today);
-  assert.equal(undone.savingsPence, before.savingsPence);
+  assert.equal(undone.cardCheckPence, before.cardCheckPence);
   assert.equal(undone.spentSoFarPence, 0);
 });
 
@@ -819,18 +843,18 @@ test("a card monthly due on day 6 is out of spent so far on the 5th and in on th
   assert.equal(fifth.spentSoFarPence, 0);
   assert.equal(fifth.dueCardMonthliesPence, 0);
   assert.equal(fifth.actualOnCardsPence, 8000);
-  assert.equal(fifth.savingsPence, -8000);
+  assert.equal(fifth.cardCheckPence, -8000);
   const sixth = cashflowForMonth(hh, "2026-08", new Date("2026-08-06T12:00:00Z"));
   assert.equal(sixth.incomePence, fifth.incomePence);
   assert.equal(sixth.outPence, fifth.outPence);
   assert.equal(sixth.actualOnCardsPence, fifth.actualOnCardsPence);
   assert.equal(sixth.spentSoFarPence, 1599);
   assert.equal(sixth.dueCardMonthliesPence, 1599);
-  assert.equal(sixth.savingsPence, fifth.savingsPence + 1599);
+  assert.equal(sixth.cardCheckPence, fifth.cardCheckPence + 1599);
   const later = cashflowForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
   assert.equal(later.spentSoFarPence, 1599);
   assert.equal(later.outPence, fifth.outPence);
-  assert.equal(later.savingsPence, sixth.savingsPence);
+  assert.equal(later.cardCheckPence, sixth.cardCheckPence);
 });
 
 test("a standing cash monthly sits in Out and never in spent so far", () => {
@@ -872,7 +896,7 @@ test("purchasing a planned one-off raises savings and leaves In and Out unchange
   const before = cashflowForMonth(hh, "2026-08", today);
   assert.equal(before.outPence, 40000);
   assert.equal(before.spentSoFarPence, 0);
-  assert.equal(before.savingsPence, -5000);
+  assert.equal(before.cardCheckPence, -5000);
   hh.oneOffs[0].purchased = true;
   const after = cashflowForMonth(hh, "2026-08", today);
   assert.equal(after.incomePence, before.incomePence);
@@ -880,7 +904,7 @@ test("purchasing a planned one-off raises savings and leaves In and Out unchange
   assert.equal(after.actualOnCardsPence, before.actualOnCardsPence);
   assert.equal(after.purchasedOneOffsPence, 40000);
   assert.equal(after.spentSoFarPence, 40000);
-  assert.equal(after.savingsPence, before.savingsPence + 40000);
+  assert.equal(after.cardCheckPence, before.cardCheckPence + 40000);
 });
 
 test("a future month date-gates spent so far and has no this-month verdict", () => {
@@ -909,7 +933,7 @@ test("a future month date-gates spent so far and has no this-month verdict", () 
   assert.equal(september.outPence, 34500);
   assert.equal(september.dueCardMonthliesPence, 0);
   assert.equal(september.spentSoFarPence, 0);
-  assert.equal(september.savingsPence, 0);
+  assert.equal(september.cardCheckPence, 0);
   assert.equal(spendVerdict(september.overUnderPence, formatMoney, { month: "2026-09", today }), "");
   assert.equal(savingLine(september, today).includes("This month"), false);
   assert.equal(currentPeriodHint("2026-09", today), "September 2026");
@@ -920,7 +944,7 @@ test("a future month date-gates spent so far and has no this-month verdict", () 
   assert.equal(after.incomePence, september.incomePence);
   assert.equal(after.dueCardMonthliesPence, 0);
   assert.equal(after.spentSoFarPence, 30000);
-  assert.equal(after.savingsPence, 30000);
+  assert.equal(after.cardCheckPence, 30000);
 });
 
 test("the settings category list keeps the sheet column set after a slip is saved", () => {
@@ -1043,9 +1067,24 @@ test("pending table rows add to the total without a per-row modal", () => {
   assert.equal(flow.pendingPence, 4250);
 });
 
-test("payslip ANI is gross plus benefits minus salary sacrifice", () => {
+test("payslip ANI is taxable pay plus taxable benefits", () => {
+  // Gross is already after the sacrifice, so taking it off again here would
+  // understate adjusted net income — the direction that hides a £100k breach.
   assert.equal(payslipAniPence({
     grossPence: 900000,
+    benefitsPence: 10000,
+    salarySacrificePensionPence: 50000,
+  }), 910000);
+  assert.equal(payslipAniPence({
+    grossPence: 900000,
+    benefitsPence: 10000,
+    salarySacrificePensionPence: 50000,
+    grossBeforeSacrifice: true,
+  }), 860000);
+  // With no gross typed, salary is contractual and so sits before the sacrifice.
+  assert.equal(payslipAniPence({
+    salaryPence: 800000,
+    bonusPence: 100000,
     benefitsPence: 10000,
     salarySacrificePensionPence: 50000,
   }), 860000);
@@ -1091,3 +1130,237 @@ function slip(periodMonth, aniPence, extra = {}) {
     ...extra,
   };
 }
+
+test("Savings is In minus Out and Total savings adds the card under/overspend", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const flow = cashflowForMonth(household, "2026-08", today);
+  assert.equal(flow.incomePence, 500000);
+  assert.equal(flow.outPence, 229000);
+  assert.equal(flow.savingsPence, 271000);
+  assert.equal(flow.savingsPence, flow.leftPence);
+  assert.equal(flow.allowanceSoFarPence, 9000);
+  assert.equal(flow.actualOnCardsPence, 100000);
+  assert.equal(flow.overUnderPence, -91000);
+  assert.equal(flow.overspendPence, 91000);
+  assert.equal(flow.underspendPence, 0);
+  assert.equal(flow.totalSavingsPence, 271000 - 91000);
+});
+
+test("a card balance lowers Total savings pound for pound and leaves Savings alone", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const before = cashflowForMonth({ ...household, cards: [] }, "2026-08", today);
+  const after = cashflowForMonth({
+    ...household,
+    cards: [{ id: "card-1", name: "Amex", balancePence: 25000, updatedOn: "2026-08-01" }],
+  }, "2026-08", today);
+  assert.equal(after.savingsPence, before.savingsPence);
+  assert.equal(after.totalSavingsPence, before.totalSavingsPence - 25000);
+});
+
+test("an exception raises the card allowance without moving Savings", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const base = { ...household, cards: [{ id: "card-1", name: "Amex", balancePence: 65000, updatedOn: "2026-08-01" }], pendings: [] };
+  const before = cashflowForMonth(base, "2026-08", today);
+  const withException = cashflowForMonth({
+    ...base,
+    exceptions: [{ id: "x-1", name: "Travel insurance", month: "2026-08", amountPence: 56000 }],
+  }, "2026-08", today);
+  assert.equal(withException.exceptionsPence, 56000);
+  assert.equal(withException.allowanceSoFarPence, before.allowanceSoFarPence + 56000);
+  assert.equal(withException.savingsPence, before.savingsPence);
+  assert.equal(withException.overUnderPence, before.overUnderPence + 56000);
+  assert.equal(withException.totalSavingsPence, before.totalSavingsPence + 56000);
+
+  const otherMonth = cashflowForMonth({
+    ...base,
+    exceptions: [{ id: "x-1", name: "Travel insurance", month: "2026-07", amountPence: 56000 }],
+  }, "2026-08", today);
+  assert.equal(otherMonth.exceptionsPence, 0);
+  assert.equal(otherMonth.totalSavingsPence, before.totalSavingsPence);
+});
+
+test("exceptions are read for the month on screen", () => {
+  const hh = {
+    ...emptyHousehold(),
+    exceptions: [
+      { id: "x-1", name: "Travel insurance", month: "2026-08", amountPence: 56000 },
+      { id: "x-2", name: "School trip", month: "2026-08", amountPence: 4000 },
+      { id: "x-3", name: "Ski hire", month: "2026-09", amountPence: 12000 },
+    ],
+  };
+  assert.deepEqual(exceptionsForMonth(hh, "2026-08").map((item) => item.name), ["Travel insurance", "School trip"]);
+  assert.equal(exceptionsTotalPence(hh, "2026-08"), 60000);
+  assert.equal(exceptionsTotalPence(hh, "2026-10"), 0);
+  assert.deepEqual(exceptionsOutsideMonth(hh, "2026-08").map((item) => item.id), ["x-3"]);
+
+  // A month written the sheet's way still lands in August.
+  const loose = { ...emptyHousehold(), exceptions: [{ id: "x-4", name: "Travel insurance", month: "August 2026", amountPence: 56000 }] };
+  assert.equal(exceptionsTotalPence(loose, "2026-08"), 56000);
+});
+
+test("the card check needs a balance recorded for the month on screen", () => {
+  const today = new Date("2026-08-26T12:00:00Z");
+  const hh = {
+    ...emptyHousehold(),
+    payslips: [slipFor("you", "2026-08", 300000)],
+    people: [{ id: "you", name: "You" }],
+    weeklyRules: [{ id: "food", name: "Food shop", amountPence: 7000, cadence: "times", timesPerMonth: 2, tickedKeys: ["2026-07:1", "2026-07:2", "2026-08:1"] }],
+    cards: [{ id: "c-1", name: "Card", balancePence: 9000, pendingPence: 0, updatedOn: "2026-08-10" }],
+  };
+
+  // August has a snapshot seeded from updatedOn, so the check is live.
+  const august = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(august.cardCheckKnown, true);
+  assert.equal(august.cardBalancesPence, 9000);
+  assert.equal(august.overUnderPence, 7000 - 9000);
+  assert.equal(august.totalSavingsPence, august.savingsPence - 2000);
+
+  // July has none. Reading the missing balance as £0 would have reported the
+  // whole £140 allowance as underspend.
+  const july = cashflowForMonth(hh, "2026-07", today);
+  assert.equal(july.cardCheckKnown, false);
+  assert.deepEqual(july.cardsMissingSnapshot.map((card) => card.id), ["c-1"]);
+  assert.equal(july.allowanceSoFarPence, 14000);
+  assert.equal(july.cardCheckPence, 14000);
+  assert.equal(july.overUnderPence, 0);
+  assert.equal(july.totalSavingsPence, july.savingsPence);
+
+  // No cards at all is a knowable check, not a missing one.
+  const noCards = cashflowForMonth({ ...hh, cards: [] }, "2026-07", today);
+  assert.equal(noCards.cardCheckKnown, true);
+  assert.equal(noCards.overUnderPence, 14000);
+});
+
+test("pending splits into the table and anything left on the cards", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const hh = {
+    ...emptyHousehold(),
+    cards: [{ id: "c-1", name: "Card", balancePence: 50000, pendingPence: 3000, updatedOn: "2026-08-10" }],
+    pendings: [{ id: "p-1", note: "Coffee", amountPence: 500, month: "2026-08" }],
+  };
+  const flow = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(flow.cardPendingPence, 3000);
+  assert.equal(flow.pendingTablePence, 500);
+  assert.equal(flow.pendingPence, 3500);
+  assert.equal(flow.actualOnCardsPence, 53500);
+});
+
+test("the net on the slip is checked against the net these figures produce", () => {
+  const base = {
+    grossPence: 350000,
+    salarySacrificePensionPence: 20000,
+    taxPence: 60000,
+    niPence: 28000,
+    otherDeductions: [{ id: "cycle", label: "Cycle scheme", amountPence: 4000 }],
+  };
+  assert.equal(payslipNetPence(base), 258000);
+  assert.equal(payslipNetCheck(base), null, "no stated net means nothing to check");
+
+  const matching = { ...base, statedNetPence: 258000 };
+  assert.equal(payslipNetCheck(matching).matches, true);
+  assert.deepEqual(payslipNetHints(matching), []);
+
+  // Out by exactly the sacrifice: the gross typed in is the before figure.
+  const preSacrifice = { ...base, statedNetPence: 238000 };
+  const check = payslipNetCheck(preSacrifice);
+  assert.equal(check.matches, false);
+  assert.equal(check.differencePence, 20000);
+  assert.match(payslipNetHints(preSacrifice)[0], /exactly the salary sacrifice/);
+  assert.match(payslipNetHints(preSacrifice)[0], /before salary sacrifice/);
+
+  // Ticking the box resolves it.
+  assert.equal(payslipNetCheck({ ...preSacrifice, grossBeforeSacrifice: true }).matches, true);
+
+  // Taking it off twice is named too.
+  const doubled = { ...base, statedNetPence: 258000, grossBeforeSacrifice: true };
+  assert.match(payslipNetHints(doubled)[0], /taken off twice/);
+
+  // Out by exactly the bonus: gross was typed as basic pay only.
+  const missingBonus = { ...base, bonusPence: 50000, statedNetPence: 308000 };
+  assert.match(payslipNetHints(missingBonus)[0], /exactly the bonus/);
+
+  // Anything else falls back to naming the direction.
+  const other = { ...base, statedNetPence: 250000 };
+  assert.match(payslipNetHints(other)[0], /a deduction is probably missing/);
+});
+
+test("a taxable benefit counts for the £100k line and never for take-home", () => {
+  const slip = { grossPence: 400000, benefitsPence: 60000, taxPence: 80000, niPence: 20000 };
+  // A benefit in kind is notional. It is taxed but never paid.
+  assert.equal(payslipNetPence(slip), 300000);
+  assert.equal(payslipTaxablePayPence(slip), 400000);
+  assert.equal(payslipAniPence(slip), 460000);
+});
+
+test("a relief-at-source pension comes off pay, and off ANI grossed up", () => {
+  const slip = {
+    grossPence: 500000,
+    taxPence: 80000,
+    niPence: 30000,
+    reliefAtSourcePensionPence: 20000,
+  };
+  // It is paid out of pay, unlike a sacrifice, so take-home drops by the £200.
+  assert.equal(payslipNetPence(slip), 370000);
+  // The provider reclaims basic rate, so £200 in is £250 of pension.
+  assert.equal(basicRateGrossUpPence(20000), 25000);
+  assert.equal(payslipAniPence(slip), 500000 - 25000);
+
+  // A sacrifice of the same size never reached taxable pay, so it needs no
+  // second deduction — the two must not be modelled the same way.
+  const sacrificed = { grossPence: 500000, taxPence: 80000, niPence: 30000, salarySacrificePensionPence: 20000 };
+  assert.equal(payslipNetPence(sacrificed), 390000);
+  assert.equal(payslipAniPence(sacrificed), 500000);
+});
+
+test("the sacrifice category says which pension it is", () => {
+  const labels = DEFAULT_PAYSLIP_CATEGORIES.map((item) => item.label);
+  assert.ok(labels.includes("Salary sacrifice pension"));
+  assert.ok(labels.includes("Pension (relief at source)"));
+  assert.equal(labels.includes("Pensions"), false);
+});
+
+test("every way of reading Gross is offered with its own net", () => {
+  const slip = {
+    grossPence: 350000,
+    bonusPence: 50000,
+    salarySacrificePensionPence: 20000,
+    taxPence: 60000,
+    niPence: 28000,
+    statedNetPence: 242000,
+  };
+  const readings = payslipNetReadings(slip);
+  const byId = Object.fromEntries(readings.map((item) => [item.id, item]));
+  assert.equal(readings.length, 4, "two independent facts about Gross, so four readings");
+  // 3500 − 880 of deductions.
+  assert.equal(byId["post-sacrifice-with-bonus"].netPence, 262000);
+  // …plus the bonus that sits outside a basic-pay gross.
+  assert.equal(byId["post-sacrifice-without-bonus"].netPence, 312000);
+  // …less the sacrifice a pre-sacrifice gross has not yet had taken off.
+  assert.equal(byId["pre-sacrifice-with-bonus"].netPence, 242000);
+  assert.equal(byId["pre-sacrifice-without-bonus"].netPence, 292000);
+
+  // The stated net picks one out, and the slip's own flags mark the current one.
+  assert.equal(byId["pre-sacrifice-with-bonus"].matchesStated, true);
+  assert.equal(byId["post-sacrifice-with-bonus"].matchesStated, false);
+  assert.equal(byId["post-sacrifice-with-bonus"].current, true);
+  assert.equal(byId["pre-sacrifice-with-bonus"].current, false);
+
+  // Nothing ambiguous to offer when there is no bonus and no sacrifice.
+  assert.equal(payslipNetReadings({ grossPence: 350000, taxPence: 60000 }).length, 1);
+  // One fact in play means one either-or.
+  assert.equal(payslipNetReadings({ grossPence: 350000, salarySacrificePensionPence: 20000 }).length, 2);
+});
+
+test("a gross that leaves the bonus out counts it once, in net and in ANI", () => {
+  const slip = {
+    grossPence: 350000,
+    bonusPence: 50000,
+    taxPence: 60000,
+    niPence: 28000,
+    grossExcludesBonus: true,
+  };
+  assert.equal(payslipGrossPaidPence(slip), 400000);
+  assert.equal(payslipNetPence(slip), 312000);
+  assert.equal(payslipTaxablePayPence(slip), 400000);
+  assert.equal(payslipAniPence(slip), 400000);
+});

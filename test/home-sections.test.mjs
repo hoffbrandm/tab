@@ -20,7 +20,7 @@ function memoryStorage(initial = {}) {
 test("home sections default open and persist independently of ticks", () => {
   const storage = memoryStorage();
   const defaults = defaultHomeSectionState();
-  assert.deepEqual(HOME_SECTION_IDS, ["income", "cards", "pending", "weeklies", "planned"]);
+  assert.deepEqual(HOME_SECTION_IDS, ["income", "cards", "pending", "exceptions", "weeklies", "planned"]);
   assert.equal(defaults.planned, true);
   assert.equal(defaults.income, true);
   assert.deepEqual(readHomeSectionState(storage), defaults);

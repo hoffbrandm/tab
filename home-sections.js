@@ -1,7 +1,7 @@
 /** Home accordion open/closed state. Session only — ticks must not reset it. */
 
 export const HOME_SECTIONS_KEY = "tab.home-sections.v1";
-export const HOME_SECTION_IDS = ["income", "cards", "pending", "weeklies", "planned"];
+export const HOME_SECTION_IDS = ["income", "cards", "pending", "exceptions", "weeklies", "planned"];
 
 export function defaultHomeSectionState() {
   return Object.fromEntries(HOME_SECTION_IDS.map((id) => [id, true]));

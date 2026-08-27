@@ -628,6 +628,21 @@ legend { padding: 0; margin-bottom: 7px; }
   font-size: clamp(1.45rem, 6vw, 1.9rem);
   letter-spacing: -0.04em;
 }
+.statement-row.savings strong,
+.statement-row.check strong {
+  font-size: clamp(1.15rem, 4.5vw, 1.45rem);
+  letter-spacing: -0.03em;
+}
+.statement-row.savings {
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.statement-note {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
 .statement-row.left {
   padding-top: 6px;
   border-top: 1px solid var(--line);
@@ -764,11 +779,83 @@ legend { padding: 0; margin-bottom: 7px; }
 .payslip-cat-name { font-weight: 750; }
 .payslip-net {
   margin: 8px 0 14px;
-  font-size: 1.05rem;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  font-size: 0.95rem;
 }
-.payslip-net strong {
+.payslip-net-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  margin: 0 0 6px;
+}
+.payslip-net-line span { color: var(--muted); }
+.payslip-net-line.total {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.payslip-net-line.total strong {
   font-size: 1.4rem;
   letter-spacing: -0.03em;
+}
+.payslip-net-check {
+  margin: 10px 0 0;
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+.payslip-net-check.ok { color: var(--green); }
+.payslip-net-check.off { color: var(--red); }
+.payslip-readings {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+}
+.payslip-readings-head {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 750;
+}
+.payslip-reading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--canvas);
+  color: var(--ink);
+  padding: 10px 12px;
+  min-height: 44px;
+}
+.payslip-reading.on {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+.payslip-reading.match .payslip-reading-net { color: var(--green); }
+.payslip-reading-net {
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.payslip-reading-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+.payslip-net-hint {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--muted);
 }
 .month-nav {
   border: 1px solid var(--line);

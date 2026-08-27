@@ -181,6 +181,7 @@ function parseHousehold(value, today = new Date()) {
   const pendings = list(value.pendings).map(parsePending);
   const reserves = list(value.reserves).map(parseReserve);
   const oneOffs = normalizeOneOffsForViewMonth(list(value.oneOffs).map(parseOneOff), today).items;
+  const exceptions = list(value.exceptions).map(parseException);
   const annualBills = list(value.annualBills).map(parseAnnualBill);
   const pots = list(value.pots).map(parsePot);
   const pensions = list(value.pensions).map(parsePension);
@@ -202,6 +203,7 @@ function parseHousehold(value, today = new Date()) {
   uniqueIds(pendings, "Pending");
   uniqueIds(reserves, "Reserve");
   uniqueIds(oneOffs, "One-off");
+  uniqueIds(exceptions, "Exception");
   uniqueIds(annualBills, "Annual bill");
   uniqueIds(pots, "Pot");
   uniqueIds(pensions, "Pension");
@@ -221,6 +223,7 @@ function parseHousehold(value, today = new Date()) {
     pendings,
     reserves,
     oneOffs,
+    exceptions,
     annualBills,
     pots,
     pensions,
@@ -431,6 +434,20 @@ function parseOneOff(item) {
   };
 }
 
+function parseException(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new StoreError("Each exception must be an object.");
+  }
+  const month = coerceMonthKey(item.month);
+  if (!isMonthKey(month)) throw new StoreError("Exception month must be YYYY-MM.");
+  return {
+    id: requiredId(item.id, "Exception"),
+    name: requiredName(item.name, "Exception"),
+    month,
+    amountPence: moneyPence(item.amountPence, "Exception"),
+  };
+}
+
 function referenceMonthKey(today) {
   if (typeof today === "string") {
     const coerced = coerceMonthKey(today);
@@ -592,10 +609,15 @@ function parsePayslip(slip, personIds) {
     bonusPence: moneyPence(slip.bonusPence, "Payslip bonus"),
     benefitsPence: moneyPence(slip.benefitsPence, "Payslip benefits"),
     salarySacrificePensionPence: moneyPence(slip.salarySacrificePensionPence, "Payslip salary sacrifice"),
+    reliefAtSourcePensionPence: moneyPence(slip.reliefAtSourcePensionPence, "Payslip relief-at-source pension"),
+    grossBeforeSacrifice: Boolean(slip.grossBeforeSacrifice),
+    grossExcludesBonus: Boolean(slip.grossExcludesBonus),
     otherDeductions,
     taxPence: moneyPence(slip.taxPence, "Payslip tax"),
     niPence: moneyPence(slip.niPence, "Payslip NI"),
+    // netPence is derived and cached; statedNetPence is what the slip itself says.
     netPence: moneyPence(slip.netPence, "Payslip net"),
+    statedNetPence: moneyPence(slip.statedNetPence, "Payslip stated net"),
     note,
     moneyLandsMonth,
     forecast: Boolean(slip.forecast),
