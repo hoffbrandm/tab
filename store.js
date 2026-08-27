@@ -175,6 +175,7 @@ function parseHousehold(value, today = new Date()) {
       timesPerMonth: 4,
       weekday: 2,
       tickedKeys: tickedKeysFromHappenedDates(item.happenedDates),
+      paidFrom: item.paidFrom === "cash" ? "cash" : "card",
     }));
   const weeklyExtras = list(value.weeklyExtras).map(parseWeeklyExtra);
   const pendings = list(value.pendings).map(parsePending);
@@ -361,6 +362,7 @@ function parseWeeklyRule(rule) {
     amountPence: moneyPence(rule.amountPence, "Weekly rule"),
     cadence: next.cadence,
     tickedKeys: tickKeyList(rule.tickedKeys, "Weekly rule"),
+    paidFrom: rule.paidFrom === "cash" ? "cash" : "card",
   };
   if (next.cadence === "times") {
     parsed.timesPerMonth = next.timesPerMonth;
@@ -386,6 +388,7 @@ function parseWeeklyExtra(item) {
     amountPence: moneyPence(item.amountPence, "Weekly extra"),
     month: item.month,
     happened: Boolean(item.happened),
+    paidFrom: item.paidFrom === "cash" ? "cash" : "card",
   };
 }
 

@@ -167,6 +167,24 @@ test("older envelopes become weekly rules, not five cloned rows", () => {
   assert.equal(parsed.household.weeklyRules[0].cadence, "times");
   assert.equal(parsed.household.weeklyRules[0].timesPerMonth, 4);
   assert.deepEqual(parsed.household.weeklyRules[0].tickedKeys, ["2026-08:1"]);
+  assert.equal(parsed.household.weeklyRules[0].paidFrom, "card");
+});
+
+test("weekly rules keep paidFrom and default missing ones to card", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      weeklyRules: [
+        { id: "amazon", name: "Amazon", amountPence: 10000, cadence: "times", timesPerMonth: 1, tickedKeys: [] },
+        { id: "food", name: "Food shop", amountPence: 7000, cadence: "times", timesPerMonth: 1, tickedKeys: [], paidFrom: "cash" },
+      ],
+    },
+  });
+  assert.equal(parsed.household.weeklyRules[0].paidFrom, "card");
+  assert.equal(parsed.household.weeklyRules[1].paidFrom, "cash");
 });
 
 test("monthlies keep a working-day due roll and pots keep snapshots", () => {

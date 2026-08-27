@@ -428,7 +428,7 @@ function cashflowScreen() {
   const hh = household();
   const now = new Date();
   const flow = cashflowForMonth(hh, viewMonth, now);
-  const leftClass = flow.leftPence < 0 ? "negative" : "neutral";
+  const leftClass = flow.savingsPence < 0 ? "negative" : "neutral";
   const period = monthLabel(viewMonth);
   const weeklySlots = flow.weeklySlots || weeklySlotsForMonth(hh, viewMonth);
   const cards = cardsForMonth(hh, viewMonth, now);
@@ -452,7 +452,7 @@ function cashflowScreen() {
         </div>
         <div class="statement-row left">
           <span>Left / savings</span>
-          <strong class="${leftClass}">${formatMoney(flow.leftPence)}</strong>
+          <strong class="${leftClass}">${formatMoney(flow.savingsPence)}</strong>
         </div>
       </section>`,
     body: `
@@ -600,7 +600,7 @@ function monthliesScreen() {
   return shell({
     eyebrow: "Monthlies",
     title: "Standing outs.",
-    lede: "Name, amount, and due day. Optional first working day. These are config — they are not ticked. Cash lines, card lines, and reserve lines count in Out for the whole month on screen.",
+    lede: "Name, amount, and due day. Optional first working day. These are config — they are not ticked. Cash lines, card lines, and reserve lines count in Out for the whole month on screen. Cash lines do not move Left / savings. Card lines do, on the due date, with no tick.",
     month: true,
     body: `
       <section class="block">
@@ -2138,6 +2138,7 @@ async function saveWeeklyRule(event) {
         amountPence: assertWeeklyRuleAmount(requireMoney(data.get("amount"), "typical amount")),
         cadence,
         tickedKeys: modal.item?.tickedKeys || [],
+        paidFrom: modal.item?.paidFrom === "cash" ? "cash" : "card",
       };
       if (cadence === "times") {
         const times = Number(data.get("timesPerMonth"));
@@ -2164,6 +2165,7 @@ async function saveWeeklyExtra(event) {
       amountPence: requireMoney(data.get("amount"), "amount"),
       month: modal.item?.month || viewMonth,
       happened: Boolean(modal.item?.happened),
+      paidFrom: modal.item?.paidFrom === "cash" ? "cash" : "card",
     }),
   });
 }
