@@ -18,11 +18,31 @@ export const WEEKDAYS = [
 ];
 export const MONTHLY_PAID_FROM = ["card", "cash"];
 export const DUE_ROLLS = ["calendar", "nextWorking", "firstWorking"];
-export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "sacrifice", "deduction"];
+export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "sacrifice", "tax", "ni", "extra", "deduction", "parental"];
 export const BUILTIN_PAYSLIP_CATEGORIES = [
   { id: "bonus", label: "Bonus", kind: "bonus" },
   { id: "benefits", label: "Benefits", kind: "benefits" },
-  { id: "sacrifice", label: "Salary-sacrifice pension", kind: "sacrifice" },
+  { id: "sacrifice", label: "Pensions", kind: "sacrifice" },
+  { id: "tax", label: "Tax", kind: "tax" },
+  { id: "ni", label: "NI", kind: "ni" },
+];
+export const SHEET_PAYSLIP_DEDUCTIONS = [
+  { id: "will-writing", label: "Will writing", kind: "deduction" },
+  { id: "critical-illness-ee", label: "Critical illness EE", kind: "deduction" },
+  { id: "critical-illness-dp", label: "Critical illness DP", kind: "deduction" },
+  { id: "payroll-giving", label: "Payroll giving", kind: "deduction" },
+  { id: "gym-flex", label: "Gym flex", kind: "deduction" },
+  { id: "dental", label: "Dental", kind: "deduction" },
+  { id: "cycle-scheme", label: "Cycle scheme", kind: "deduction" },
+  { id: "jury-service", label: "Jury service", kind: "deduction" },
+  { id: "smp", label: "SMP", kind: "parental" },
+  { id: "enhanced-maternity", label: "Enhanced maternity", kind: "parental" },
+  { id: "enhanced-paternity", label: "Enhanced paternity", kind: "parental" },
+  { id: "ospp", label: "OSPP", kind: "parental" },
+];
+export const DEFAULT_PAYSLIP_CATEGORIES = [
+  ...BUILTIN_PAYSLIP_CATEGORIES,
+  ...SHEET_PAYSLIP_DEDUCTIONS,
 ];
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -41,6 +61,7 @@ export function emptyHousehold() {
     cards: [],
     cardSubs: [],
     pendings: [],
+    reserves: [],
     oneOffs: [],
     annualBills: [],
     pots: [],
@@ -64,12 +85,12 @@ export function householdHasData(household) {
     "cards",
     "cardSubs",
     "pendings",
+    "reserves",
     "oneOffs",
     "annualBills",
     "pots",
     "pensions",
     "payslips",
-    "payslipCategories",
     "donations",
   ];
   if (lists.some((key) => Array.isArray(household[key]) && household[key].length > 0)) return true;
@@ -117,6 +138,14 @@ export function monthLabel(month) {
   const parsed = parseMonthKey(month);
   if (!parsed) return String(month || "");
   return new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(
+    new Date(parsed.year, parsed.month - 1, 1),
+  );
+}
+
+export function monthName(month) {
+  const parsed = parseMonthKey(month);
+  if (!parsed) return String(month || "");
+  return new Intl.DateTimeFormat("en-GB", { month: "long" }).format(
     new Date(parsed.year, parsed.month - 1, 1),
   );
 }
@@ -177,6 +206,11 @@ export function currentPeriodHint(month, today = new Date()) {
   return isCurrentMonth(month, today) ? "This month" : monthLabel(month);
 }
 
+export function jumpToCurrentMonthLabel(viewedMonth, today = new Date()) {
+  if (isCurrentMonth(viewedMonth, today)) return "";
+  return `Back to ${monthName(monthKey(today))}`;
+}
+
 export function payslipLandsMonth(payslip) {
   return payslip?.moneyLandsMonth || payslip?.periodMonth || "";
 }
@@ -199,7 +233,7 @@ export function incomeLinesFromPayslips(household, month) {
     id: slip.id,
     personId: slip.personId,
     personName: people.find((person) => person.id === slip.personId)?.name || "",
-    amountPence: Number.isInteger(slip.netPence) ? slip.netPence : 0,
+    amountPence: payslipNetPence(slip),
     forecast: Boolean(slip.forecast),
     periodMonth: slip.periodMonth,
     moneyLandsMonth: payslipLandsMonth(slip),
@@ -422,7 +456,6 @@ export function monthlyDueLabel(item, month) {
 }
 
 export function monthlyIsAllowed(item, month, dayOfMonth) {
-  if (paidInMonth(item, month)) return true;
   const due = effectiveDueDay(item, month);
   return due > 0 && due <= dayOfMonth;
 }
@@ -492,7 +525,6 @@ export function happenedInMonth(envelope, month) {
 }
 
 export function cardSubIsAllowed(sub, month, dayOfMonth) {
-  if (paidInMonth(sub, month)) return true;
   return Number(sub.dueDay) > 0 && Number(sub.dueDay) <= dayOfMonth;
 }
 
@@ -518,20 +550,25 @@ export function cashflowForMonth(household, month, today = new Date()) {
 
   const incomePence = incomeFromPayslipsPence(household, month);
   const billsPence = sumPence(cashMonthlies, (item) => item.amountPence);
+  const cardOutPence = sumPence(cardMonthlies, (item) => item.amountPence);
+  const reservePence = sumPence(household?.reserves, (item) => item.amountPence);
   const annualReserve = annualReservePence(annualBills);
   const oneOffsPence = sumPence(oneOffs, (item) => item.estimatePence);
   const envelopesMonthlyPence = sumPence(weeklySlots, (item) => item.amountPence);
-  const committedOutPence = billsPence + annualReserve + oneOffsPence;
-  const potPence = incomePence - committedOutPence;
-  const remainingAfterPlanPence = potPence - envelopesMonthlyPence;
+  const outPence = billsPence + cardOutPence + annualReserve + reservePence + oneOffsPence + envelopesMonthlyPence;
+  const leftPence = incomePence - outPence;
+  const committedOutPence = outPence;
+  const potPence = leftPence;
+  const remainingAfterPlanPence = leftPence;
   const allowedMonthlies = cardMonthlies.filter((item) => monthlyIsAllowed(item, month, dayOfMonth));
   const allowedPence = sumPence(allowedMonthlies, (item) => item.amountPence);
   const allowedSoFarPence = allowedPence;
   const subsAllowedPence = allowedPence;
   const allowedWithSubsPence = allowedPence;
   const cardBalancesPence = sumPence(cards, (item) => item.balancePence);
+  const pendingRows = pendingsForMonth(household, month, today);
   const pendingPence = sumPence(cards, (item) => item.pendingPence || 0)
-    + (isCurrentMonth(month, today) ? sumPence(household?.pendings || [], (item) => item.amountPence) : 0);
+    + pendingListTotalPence(pendingRows);
   const cardSidePence = cardBalancesPence + pendingPence;
   const overUnderPence = allowedPence - cardSidePence;
 
@@ -543,6 +580,8 @@ export function cashflowForMonth(household, month, today = new Date()) {
     incomeLines,
     incomePence,
     billsPence,
+    cardOutPence,
+    reservePence,
     monthlies,
     cashMonthlies,
     cardMonthlies,
@@ -552,6 +591,8 @@ export function cashflowForMonth(household, month, today = new Date()) {
     oneOffsPence,
     oneOffs,
     envelopesMonthlyPence,
+    outPence,
+    leftPence,
     committedOutPence,
     potPence,
     remainingAfterPlanPence,
@@ -560,23 +601,22 @@ export function cashflowForMonth(household, month, today = new Date()) {
     subsAllowedPence,
     allowedWithSubsPence,
     cardBalancesPence,
+    pendingRows,
     pendingPence,
     cardSidePence,
     overUnderPence,
   };
 }
 
-export function spendVerdict(overUnderPence, formatMoney) {
-  if (overUnderPence === 0) return "Cards match the allowed expecteds.";
-  if (overUnderPence > 0) return `${formatMoney(overUnderPence)} under — room on the cards.`;
-  return `${formatMoney(-overUnderPence)} over the allowed expecteds.`;
+export function spendVerdict() {
+  return "";
 }
 
 export function savingLine(flow, today = new Date()) {
+  const left = Number.isInteger(flow?.leftPence) ? flow.leftPence : flow?.potPence;
   const when = isCurrentMonth(flow.month, today) ? "This month" : monthLabel(flow.month);
-  if (flow.potPence < 0) return `${when} does not balance yet.`;
-  if (flow.overUnderPence >= 0) return "On track to save.";
-  return "Spending ahead of the pot.";
+  if (left < 0) return `${when} does not balance yet.`;
+  return `${when} can save.`;
 }
 
 export function upsertMonthSnapshot(list, snapshot) {
@@ -666,6 +706,10 @@ export function potHistorySeries(pots) {
   });
 }
 
+export function keepPayslipFormRows(rows) {
+  return (rows || []).filter((item) => item && String(item.id || "").trim());
+}
+
 export function payslipCategoriesOf(household) {
   const seen = new Map();
   const remember = (category) => {
@@ -673,8 +717,8 @@ export function payslipCategoriesOf(household) {
     const label = String(category?.label || "").trim();
     if (!label) return;
     const id = String(category?.id || "").trim()
-      || (kind === "deduction" ? `deduction-${label.toLowerCase()}` : kind);
-    const key = kind === "deduction" ? `deduction:${label.toLowerCase()}` : kind;
+      || (kind === "deduction" || kind === "extra" || kind === "parental" ? `${kind}-${label.toLowerCase()}` : kind);
+    const key = kind === "deduction" || kind === "extra" || kind === "parental" ? `${kind}:${label.toLowerCase()}` : kind;
     if (seen.has(key)) return;
     seen.set(key, { id, label, kind });
   };
@@ -683,16 +727,36 @@ export function payslipCategoriesOf(household) {
     if (slip.bonusPence) remember(BUILTIN_PAYSLIP_CATEGORIES[0]);
     if (slip.benefitsPence) remember(BUILTIN_PAYSLIP_CATEGORIES[1]);
     if (slip.salarySacrificePensionPence) remember(BUILTIN_PAYSLIP_CATEGORIES[2]);
+    if (slip.taxPence) remember(BUILTIN_PAYSLIP_CATEGORIES[3]);
+    if (slip.niPence) remember(BUILTIN_PAYSLIP_CATEGORIES[4]);
     for (const row of slip.otherDeductions || []) {
-      if (row.label) remember({ id: row.id, label: row.label, kind: "deduction" });
+      if (row.label) remember({
+        id: row.id,
+        label: row.label,
+        kind: row.extra ? "extra" : (payslipAmountOutsideNet(row) ? "parental" : "deduction"),
+      });
     }
   }
   return [...seen.values()];
 }
 
+export function masterPayslipCategories(household) {
+  return payslipCategoriesOf({
+    payslipCategories: [
+      ...DEFAULT_PAYSLIP_CATEGORIES,
+      ...(household?.payslipCategories || []),
+    ],
+    payslips: household?.payslips || [],
+  });
+}
+
 export function rememberPayslipCategories(household, extras = []) {
   const next = payslipCategoriesOf({
-    payslipCategories: [...(household.payslipCategories || []), ...extras],
+    payslipCategories: [
+      ...DEFAULT_PAYSLIP_CATEGORIES,
+      ...(household.payslipCategories || []),
+      ...extras,
+    ],
     payslips: household.payslips || [],
   });
   household.payslipCategories = next;
@@ -704,14 +768,99 @@ export function unusedBuiltinPayslipCategories(categories) {
   return BUILTIN_PAYSLIP_CATEGORIES.filter((item) => !used.has(item.kind));
 }
 
+export function unusedMasterPayslipCategories(onSlip, master) {
+  const usedIds = new Set((onSlip || []).map((item) => item.id));
+  const usedKeys = new Set((onSlip || []).map((item) => `${item.kind}:${String(item.label || "").trim().toLowerCase()}`));
+  return (master || []).filter((item) => {
+    const key = `${item.kind}:${String(item.label || "").trim().toLowerCase()}`;
+    return !usedIds.has(item.id) && !usedKeys.has(key);
+  });
+}
+
 export function payslipAmountForCategory(slip, category) {
   if (!slip || !category) return 0;
   if (category.kind === "bonus") return slip.bonusPence || 0;
   if (category.kind === "benefits") return slip.benefitsPence || 0;
   if (category.kind === "sacrifice") return slip.salarySacrificePensionPence || 0;
+  if (category.kind === "tax") return slip.taxPence || 0;
+  if (category.kind === "ni") return slip.niPence || 0;
   const label = String(category.label || "").trim().toLowerCase();
   const row = (slip.otherDeductions || []).find((item) => String(item.label || "").trim().toLowerCase() === label);
   return row?.amountPence || 0;
+}
+
+export function payslipCategoryIsExtra(category) {
+  return category?.kind === "bonus" || category?.kind === "benefits" || category?.kind === "extra";
+}
+
+export function isParentalPayLabel(label) {
+  const value = String(label || "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!value) return false;
+  return /\b(smp|ospp|shpp|sap|maternity|paternity|parental)\b/.test(value);
+}
+
+export function payslipAmountOutsideNet(row) {
+  if (!row) return false;
+  if (row.inNet === false) return true;
+  if (row.kind === "parental" || row.parental) return true;
+  return isParentalPayLabel(row.label);
+}
+
+export function payslipNetPence(slip) {
+  if (!slip) return 0;
+  const extras = (slip.bonusPence || 0) + (slip.benefitsPence || 0)
+    + sumPence(
+      (slip.otherDeductions || []).filter((row) => row.extra && !payslipAmountOutsideNet(row)),
+      (row) => row.amountPence,
+    );
+  const deductions = (slip.salarySacrificePensionPence || 0)
+    + (slip.taxPence || 0)
+    + (slip.niPence || 0)
+    + sumPence(
+      (slip.otherDeductions || []).filter((row) => !row.extra && !payslipAmountOutsideNet(row)),
+      (row) => row.amountPence,
+    );
+  return (slip.grossPence || 0) + extras - deductions;
+}
+
+export function usedPayslipCategories(slip, categories) {
+  return (categories || []).filter((category) => (payslipAmountForCategory(slip, category) || 0) > 0);
+}
+
+export function previousPayslipForPerson(household, personId, beforeMonth = "") {
+  return (household?.payslips || [])
+    .filter((slip) => slip.personId === personId)
+    .filter((slip) => !beforeMonth || String(slip.periodMonth) < beforeMonth)
+    .sort((a, b) => String(b.periodMonth).localeCompare(String(a.periodMonth)))[0] || null;
+}
+
+export function defaultCategoriesForNewPayslip(household, personId) {
+  const last = previousPayslipForPerson(household, personId);
+  if (!last) return [];
+  return usedPayslipCategories(last, payslipCategoriesOf(household));
+}
+
+export function pendingsForMonth(household, month, today = new Date()) {
+  const items = household?.pendings || [];
+  const dated = items.filter((item) => item.month);
+  if (dated.length) return items.filter((item) => item.month === month);
+  return isCurrentMonth(month, today) ? items : [];
+}
+
+export function pendingListTotalPence(pendings) {
+  return sumPence(pendings, (item) => item.amountPence);
+}
+
+export function addPendingRow(household, { id, amountPence = 0, note = "", month = "" } = {}) {
+  const next = household.pendings || [];
+  next.push({
+    id: String(id || `pending-${next.length + 1}`),
+    note: String(note || "").trim(),
+    amountPence: Number.isInteger(amountPence) ? amountPence : 0,
+    ...(month ? { month } : {}),
+  });
+  household.pendings = next;
+  return household;
 }
 
 export function extraSacrificeRatio(projection) {
@@ -724,15 +873,6 @@ export function extraSacrificeRatio(projection) {
 
 export function resetMonthTicks(household, month) {
   const next = household;
-  for (const bill of next.bills || []) {
-    bill.paidMonths = (bill.paidMonths || []).filter((item) => item !== month);
-  }
-  for (const sub of next.cardSubs || []) {
-    sub.paidMonths = (sub.paidMonths || []).filter((item) => item !== month);
-  }
-  for (const item of next.monthlies || []) {
-    item.paidMonths = (item.paidMonths || []).filter((value) => value !== month);
-  }
   for (const envelope of next.envelopes || []) {
     envelope.happenedDates = (envelope.happenedDates || []).filter((date) => !String(date).startsWith(`${month}-`));
   }

@@ -1,6 +1,7 @@
 import {
   emptyHousehold,
   isoDate,
+  isParentalPayLabel,
   monthKey,
   rememberPayslipCategories,
   ukTaxYearFromDate,
@@ -283,13 +284,12 @@ function importMainTable(grid, household, report) {
         name,
         amountPence: pence,
         dueDay,
-        paidMonths: ticked ? [month] : [],
       });
       report.cardSubs += 1;
       continue;
     }
     if (bucket.includes("pending")) {
-      household.pendings.push({ id: uid(), name, amountPence: pence });
+      household.pendings.push({ id: uid(), note: name, amountPence: pence });
       report.pendings += 1;
       continue;
     }
@@ -304,8 +304,21 @@ function importMainTable(grid, household, report) {
       report.cards += 1;
       continue;
     }
-    if (bucket.includes("cash in reserve") || bucket.includes("exceptions") || isSinkingFundLine(name, annualBills)) {
-      markSkipped(report, bucket.includes("exceptions") ? "exceptions" : "annual reserve");
+    if (bucket.includes("exceptions")) {
+      markSkipped(report, "exceptions");
+      continue;
+    }
+    if (isSinkingFundLine(name, annualBills)) {
+      markSkipped(report, "annual reserve");
+      continue;
+    }
+    if (bucket.includes("cash in reserve")) {
+      household.reserves.push({
+        id: uid(),
+        name,
+        amountPence: Math.abs(pence),
+      });
+      report.reserves += 1;
       continue;
     }
     if (bucket.includes("monthly") && expectedNames.has(name.toLowerCase())) {
@@ -318,7 +331,6 @@ function importMainTable(grid, household, report) {
         name,
         amountPence: pence,
         dueDay,
-        paidMonths: ticked ? [month] : [],
       });
       report.bills += 1;
     }
@@ -377,11 +389,16 @@ function importPayslips(grid, household, report) {
     const periodMonth = asMonth(cells[col.period] || cells[col.start]) || monthKey();
     const note = text(cells[col.note]);
     const forecast = /temp|forecast|future\s+leave|future leave/i.test(note);
-    const otherDeductions = deductionCols.map((item) => ({
-      id: uid(),
-      label: item.label.replace(/\b\w/g, (char) => char.toUpperCase()),
-      amountPence: moneyToPence(cells[item.index]),
-    })).filter((item) => item.amountPence);
+    const otherDeductions = deductionCols.map((item) => {
+      const label = item.label.replace(/\b\w/g, (char) => char.toUpperCase());
+      const parental = isParentalPayLabel(item.label);
+      return {
+        id: uid(),
+        label,
+        amountPence: moneyToPence(cells[item.index]),
+        ...(parental ? { inNet: false } : {}),
+      };
+    }).filter((item) => item.amountPence);
     household.payslips.push({
       id: uid(),
       personId: personIdFor(household, name),
@@ -405,9 +422,9 @@ function importPayslips(grid, household, report) {
   }
   rememberPayslipCategories(household, [
     ...deductionCols.map((item) => ({
-      id: `deduction-${item.label.toLowerCase().replace(/\s+/g, "-")}`,
+      id: `${isParentalPayLabel(item.label) ? "parental" : "deduction"}-${item.label.toLowerCase().replace(/\s+/g, "-")}`,
       label: item.label.replace(/\b\w/g, (char) => char.toUpperCase()),
-      kind: "deduction",
+      kind: isParentalPayLabel(item.label) ? "parental" : "deduction",
     })),
   ]);
 }
@@ -549,6 +566,7 @@ export function emptyImportReport() {
     pensions: 0,
     payslips: 0,
     donations: 0,
+    reserves: 0,
     skipped: 0,
     skippedWhy: [],
     sheets: [],
@@ -613,7 +631,8 @@ export function importHasData(report) {
     || report.pots
     || report.pensions
     || report.payslips
-    || report.donations,
+    || report.donations
+    || report.reserves,
   );
 }
 
@@ -631,6 +650,7 @@ export function reportLines(report) {
     ["Pensions", report.pensions],
     ["Payslips", report.payslips],
     ["Giving", report.donations],
+    ["Reserve", report.reserves],
   ].filter((item) => item[1] > 0);
   return {
     landed,

@@ -158,7 +158,6 @@ function parseHousehold(value) {
         name: item.name,
         amountPence: item.amountPence,
         dueDay: item.dueDay,
-        paidMonths: item.paidMonths,
         paidFrom: "card",
       })),
     ];
@@ -175,6 +174,7 @@ function parseHousehold(value) {
     }));
   const weeklyExtras = list(value.weeklyExtras).map(parseWeeklyExtra);
   const pendings = list(value.pendings).map(parsePending);
+  const reserves = list(value.reserves).map(parseReserve);
   const oneOffs = list(value.oneOffs).map(parseOneOff);
   const annualBills = list(value.annualBills).map(parseAnnualBill);
   const pots = list(value.pots).map(parsePot);
@@ -195,6 +195,7 @@ function parseHousehold(value) {
   uniqueIds(cards, "Card");
   uniqueIds(cardSubs, "Card subscription");
   uniqueIds(pendings, "Pending");
+  uniqueIds(reserves, "Reserve");
   uniqueIds(oneOffs, "One-off");
   uniqueIds(annualBills, "Annual bill");
   uniqueIds(pots, "Pot");
@@ -213,6 +214,7 @@ function parseHousehold(value) {
     cards,
     cardSubs,
     pendings,
+    reserves,
     oneOffs,
     annualBills,
     pots,
@@ -265,7 +267,6 @@ function parseBill(bill) {
     name: requiredName(bill.name, "Bill"),
     amountPence: moneyPence(bill.amountPence, "Bill"),
     dueDay: dueDay(bill.dueDay, "Bill"),
-    paidMonths: monthList(bill.paidMonths, "Bill"),
   };
 }
 
@@ -304,10 +305,28 @@ function parsePending(item) {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     throw new StoreError("Each pending amount must be an object.");
   }
-  return {
+  const note = String(item.note || item.name || "").trim();
+  if (note.length > 80) throw new StoreError("Pending note is too long.");
+  const parsed = {
     id: requiredId(item.id, "Pending"),
-    name: requiredName(item.name, "Pending"),
+    note,
     amountPence: moneyPence(item.amountPence, "Pending"),
+  };
+  if (item.month) {
+    if (!isMonthKey(item.month)) throw new StoreError("Pending month must be YYYY-MM.");
+    parsed.month = item.month;
+  }
+  return parsed;
+}
+
+function parseReserve(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new StoreError("Each reserve line must be an object.");
+  }
+  return {
+    id: requiredId(item.id, "Reserve"),
+    name: requiredName(item.name, "Reserve"),
+    amountPence: moneyPence(item.amountPence, "Reserve"),
   };
 }
 
@@ -323,7 +342,6 @@ function parseMonthly(item) {
     amountPence: moneyPence(item.amountPence, "Monthly"),
     dueDay: dueRoll === "firstWorking" ? dueDay(item.dueDay || 1, "Monthly") : dueDay(item.dueDay, "Monthly"),
     dueRoll,
-    paidMonths: monthList(item.paidMonths, "Monthly"),
     paidFrom,
   };
 }
@@ -386,7 +404,6 @@ function parseCardSub(sub, cardIds) {
     name: requiredName(sub.name, "Card subscription"),
     amountPence: moneyPence(sub.amountPence, "Card subscription"),
     dueDay: dueDay(sub.dueDay, "Card subscription"),
-    paidMonths: monthList(sub.paidMonths, "Card subscription"),
   };
   if (sub.cardId) {
     const cardId = requiredId(sub.cardId, "Card subscription card");
@@ -450,8 +467,10 @@ function parsePayslipCategory(item) {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     throw new StoreError("Each payslip category must be an object.");
   }
-  const kind = PAYSLIP_CATEGORY_KINDS.includes(item.kind) ? item.kind : "deduction";
-  const builtin = BUILTIN_PAYSLIP_CATEGORIES.find((entry) => entry.kind === kind && kind !== "deduction");
+  const kind = PAYSLIP_CATEGORY_KINDS.includes(item.kind)
+    ? item.kind
+    : (item.inNet === false || item.parental ? "parental" : "deduction");
+  const builtin = BUILTIN_PAYSLIP_CATEGORIES.find((entry) => entry.kind === kind && kind !== "deduction" && kind !== "parental");
   return {
     id: requiredId(item.id || builtin?.id || `cat-${kind}`, "Payslip category"),
     label: requiredName(item.label || builtin?.label, "Payslip category"),
@@ -546,11 +565,14 @@ function parseDeduction(item) {
   }
   const label = String(item.label || "").trim();
   if (label.length > 80) throw new StoreError("Deduction name is too long.");
-  return {
+  const parsed = {
     id: requiredId(item.id, "Deduction"),
     label,
     amountPence: moneyPence(item.amountPence, "Deduction"),
   };
+  if (item.extra) parsed.extra = true;
+  if (item.inNet === false || item.parental || item.kind === "parental") parsed.inNet = false;
+  return parsed;
 }
 
 function parseDonation(donation) {
@@ -588,16 +610,6 @@ function dueDay(value, label) {
     throw new StoreError(`${label} due day must be 1 to 31.`);
   }
   return day;
-}
-
-function monthList(value, label) {
-  if (value == null) return [];
-  if (!Array.isArray(value)) throw new StoreError(`${label} paid months must be an array.`);
-  const months = [...new Set(value.map(String))].filter(Boolean);
-  if (months.some((month) => !isMonthKey(month))) {
-    throw new StoreError(`${label} paid month must be YYYY-MM.`);
-  }
-  return months.sort();
 }
 
 function dateList(value, label) {

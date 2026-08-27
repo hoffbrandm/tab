@@ -199,10 +199,59 @@ test("monthlies keep a working-day due roll and pots keep snapshots", () => {
     },
   });
   assert.equal(parsed.household.monthlies[0].dueRoll, "nextWorking");
-  assert.deepEqual(parsed.household.monthlies[0].paidMonths, ["2026-07"]);
+  assert.equal("paidMonths" in parsed.household.monthlies[0], false);
   assert.equal(parsed.household.pots[0].snapshots.length, 2);
   assert.equal(parsed.household.pots[0].snapshots[0].amountPence, 100000);
   assert.ok(parsed.household.payslipCategories.some((item) => item.kind === "bonus"));
+});
+
+test("parental-pay categories stay outside net when parsed", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      payslipCategories: [{ id: "smp", label: "SMP", kind: "parental" }],
+      payslips: [{
+        id: "s-1",
+        personId: "person-you",
+        taxYear: "2026-27",
+        periodMonth: "2026-08",
+        salaryPence: 300000,
+        grossPence: 300000,
+        bonusPence: 0,
+        benefitsPence: 0,
+        salarySacrificePensionPence: 0,
+        taxPence: 0,
+        niPence: 0,
+        netPence: 300000,
+        note: "",
+        moneyLandsMonth: "2026-08",
+        otherDeductions: [{ id: "smp", label: "SMP", amountPence: 12000, inNet: false }],
+      }],
+    },
+  });
+  assert.equal(parsed.household.payslipCategories.find((item) => item.id === "smp").kind, "parental");
+  assert.equal(parsed.household.payslips[0].otherDeductions[0].inNet, false);
+});
+
+test("pendings keep a note and month, and reserves are standing outs", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      pendings: [{ id: "p-1", name: "Flight hold", amountPence: 3000, month: "2026-08" }],
+      reserves: [{ id: "r-1", name: "Daily float", amountPence: 90000 }],
+    },
+  });
+  assert.equal(parsed.household.pendings[0].note, "Flight hold");
+  assert.equal(parsed.household.pendings[0].month, "2026-08");
+  assert.equal("name" in parsed.household.pendings[0], false);
+  assert.equal(parsed.household.reserves[0].name, "Daily float");
+  assert.equal(parsed.household.reserves[0].amountPence, 90000);
 });
 
 test("weekday weekly rules keep their calendar cadence", () => {
