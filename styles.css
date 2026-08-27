@@ -527,10 +527,24 @@ legend { padding: 0; margin-bottom: 7px; }
   pointer-events: none;
   max-width: calc(100% - 32px);
   text-align: center;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 #toast.show {
   transform: translate(-50%, 0);
   opacity: 1;
+}
+#toast.has-action {
+  pointer-events: auto;
+}
+#toast .toast-undo {
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-weight: 800;
+  padding: 0;
+  text-decoration: underline;
 }
 
 .busy {
@@ -658,7 +672,7 @@ legend { padding: 0; margin-bottom: 7px; }
 .pending-head,
 .pending-row {
   display: grid;
-  grid-template-columns: 128px 1fr 36px;
+  grid-template-columns: 128px 1fr;
   gap: 8px;
   align-items: center;
 }
@@ -805,6 +819,33 @@ legend { padding: 0; margin-bottom: 7px; }
 .verdict.negative { background: var(--red-soft); border-color: transparent; }
 
 .block { margin-top: 8px; }
+.swipe-row {
+  position: relative;
+  overflow: hidden;
+}
+.swipe-row-actions {
+  position: absolute;
+  inset: 0 0 0 auto;
+  display: flex;
+}
+.swipe-delete {
+  width: 88px;
+  border: 0;
+  background: var(--red);
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.swipe-row-front {
+  position: relative;
+  background: var(--canvas);
+  transition: transform 0.18s ease;
+  will-change: transform;
+  touch-action: pan-y;
+}
+.swipe-row.open .swipe-row-front {
+  transform: translateX(-88px);
+}
 .line {
   display: flex;
   align-items: stretch;

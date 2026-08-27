@@ -7,6 +7,8 @@ import {
   isMonthKey,
   coerceMonthKey,
   isTaxYearLabel,
+  monthKey,
+  parseMonthKey,
   normalizeWeeklyCadence,
   PAYSLIP_CATEGORY_KINDS,
   PENSION_STATUSES,
@@ -29,7 +31,7 @@ export function emptyStore() {
   return { version: 1, friends: [], transactions: [], household: emptyHousehold() };
 }
 
-export function parseStore(value) {
+export function parseStore(value, today = new Date()) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new StoreError("Store must be an object.");
   }
@@ -52,7 +54,7 @@ export function parseStore(value) {
     throw new StoreError("Transaction ids must be unique.");
   }
 
-  return { version: 1, friends, transactions, household: parseHousehold(value.household) };
+  return { version: 1, friends, transactions, household: parseHousehold(value.household, today) };
 }
 
 function parseFriend(friend) {
@@ -131,7 +133,7 @@ function parseTransaction(transaction, friendIds) {
   return parsed;
 }
 
-function parseHousehold(value) {
+function parseHousehold(value, today = new Date()) {
   if (value == null) return emptyHousehold();
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new StoreError("Household must be an object.");
@@ -177,7 +179,7 @@ function parseHousehold(value) {
   const weeklyExtras = list(value.weeklyExtras).map(parseWeeklyExtra);
   const pendings = list(value.pendings).map(parsePending);
   const reserves = list(value.reserves).map(parseReserve);
-  const oneOffs = list(value.oneOffs).map(parseOneOff);
+  const oneOffs = normalizeOneOffsForViewMonth(list(value.oneOffs).map(parseOneOff), today).items;
   const annualBills = list(value.annualBills).map(parseAnnualBill);
   const pots = list(value.pots).map(parsePot);
   const pensions = list(value.pensions).map(parsePension);
@@ -424,6 +426,53 @@ function parseOneOff(item) {
     estimatePence: moneyPence(item.estimatePence, "One-off"),
     purchased: Boolean(item.purchased),
   };
+}
+
+function referenceMonthKey(today) {
+  if (typeof today === "string") {
+    const coerced = coerceMonthKey(today);
+    if (isMonthKey(coerced)) return coerced;
+  }
+  if (today instanceof Date && !Number.isNaN(today.getTime())) return monthKey(today);
+  return monthKey(new Date());
+}
+
+function oneOffFingerprint(items) {
+  return (items || [])
+    .map((item) => `${item.id}:${item.month || ""}`)
+    .sort()
+    .join("\n");
+}
+
+// On load, leftover import years become the current/view year (purchased or not).
+// Months before today/view are dropped. Last year’s purchased rows are not kept as history.
+export function normalizeOneOffsForViewMonth(oneOffs, today = new Date()) {
+  const viewKey = referenceMonthKey(today);
+  const view = parseMonthKey(viewKey);
+  const source = Array.isArray(oneOffs) ? oneOffs : [];
+  if (!view) return { items: [...source], changed: false };
+  const items = [];
+  for (const item of source) {
+    const planned = parseMonthKey(item.month);
+    if (!planned) {
+      items.push(item);
+      continue;
+    }
+    const month = planned.year < view.year
+      ? `${String(view.year).padStart(4, "0")}-${String(planned.month).padStart(2, "0")}`
+      : item.month;
+    if (month < viewKey) continue;
+    items.push(month === item.month ? item : { ...item, month });
+  }
+  return { items, changed: oneOffFingerprint(source) !== oneOffFingerprint(items) };
+}
+
+export function gistOneOffsNeedRewrite(rawStore, parsedStore) {
+  const raw = (rawStore?.household?.oneOffs || []).map((item) => ({
+    id: item?.id,
+    month: coerceMonthKey(item?.month) || String(item?.month || ""),
+  }));
+  return oneOffFingerprint(raw) !== oneOffFingerprint(parsedStore?.household?.oneOffs);
 }
 
 function parseAnnualBill(item) {

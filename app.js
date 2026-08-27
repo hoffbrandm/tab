@@ -24,6 +24,7 @@ import {
   monthliesOf,
   normalizeWeeklyCadence,
   oneOffsForMonth,
+  oneOffsOutsideMonth,
   payslipAmountForCategory,
   masterPayslipCategories,
   payslipIsConfirmed,
@@ -50,6 +51,7 @@ import { readHomeSectionState, writeHomeSectionOpen } from "./home-sections.js";
 import { createPersistQueue } from "./persist-queue.js";
 import { createSession } from "./session.js";
 import { emptyStore, parseStore } from "./store.js";
+import { SWIPE_DELETE_WIDTH, swipeAxis, swipeOffset, swipeShouldOpen } from "./swipe-row.js";
 
 const LOCAL_KEY = "tab.personal.v1";
 const SCREENS = ["home", "weeklies", "monthlies", "planned", "annual", "pots", "payslips", "ani", "giving", "more", "tabs"];
@@ -73,6 +75,9 @@ let viewMonth = monthKey();
 let aniPersonId = null;
 let aniTaxYear = null;
 let payslipTaxYear = null;
+let lastDeleted = null;
+let swipeState = null;
+let suppressClick = false;
 
 const persistQueue = createPersistQueue({
   persist: () => persist(),
@@ -186,6 +191,7 @@ async function bootApp() {
     boot = { name: "ready" };
     maybeOfferLocalImport();
     render();
+    if (payload.oneOffsRewritten) persist().catch(() => {});
   } catch (error) {
     if (error instanceof GistError && error.status === 401) {
       sessionStore.clear();
@@ -399,14 +405,19 @@ function moneyControl({ id = "", name = "", pence = 0, value, extra = "", requir
   return `<div class="money-input"><span class="money-prefix" aria-hidden="true">£</span><input${id ? ` id="${esc(id)}"` : ""}${name ? ` name="${esc(name)}"` : ""}${required ? " required" : ""} inputmode="decimal" value="${esc(shown)}" placeholder="${esc(placeholder)}" autocomplete="off"${extra ? ` ${extra}` : ""} /></div>`;
 }
 
-function lineRow({ edit, id, title, detail, amount, tickAction, ticked, tickLabel, tickId }) {
-  return `<article class="line">
-    ${tickAction ? `<button class="tick${ticked ? " on" : ""}" type="button" data-action="${tickAction}" data-id="${esc(tickId || id)}" aria-pressed="${ticked ? "true" : "false"}" aria-label="${esc(tickLabel || (ticked ? "Done" : "Not done"))}"><span class="tick-box" aria-hidden="true">${ticked ? "✓" : ""}</span></button>` : ""}
+function lineRow({ edit, id, title, detail, amount, tickAction, ticked, tickLabel, tickId, removeAction, removeLabel = "Delete" }) {
+  const inner = `${tickAction ? `<button class="tick${ticked ? " on" : ""}" type="button" data-action="${tickAction}" data-id="${esc(tickId || id)}" aria-pressed="${ticked ? "true" : "false"}" aria-label="${esc(tickLabel || (ticked ? "Done" : "Not done"))}"><span class="tick-box" aria-hidden="true">${ticked ? "✓" : ""}</span></button>` : ""}
     <button class="line-main" type="button" data-action="${edit}" data-id="${esc(id)}">
       <span class="line-copy"><strong>${esc(title)}</strong>${detail ? `<small>${esc(detail)}</small>` : ""}</span>
       <span class="line-amount">${amount}</span>
-    </button>
-  </article>`;
+    </button>`;
+  if (!removeAction) return `<article class="line">${inner}</article>`;
+  return `<div class="swipe-row" data-swipe>
+    <div class="swipe-row-actions">
+      <button class="swipe-delete" type="button" data-action="${removeAction}" data-id="${esc(id)}">${esc(removeLabel)}</button>
+    </div>
+    <article class="line swipe-row-front">${inner}</article>
+  </div>`;
 }
 
 function emptyLines(text, action, label) {
@@ -422,7 +433,8 @@ function cashflowScreen() {
   const weeklySlots = flow.weeklySlots || weeklySlotsForMonth(hh, viewMonth);
   const cards = cardsForMonth(hh, viewMonth, now);
   const pendingRows = flow.pendingRows || pendingsForMonth(hh, viewMonth, now);
-  const planned = flow.oneOffs || oneOffsForMonth(hh, viewMonth);
+  const planned = plannedForViewedMonth(hh);
+  const otherPlannedCount = oneOffsOutsideMonth(hh, viewMonth).length;
   const incomeLines = flow.incomeLines || [];
 
   return shell({
@@ -470,7 +482,6 @@ function cashflowScreen() {
           <div class="pending-head" role="row">
             <span role="columnheader">Amount</span>
             <span role="columnheader">Note</span>
-            <span role="columnheader" class="visually-hidden">Remove</span>
           </div>
           ${pendingRows.map(pendingTableRow).join("")}
         </div>
@@ -490,6 +501,7 @@ function cashflowScreen() {
           tickId: slot.id,
           ticked: slot.ticked,
           tickLabel: slot.ticked ? `Happened in ${period}` : `Not yet in ${period}`,
+          ...(slot.adHoc ? { removeAction: "remove-weekly-extra", removeLabel: "Delete" } : {}),
         })).join("") : emptyLines(`Rules live under Weeklies. ${period} gets one slot per weekday in that month.`, "go-weeklies", "Open Weeklies")}
         <div class="home-section-actions">
           <button class="text-button" type="button" data-action="go-weeklies">Rules</button>
@@ -506,7 +518,9 @@ function cashflowScreen() {
           tickAction: "toggle-oneoff",
           ticked: item.purchased,
           tickLabel: item.purchased ? "Purchased" : "Not purchased",
-        })).join("") : emptyLines(`Nothing planned for ${period}.`, "add-oneoff", "Add a one-off")}
+          removeAction: "remove-oneoff",
+          removeLabel: "Delete",
+        })).join("") : homePlannedEmpty(period, otherPlannedCount)}
         <button class="text-button" type="button" data-action="add-oneoff">Add</button>
       `)}
     `,
@@ -527,10 +541,14 @@ function homeCardRow(item) {
 }
 
 function pendingTableRow(item) {
-  return `<div class="pending-row" role="row" data-pending-id="${esc(item.id)}">
-    ${moneyControl({ pence: item.amountPence, extra: `data-action="pending-amount" data-id="${esc(item.id)}"` })}
-    <input data-action="pending-note" data-id="${esc(item.id)}" maxlength="80" value="${esc(item.note || "")}" placeholder="Note" autocomplete="off" />
-    <button class="danger-link" type="button" data-action="remove-pending-row" data-id="${esc(item.id)}" aria-label="Remove pending row">×</button>
+  return `<div class="swipe-row" data-swipe>
+    <div class="swipe-row-actions">
+      <button class="swipe-delete" type="button" data-action="remove-pending-row" data-id="${esc(item.id)}">Delete</button>
+    </div>
+    <div class="pending-row swipe-row-front" role="row" data-pending-id="${esc(item.id)}">
+      ${moneyControl({ pence: item.amountPence, extra: `data-action="pending-amount" data-id="${esc(item.id)}"` })}
+      <input data-action="pending-note" data-id="${esc(item.id)}" maxlength="80" value="${esc(item.note || "")}" placeholder="Note" autocomplete="off" />
+    </div>
   </div>`;
 }
 
@@ -552,6 +570,8 @@ function weekliesScreen() {
           title: rule.name,
           detail: weeklyCadenceLabel(rule),
           amount: formatMoney(rule.amountPence),
+          removeAction: "remove-weekly-rule",
+          removeLabel: "Delete",
         })).join("") : emptyLines("Food shop every week on Tuesday. Amazon every week on Friday. Cat litter once a month.", "add-weekly-rule", "Add a weekly rule")}
       </section>
       <section class="block">
@@ -566,6 +586,7 @@ function weekliesScreen() {
           tickId: slot.id,
           ticked: slot.ticked,
           tickLabel: slot.ticked ? "Happened" : "Not yet",
+          ...(slot.adHoc ? { removeAction: "remove-weekly-extra", removeLabel: "Delete" } : {}),
         })).join("") : emptyLines(`No slots in ${period} yet.`, "add-weekly-rule", "Add a rule")}
       </section>
     `,
@@ -590,6 +611,8 @@ function monthliesScreen() {
           title: item.name,
           detail: `${item.paidFrom === "cash" ? "Cash" : "Card"} · ${monthlyDueLabel(item, viewMonth)}`,
           amount: formatMoney(item.amountPence),
+          removeAction: "remove-monthly",
+          removeLabel: "Delete",
         })).join("") : emptyLines("Phone on the 21st. Mortgage on the 1st. Due date only — no ticks.", "add-monthly", "Add a monthly")}
       </section>
       <section class="block">
@@ -601,17 +624,28 @@ function monthliesScreen() {
           title: item.name,
           detail: reserveLineDetail(item),
           amount: formatMoney(item.amountPence),
+          removeAction: "remove-reserve",
+          removeLabel: "Delete",
         })).join("") : emptyLines("Add the daily envelope here. The monthly amount lives in your household, not in this app.", "add-reserve", "Add the daily envelope")}
       </section>
     `,
   });
 }
 
+function plannedForViewedMonth(hh = household()) {
+  return [...oneOffsForMonth(hh, viewMonth)].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function homePlannedEmpty(period, otherCount) {
+  const empty = emptyLines(`Nothing planned for ${period}.`);
+  if (!otherCount) return empty;
+  return `${empty}<p class="helper"><button class="text-button" type="button" data-action="go-planned">${otherCount} planned in other months</button></p>`;
+}
+
 function plannedScreen() {
   const hh = household();
-  const thisMonth = [...oneOffsForMonth(hh, viewMonth)].sort((a, b) => a.name.localeCompare(b.name));
-  const later = [...hh.oneOffs]
-    .filter((item) => !thisMonth.some((row) => row.id === item.id))
+  const thisMonth = plannedForViewedMonth(hh);
+  const later = [...oneOffsOutsideMonth(hh, viewMonth)]
     .sort((a, b) => String(a.month).localeCompare(String(b.month)) || a.name.localeCompare(b.name));
   return shell({
     eyebrow: "Planned",
@@ -621,7 +655,7 @@ function plannedScreen() {
     body: `
       <section class="block">
         ${sectionHead(monthLabel(viewMonth), "add-oneoff", "Add")}
-        ${thisMonth.length ? thisMonth.map(oneOffRow).join("") : emptyLines(`Nothing planned for ${monthLabel(viewMonth)}.`, "add-oneoff", "Add a one-off")}
+        ${thisMonth.length ? thisMonth.map(oneOffRow).join("") : emptyLines(`Nothing planned for ${monthLabel(viewMonth)}.`)}
       </section>
       ${later.length ? `<section class="block">${sectionHead("Other months", "", "")}${later.map(oneOffRow).join("")}</section>` : ""}
     `,
@@ -638,6 +672,8 @@ function oneOffRow(item) {
     tickAction: "toggle-oneoff",
     ticked: item.purchased,
     tickLabel: item.purchased ? "Purchased" : "Not purchased",
+    removeAction: "remove-oneoff",
+    removeLabel: "Delete",
   });
 }
 
@@ -660,6 +696,8 @@ function annualScreen() {
           title: item.name,
           detail: item.month ? `Usually ${monthName(item.month)}` : "Any month",
           amount: formatMoney(item.amountPence),
+          removeAction: "remove-annual",
+          removeLabel: "Delete",
         })).join("") : emptyLines("Insurance, MOT, memberships — add each line.", "add-annual", "Add an annual bill")}
       </section>
     `,
@@ -836,6 +874,8 @@ function givingScreen() {
           title: item.charity,
           detail: `${item.who} · ${dateLabel(item.date)} · ${ukTaxYearFromDate(item.date)}${item.giftAid ? " · Gift Aid" : ""}`,
           amount: formatMoney(item.giftAid ? giftAidGrossPence(item.amountPence, true) : item.amountPence),
+          removeAction: "remove-donation",
+          removeLabel: "Delete",
         })).join("") : emptyLines("Add a donation when you give.", "add-donation", "Add a donation")}
       </section>
     `,
@@ -1391,11 +1431,55 @@ function donationForm() {
   </form>`;
 }
 
-function showToast(message) {
-  toast.textContent = message;
+function showToast(message, { action, actionLabel } = {}) {
+  toast.replaceChildren(document.createTextNode(message));
+  if (action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "toast-undo";
+    button.dataset.action = action;
+    button.textContent = actionLabel || "Undo";
+    toast.append(" ", button);
+  }
+  toast.classList.toggle("has-action", Boolean(action));
   toast.classList.add("show");
   clearTimeout(showToast.timeout);
-  showToast.timeout = setTimeout(() => toast.classList.remove("show"), 2600);
+  showToast.timeout = setTimeout(() => {
+    toast.classList.remove("show");
+    toast.classList.remove("has-action");
+  }, action ? 4200 : 2600);
+}
+
+function closeSwipeRows(except) {
+  document.querySelectorAll(".swipe-row.open").forEach((row) => {
+    if (row !== except) {
+      row.classList.remove("open");
+      const front = row.querySelector(".swipe-row-front");
+      if (front) front.style.transform = "";
+    }
+  });
+}
+
+function finishSwipe(open) {
+  if (!swipeState?.row) {
+    swipeState = null;
+    return;
+  }
+  const { row } = swipeState;
+  const front = row.querySelector(".swipe-row-front");
+  row.classList.toggle("open", open);
+  if (front) front.style.transform = "";
+  swipeState = null;
+}
+
+function removeListedItem(list, id, label) {
+  const item = findIn(list, id);
+  if (!item) return;
+  lastDeleted = { list, item: structuredClone(item) };
+  applyLocal(() => {
+    household()[list] = (household()[list] || []).filter((row) => row.id !== id);
+  });
+  showToast(`Deleted ${label}`, { action: "undo-delete", actionLabel: "Undo" });
 }
 
 function showFormError(message) {
@@ -1478,8 +1562,18 @@ function signOut() {
 
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
+  const swipeRow = event.target.closest("[data-swipe]");
+  if (!event.target.closest(".swipe-delete")) closeSwipeRows(swipeRow);
   if (!target) return;
   const { action, id, screen: nextScreen, extra } = target.dataset;
+  if (swipeRow?.classList.contains("open")) {
+    const keep = action.startsWith("remove-") || action === "toggle-oneoff" || action.startsWith("tick-");
+    if (!keep) {
+      event.preventDefault();
+      closeSwipeRows();
+      return;
+    }
+  }
 
   if (action === "go") {
     event.preventDefault();
@@ -1547,6 +1641,53 @@ document.addEventListener("click", async (event) => {
       if (item) item.purchased = !item.purchased;
     });
   }
+  if (action === "remove-oneoff") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("oneOffs", id, "one-off");
+  }
+  if (action === "remove-monthly") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("monthlies", id, "monthly");
+  }
+  if (action === "remove-weekly-rule") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("weeklyRules", id, "weekly");
+  }
+  if (action === "remove-weekly-extra") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("weeklyExtras", id, "weekly extra");
+  }
+  if (action === "remove-reserve") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("reserves", id, "reserve");
+  }
+  if (action === "remove-annual") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("annualBills", id, "annual bill");
+  }
+  if (action === "remove-donation") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("donations", id, "donation");
+  }
+  if (action === "undo-delete") {
+    event.preventDefault();
+    if (!lastDeleted) return;
+    const restored = lastDeleted;
+    lastDeleted = null;
+    applyLocal(() => {
+      const list = household()[restored.list] || [];
+      if (!list.some((row) => row.id === restored.item.id)) list.push(restored.item);
+      household()[restored.list] = list;
+    });
+    showToast("Restored");
+  }
   if (action === "tick-envelope" || action === "tick-weekly-slot") {
     event.preventDefault();
     applyLocal(() => {
@@ -1567,9 +1708,8 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "remove-pending-row") {
     event.preventDefault();
-    applyLocal(() => {
-      household().pendings = (household().pendings || []).filter((item) => item.id !== id);
-    });
+    event.stopPropagation();
+    removeListedItem("pendings", id, "pending row");
   }
   if (action === "remove-payslip-category") {
     event.preventDefault();
@@ -1750,6 +1890,65 @@ document.addEventListener("toggle", (event) => {
     writeHomeSectionOpen(window.sessionStorage, section.dataset.homeSection, section.open);
   }
 }, true);
+
+document.addEventListener("pointerdown", (event) => {
+  const ignore = event.target.closest(".tick, .swipe-delete");
+  const row = event.target.closest("[data-swipe]");
+  if (ignore || !row) {
+    if (!row) closeSwipeRows();
+    return;
+  }
+  swipeState = {
+    row,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    offset: row.classList.contains("open") ? -SWIPE_DELETE_WIDTH : 0,
+    opened: row.classList.contains("open"),
+    axis: "",
+  };
+}, { passive: true });
+
+document.addEventListener("pointermove", (event) => {
+  if (!swipeState || event.pointerId !== swipeState.pointerId) return;
+  const dx = event.clientX - swipeState.startX;
+  const dy = event.clientY - swipeState.startY;
+  if (!swipeState.axis) {
+    swipeState.axis = swipeAxis(dx, dy);
+    if (swipeState.axis !== "x") {
+      if (swipeState.axis === "y") swipeState = null;
+      return;
+    }
+    closeSwipeRows(swipeState.row);
+    swipeState.row.setPointerCapture?.(event.pointerId);
+  }
+  const front = swipeState.row.querySelector(".swipe-row-front");
+  swipeState.offset = swipeOffset(swipeState.opened, dx);
+  if (front) front.style.transform = `translateX(${swipeState.offset}px)`;
+}, { passive: true });
+
+document.addEventListener("pointerup", (event) => {
+  if (!swipeState || event.pointerId !== swipeState.pointerId) return;
+  if (swipeState.axis !== "x") {
+    swipeState = null;
+    return;
+  }
+  suppressClick = true;
+  finishSwipe(swipeShouldOpen(swipeState.offset));
+}, { passive: true });
+
+document.addEventListener("click", (event) => {
+  if (!suppressClick) return;
+  suppressClick = false;
+  if (event.target.closest(".swipe-delete")) return;
+  event.preventDefault();
+  event.stopPropagation();
+}, true);
+
+document.addEventListener("pointercancel", () => {
+  if (!swipeState) return;
+  finishSwipe(swipeState.opened);
+});
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && modal) closeModal();
