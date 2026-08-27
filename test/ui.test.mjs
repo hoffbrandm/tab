@@ -138,6 +138,7 @@ test("Home statement shows Savings, the under/overspend, and Total savings", () 
   assert.doesNotMatch(app, /<span>Left \/ savings<\/span>/);
   assert.match(app, /return "Overspend";/);
   assert.match(app, /return "Underspend";/);
+  assert.match(app, /return "Under \/ overspend";/);
 });
 
 test("typing a card balance or a pending amount repaints the statement without a refresh", () => {

@@ -432,7 +432,7 @@ function moneyClass(pence) {
 }
 
 function overUnderLabel(flow) {
-  if (!flow.cardCheckKnown) return "Underspend";
+  if (!flow.cardCheckKnown) return "Under / overspend";
   if (flow.overUnderPence < 0) return "Overspend";
   if (flow.overUnderPence > 0) return "Underspend";
   return "On budget";
