@@ -186,3 +186,46 @@ test("the payslips list shows the live net, never a stale cached one", () => {
   assert.doesNotMatch(app, /formatMoney\(slip\.netPence\)/);
   assert.match(app, /net \$\{formatMoney\(payslipNetPence\(slip\)\)\}/);
 });
+
+test("Out shows its cash and card halves, and the card balance beside them", () => {
+  assert.match(app, /<span>Cash out<\/span>/);
+  assert.match(app, /<span>On to the card<\/span>/);
+  assert.match(app, /<span>Card balance now<\/span>/);
+  assert.match(app, /data-statement-cash-out/);
+  assert.match(app, /data-statement-card-out/);
+  // The split repaints with the rest of the statement, not only on a render.
+  const refresh = app.slice(app.indexOf("function refreshStatement"), app.indexOf("function cashflowScreen"));
+  assert.match(refresh, /data-statement-cash-out/);
+  assert.match(refresh, /data-statement-card-balance/);
+});
+
+test("a month input is sized to a month, and an accordion looks like one", () => {
+  assert.match(css, /input\[type="month"\]/);
+  assert.match(rule('input[type="number"]'), /width:\s*auto/);
+  const section = rule(".home-section");
+  assert.match(section, /border:\s*1px solid var\(--line\)/);
+  assert.match(section, /border-radius/);
+});
+
+test("pending takes a credit, and the monthly form drops the duplicate due rule", () => {
+  assert.match(app, /requireSignedMoney\(data\.get\("amount"\), "amount"\)/);
+  assert.match(app, /parseSignedMoney\(input\.value\)/);
+  assert.match(app, /signedFieldValue/);
+  assert.doesNotMatch(app, /First working day of the month<\/option>/);
+  assert.doesNotMatch(app, /monthly-due-roll/);
+});
+
+test("the weeklies room is rules; ticking lives on Home only", () => {
+  const room = app.slice(app.indexOf("function weekliesScreen"), app.indexOf("function monthliesScreen"));
+  assert.doesNotMatch(room, /tickAction: "tick-weekly-slot"/);
+  assert.match(room, /Tick on Home/);
+  const home = app.slice(app.indexOf("function cashflowScreen"), app.indexOf("function homeCardRow"));
+  assert.match(home, /tickAction: "tick-weekly-slot"/);
+});
+
+test("Planned shows what each month ahead is carrying", () => {
+  assert.match(app, /function plannedByMonthTable/);
+  assert.match(app, /Planned per month/);
+  assert.match(app, /data-action="go-month"/);
+  assert.match(css, /\.planned-month-bar/);
+});

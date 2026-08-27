@@ -407,3 +407,25 @@ test("exceptions round-trip and need a month, a name, and an amount", () => {
     household: { ...emptyHousehold(), exceptions: [{ id: "x-1", name: "No month", amountPence: 100 }] },
   }), /Exception month must be YYYY-MM\./);
 });
+
+test("a pending row may be a credit, and firstWorking becomes day 1 rolled on", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      pendings: [
+        { id: "p-1", note: "Coffee", amountPence: 500, month: "2026-08" },
+        { id: "p-2", note: "Refund", amountPence: -4000, month: "2026-08" },
+      ],
+      monthlies: [
+        { id: "m-1", name: "Mortgage", amountPence: 140000, dueRoll: "firstWorking", dueDay: 9, paidFrom: "cash" },
+      ],
+    },
+  });
+  assert.equal(parsed.household.pendings[1].amountPence, -4000);
+  // The retired roll is stored as the rule it always meant.
+  assert.equal(parsed.household.monthlies[0].dueRoll, "nextWorking");
+  assert.equal(parsed.household.monthlies[0].dueDay, 1);
+});

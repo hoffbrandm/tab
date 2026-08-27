@@ -1,7 +1,7 @@
 import { splitExpense } from "./calculations.js";
 import {
   BUILTIN_PAYSLIP_CATEGORIES,
-  DUE_ROLLS,
+  normalizeDueRoll,
   emptyHousehold,
   isIsoDate,
   isMonthKey,
@@ -318,7 +318,8 @@ function parsePending(item) {
   const parsed = {
     id: requiredId(item.id, "Pending"),
     note,
-    amountPence: moneyPence(item.amountPence, "Pending"),
+    // A refund or credit on the statement is a negative pending amount.
+    amountPence: signedPence(item.amountPence, "Pending"),
   };
   if (item.month) {
     if (!isMonthKey(item.month)) throw new StoreError("Pending month must be YYYY-MM.");
@@ -343,12 +344,15 @@ function parseMonthly(item) {
     throw new StoreError("Each monthly expected must be an object.");
   }
   const paidFrom = item.paidFrom === "cash" ? "cash" : "card";
-  const dueRoll = DUE_ROLLS.includes(item.dueRoll) ? item.dueRoll : "calendar";
+  // "First working day of the month" was day 1 rolled forward all along, so an
+  // older record is stored as the rule it always meant.
+  const wasFirstWorking = item.dueRoll === "firstWorking";
+  const dueRoll = normalizeDueRoll(item.dueRoll);
   return {
     id: requiredId(item.id, "Monthly"),
     name: requiredName(item.name, "Monthly"),
     amountPence: moneyPence(item.amountPence, "Monthly"),
-    dueDay: dueRoll === "firstWorking" ? dueDay(item.dueDay || 1, "Monthly") : dueDay(item.dueDay, "Monthly"),
+    dueDay: wasFirstWorking ? 1 : dueDay(item.dueDay, "Monthly"),
     dueRoll,
     paidFrom,
   };
@@ -667,6 +671,14 @@ function requiredName(value, label) {
   const name = String(value || "").trim();
   if (!name || name.length > 80) throw new StoreError(`${label} needs a name.`);
   return name;
+}
+
+function signedPence(value, label) {
+  const amount = value == null || value === "" ? 0 : value;
+  if (!Number.isInteger(amount)) {
+    throw new StoreError(`${label} must be a whole number of pence.`);
+  }
+  return amount;
 }
 
 function moneyPence(value, label) {

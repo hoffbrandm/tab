@@ -379,6 +379,17 @@ label, fieldset {
   font-size: 0.87rem;
 }
 
+/* A month or a day holds a handful of characters. Stretching it the width of
+   the sheet made it read as a text field and left the value adrift. */
+input[type="month"],
+input[type="date"],
+input[type="number"] {
+  width: auto;
+  min-width: 11ch;
+  max-width: 100%;
+  justify-self: start;
+}
+
 input, select {
   width: 100%;
   min-height: 51px;
@@ -637,6 +648,71 @@ legend { padding: 0; margin-bottom: 7px; }
   padding-top: 6px;
   border-top: 1px solid var(--line);
 }
+.statement-split {
+  display: grid;
+  gap: 4px;
+  margin: -4px 0 2px;
+  padding-left: 2px;
+}
+.statement-split p {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  margin: 0;
+}
+.statement-split span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.statement-split strong {
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+.planned-months {
+  display: grid;
+  gap: 2px;
+}
+.planned-month {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px auto;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 4px 0;
+}
+.planned-month.on .planned-month-name { color: var(--green); }
+.planned-month-main {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  padding: 10px 0;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.planned-month-name { font-weight: 780; font-size: 0.95rem; }
+.planned-month-count { color: var(--muted); font-size: 0.76rem; }
+.planned-month-bar {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: #eceae5;
+  overflow: hidden;
+}
+.planned-month-bar i {
+  display: block;
+  height: 100%;
+  background: var(--green);
+  border-radius: 999px;
+}
+.planned-month-total {
+  font-size: 0.95rem;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
 .statement-note {
   margin: -4px 0 0;
   color: var(--muted);
@@ -651,11 +727,13 @@ legend { padding: 0; margin-bottom: 7px; }
 .statement-row.left span {
   font-size: 0.82rem;
   color: var(--ink);
+  white-space: nowrap;
 }
 .statement-row.left strong {
-  font-size: clamp(2.3rem, 9vw, 3.2rem);
+  font-size: clamp(1.9rem, 7.6vw, 2.9rem);
   letter-spacing: -0.055em;
   line-height: 0.95;
+  white-space: nowrap;
 }
 .card-balance-row {
   display: flex;
@@ -722,12 +800,20 @@ legend { padding: 0; margin-bottom: 7px; }
   padding-left: 8px;
 }
 .home-section {
-  margin-top: 8px;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  padding: 0 14px;
+  overflow: hidden;
+}
+.home-section[open] {
+  padding-bottom: 14px;
 }
 .home-section > summary {
   cursor: pointer;
   list-style: none;
-  padding: 20px 0 10px;
+  padding: 16px 0;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -747,6 +833,10 @@ legend { padding: 0; margin-bottom: 7px; }
 }
 .home-section:not([open]) > summary::after {
   transform: rotate(0deg);
+}
+.home-section[open] > summary {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 6px;
 }
 .home-section-actions {
   display: flex;
