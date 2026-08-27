@@ -21,9 +21,13 @@ test("money input prefix is in-flow and never overlaid on the digits", () => {
   assert.match(box, /display:\s*flex/);
   assert.doesNotMatch(prefix, /position:\s*absolute/);
   assert.match(prefix, /flex:\s*none/);
-  assert.match(input, /padding-left:\s*8px/);
+  assert.match(input, /width:\s*auto/);
+  assert.match(input, /border:\s*0/);
+  assert.match(prefix, /padding:\s*0 0 0 13px/);
   assert.match(app, /class="money-prefix"/);
   assert.doesNotMatch(app, /<div class="money-input"><span>£<\/span>/);
+  assert.match(css, /\.home-add-card > input/);
+  assert.match(css, /\.pending-row > input/);
   assert.match(css, /home-add-card \.money-input input/);
   assert.match(css, /pending-row \.money-input input/);
 });

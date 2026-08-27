@@ -395,14 +395,18 @@ select { appearance: auto; }
 .money-input {
   display: flex;
   align-items: center;
-  position: relative;
   min-width: 0;
+  min-height: 51px;
+  border: 1px solid #d7d6d0;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
 }
 .money-input .money-prefix {
   flex: none;
   display: inline-flex;
   align-items: center;
-  padding: 0 0 0 12px;
+  padding: 0 0 0 13px;
   font-size: 1.12rem;
   color: var(--muted);
   line-height: 1;
@@ -411,8 +415,12 @@ select { appearance: auto; }
 .money-input input {
   flex: 1 1 auto;
   min-width: 0;
-  width: 100%;
-  padding-left: 8px;
+  width: auto;
+  border: 0;
+  background: transparent;
+  min-height: 51px;
+  padding: 0 12px 0 8px;
+  border-radius: 0;
   font-size: 1.22rem;
   font-weight: 750;
 }
@@ -638,7 +646,7 @@ legend { padding: 0; margin-bottom: 7px; }
   align-items: center;
   padding: 12px 0 4px;
 }
-.home-add-card input {
+.home-add-card > input {
   width: 100%;
   min-height: 46px;
   border: 1px solid var(--line);
@@ -661,7 +669,7 @@ legend { padding: 0; margin-bottom: 7px; }
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
-.pending-row input {
+.pending-row > input {
   width: 100%;
   min-height: 46px;
   border: 1px solid var(--line);
@@ -669,9 +677,19 @@ legend { padding: 0; margin-bottom: 7px; }
   padding: 0 12px;
   background: var(--card);
 }
+.home-add-card .money-input,
+.pending-row .money-input,
+.card-balance-row .money-input {
+  min-height: 46px;
+  border-color: var(--line);
+  background: var(--card);
+}
 .home-add-card .money-input input,
 .pending-row .money-input input,
 .card-balance-row .money-input input {
+  min-height: 46px;
+  width: auto;
+  border: 0;
   padding-left: 8px;
 }
 .home-section {
