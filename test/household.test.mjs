@@ -7,7 +7,10 @@ import {
   aniProjection,
   annualReservePence,
   addPendingRow,
+  assertWeeklyRuleAmount,
   cashflowForMonth,
+  clearPendingsForMonth,
+  coerceMonthKey,
   currentPeriodHint,
   currentUkTaxYear,
   datesOfWeekdayInMonth,
@@ -40,9 +43,13 @@ import {
   ukTaxYearFromDate,
   viewPeriodLabel,
   weekliesForMonth,
+  WEEKLY_CADENCE_OPTIONS,
+  WEEKLY_CADENCES,
   weeklyCadenceLabel,
   weeklySlotKeysForRule,
   weeklySlotsForMonth,
+  normalizeWeeklyCadence,
+  oneOffsForMonth,
 } from "../household.js";
 
 const household = {
@@ -321,10 +328,29 @@ test("a Friday rule in a five-Friday month makes five slots", () => {
 });
 
 test("a once-a-month weekly rule makes one slot", () => {
-  const rule = { id: "litter", name: "Cat litter", amountPence: 1200, cadence: "once", tickedKeys: [] };
-  assert.deepEqual(weeklySlotKeysForRule(rule, "2026-08"), ["1"]);
-  assert.equal(weeklySlotsForMonth({ weeklyRules: [rule], weeklyExtras: [] }, "2026-08").length, 1);
-  assert.equal(weeklySlotsForMonth({ weeklyRules: [rule], weeklyExtras: [] }, "2026-05").length, 1);
+  const legacy = { id: "litter", name: "Cat litter", amountPence: 1200, cadence: "once", tickedKeys: [] };
+  const nTimes = { id: "litter", name: "Cat litter", amountPence: 1200, cadence: "times", timesPerMonth: 1, tickedKeys: [] };
+  assert.deepEqual(normalizeWeeklyCadence(legacy), { cadence: "times", timesPerMonth: 1 });
+  assert.deepEqual(weeklySlotKeysForRule(legacy, "2026-08"), ["1"]);
+  assert.deepEqual(weeklySlotKeysForRule(nTimes, "2026-08"), ["1"]);
+  assert.equal(weeklySlotsForMonth({ weeklyRules: [nTimes], weeklyExtras: [] }, "2026-08").length, 1);
+  assert.equal(weeklySlotsForMonth({ weeklyRules: [nTimes], weeklyExtras: [] }, "2026-05").length, 1);
+  assert.equal(weeklyCadenceLabel(nTimes), "Once a month");
+});
+
+test("cadence options are N times a month and every week on a chosen weekday", () => {
+  assert.deepEqual(WEEKLY_CADENCES, ["times", "weekday"]);
+  assert.deepEqual(WEEKLY_CADENCE_OPTIONS.map((item) => item.value), ["times", "weekday"]);
+  assert.equal(WEEKLY_CADENCE_OPTIONS.some((item) => /once a month/i.test(item.label)), false);
+  assert.equal(WEEKLY_CADENCE_OPTIONS.some((item) => item.label === "Every weekday"), false);
+  assert.equal(WEEKLY_CADENCE_OPTIONS.find((item) => item.value === "weekday").label, "Every week on a chosen weekday");
+  assert.deepEqual(normalizeWeeklyCadence({}), { cadence: "times", timesPerMonth: 1 });
+});
+
+test("a weekly rule requires a typical amount", () => {
+  assert.throws(() => assertWeeklyRuleAmount(0), /Typical amount is required/);
+  assert.throws(() => assertWeeklyRuleAmount(null), /Typical amount is required/);
+  assert.equal(assertWeeklyRuleAmount(5000), 5000);
 });
 
 test("an N-times-a-month rule makes that many slots, not five dummy copies", () => {
@@ -725,6 +751,53 @@ test("pending amounts do not list on a future month when they belong to this mon
   assert.equal(september.length, 0);
   assert.equal(pendingListTotalPence(september), 0);
   assert.equal(cashflowForMonth(hh, "2026-09", today).pendingPence, 0);
+});
+
+test("clearing pending empties the table and pending total without touching cards", () => {
+  const today = new Date("2026-08-26T12:00:00Z");
+  const hh = {
+    ...emptyHousehold(),
+    cards: [{ id: "c-1", name: "Card one", balancePence: 80000, pendingPence: 1200, updatedOn: "2026-08-10" }],
+    pendings: [
+      { id: "p-1", amountPence: 2500, note: "hold", month: "2026-08" },
+      { id: "p-2", amountPence: 1750, note: "", month: "2026-08" },
+      { id: "p-3", amountPence: 900, note: "later", month: "2026-09" },
+    ],
+  };
+  const before = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(before.pendingRows.length, 2);
+  assert.equal(pendingListTotalPence(before.pendingRows), 4250);
+  clearPendingsForMonth(hh, "2026-08", today);
+  const after = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(after.pendingRows.length, 0);
+  assert.equal(pendingListTotalPence(after.pendingRows), 0);
+  assert.equal(hh.pendings.length, 1);
+  assert.equal(hh.pendings[0].id, "p-3");
+  assert.equal(hh.cards[0].balancePence, 80000);
+  assert.equal(hh.cards[0].pendingPence, 1200);
+});
+
+test("one-offs for month X appear on Home for viewMonth X and sit in Out", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const hh = {
+    ...emptyHousehold(),
+    oneOffs: [
+      { id: "o-1", name: "MOT", month: "August 2026", estimatePence: 40000, purchased: false },
+      { id: "o-2", name: "Holiday", month: "2026-12-01", estimatePence: 80000, purchased: false },
+      { id: "o-3", name: "Sofa", month: "2026-8", estimatePence: 120000, purchased: true },
+    ],
+  };
+  hh.oneOffs = hh.oneOffs.map((item) => ({ ...item, month: coerceMonthKey(item.month) }));
+  const august = oneOffsForMonth(hh, "2026-08");
+  assert.deepEqual(august.map((item) => item.name).sort(), ["MOT", "Sofa"]);
+  const flow = cashflowForMonth(hh, "2026-08", today);
+  assert.deepEqual(flow.oneOffs.map((item) => item.name).sort(), ["MOT", "Sofa"]);
+  assert.equal(flow.oneOffsPence, 160000);
+  assert.equal(flow.outPence, 160000);
+  hh.oneOffs.find((item) => item.id === "o-1").purchased = true;
+  const afterTick = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(afterTick.outPence, 160000);
+  assert.equal(afterTick.oneOffs.every((item) => item.id !== "o-2"), true);
 });
 
 test("pending table rows add to the total without a per-row modal", () => {

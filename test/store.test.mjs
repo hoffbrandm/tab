@@ -254,6 +254,43 @@ test("pendings keep a note and month, and reserves are standing outs", () => {
   assert.equal(parsed.household.reserves[0].amountPence, 90000);
 });
 
+test("once-a-month weekly rules become N times with N=1", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      weeklyRules: [{
+        id: "litter",
+        name: "Cat litter",
+        amountPence: 1200,
+        cadence: "once",
+        tickedKeys: ["2026-08:1"],
+      }],
+    },
+  });
+  assert.equal(parsed.household.weeklyRules[0].cadence, "times");
+  assert.equal(parsed.household.weeklyRules[0].timesPerMonth, 1);
+});
+
+test("one-off months such as August 2026 match the viewed month", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      oneOffs: [
+        { id: "o-1", name: "MOT", month: "August 2026", estimatePence: 40000, purchased: false },
+        { id: "o-2", name: "Sofa", month: "2026-08-15", estimatePence: 120000, purchased: true },
+      ],
+    },
+  });
+  assert.equal(parsed.household.oneOffs[0].month, "2026-08");
+  assert.equal(parsed.household.oneOffs[1].month, "2026-08");
+});
+
 test("weekday weekly rules keep their calendar cadence", () => {
   const parsed = parseStore({
     version: 1,
