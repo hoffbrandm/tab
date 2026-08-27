@@ -628,6 +628,15 @@ legend { padding: 0; margin-bottom: 7px; }
   font-size: clamp(1.45rem, 6vw, 1.9rem);
   letter-spacing: -0.04em;
 }
+.statement-row.savings strong,
+.statement-row.check strong {
+  font-size: clamp(1.15rem, 4.5vw, 1.45rem);
+  letter-spacing: -0.03em;
+}
+.statement-row.savings {
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
 .statement-row.left {
   padding-top: 6px;
   border-top: 1px solid var(--line);

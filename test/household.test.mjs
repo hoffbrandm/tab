@@ -53,6 +53,8 @@ import {
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
+  exceptionsForMonth,
+  exceptionsTotalPence,
 } from "../household.js";
 
 const household = {
@@ -140,7 +142,7 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
   assert.equal(flow.reserveSpentPence, 0);
   assert.equal(flow.spentSoFarPence, 9000);
   assert.equal(flow.actualOnCardsPence, 100000);
-  assert.equal(flow.savingsPence, -91000);
+  assert.equal(flow.cardCheckPence, -91000);
   assert.equal(flow.committedOutPence, 229000);
   assert.equal(flow.potPence, 271000);
   assert.equal(flow.daysInMonth, 31);
@@ -154,7 +156,7 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
   assert.equal(reserved.outPence, 319000);
   assert.equal(reserved.leftPence, 181000);
   assert.equal(reserved.spentSoFarPence, flow.spentSoFarPence);
-  assert.equal(reserved.savingsPence, flow.savingsPence);
+  assert.equal(reserved.cardCheckPence, flow.cardCheckPence);
   assert.equal(reserved.reserveSpentPence, 0);
 
   const future = cashflowForMonth(household, "2026-09", today);
@@ -232,8 +234,8 @@ test("pending amounts sit with card balances against the allowed-so-far", () => 
   assert.equal(flow.cardSidePence, 108000);
   assert.equal(flow.actualOnCardsPence, 108000);
   assert.equal(flow.spentSoFarPence, 9000);
-  assert.equal(flow.savingsPence, -99000);
-  assert.equal(flow.overUnderPence, flow.savingsPence);
+  assert.equal(flow.cardCheckPence, -99000);
+  assert.equal(flow.overUnderPence, flow.cardCheckPence);
 });
 
 test("a new-month reset clears ticks for that month only", () => {
@@ -303,11 +305,11 @@ test("viewing the current month leaves previous-month ticks and the card picture
   assert.equal(july.tickedWeeklyPence, 14000);
   assert.equal(july.spentSoFarPence, 16000);
   assert.equal(july.cardBalancesPence, 2000);
-  assert.equal(july.savingsPence, 14000);
+  assert.equal(july.cardCheckPence, 14000);
   assert.equal(august.cardBalancesPence, 9000);
   assert.equal(august.dueCardMonthliesPence, 0);
   assert.equal(august.spentSoFarPence, 0);
-  assert.equal(august.savingsPence, -9000);
+  assert.equal(august.cardCheckPence, -9000);
 
   toggleWeeklySlotTick(hh, august.weeklySlots[0].id, "2026-08");
   assert.deepEqual(
@@ -739,7 +741,7 @@ test("ticking a £100 weekly leaves In and Out the same and raises savings by £
   assert.equal(before.outPence, 10000);
   assert.equal(before.spentSoFarPence, 0);
   assert.equal(before.actualOnCardsPence, 30500);
-  assert.equal(before.savingsPence, -30500);
+  assert.equal(before.cardCheckPence, -30500);
   assert.equal(before.weeklySlots[0].paidFrom, "card");
   toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
   const after = cashflowForMonth(hh, "2026-08", today);
@@ -747,10 +749,10 @@ test("ticking a £100 weekly leaves In and Out the same and raises savings by £
   assert.equal(after.outPence, before.outPence);
   assert.equal(after.actualOnCardsPence, before.actualOnCardsPence);
   assert.equal(after.spentSoFarPence, 10000);
-  assert.equal(after.savingsPence, before.savingsPence + 10000);
+  assert.equal(after.cardCheckPence, before.cardCheckPence + 10000);
   toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
   const undone = cashflowForMonth(hh, "2026-08", today);
-  assert.equal(undone.savingsPence, before.savingsPence);
+  assert.equal(undone.cardCheckPence, before.cardCheckPence);
   assert.equal(undone.spentSoFarPence, 0);
 });
 
@@ -819,18 +821,18 @@ test("a card monthly due on day 6 is out of spent so far on the 5th and in on th
   assert.equal(fifth.spentSoFarPence, 0);
   assert.equal(fifth.dueCardMonthliesPence, 0);
   assert.equal(fifth.actualOnCardsPence, 8000);
-  assert.equal(fifth.savingsPence, -8000);
+  assert.equal(fifth.cardCheckPence, -8000);
   const sixth = cashflowForMonth(hh, "2026-08", new Date("2026-08-06T12:00:00Z"));
   assert.equal(sixth.incomePence, fifth.incomePence);
   assert.equal(sixth.outPence, fifth.outPence);
   assert.equal(sixth.actualOnCardsPence, fifth.actualOnCardsPence);
   assert.equal(sixth.spentSoFarPence, 1599);
   assert.equal(sixth.dueCardMonthliesPence, 1599);
-  assert.equal(sixth.savingsPence, fifth.savingsPence + 1599);
+  assert.equal(sixth.cardCheckPence, fifth.cardCheckPence + 1599);
   const later = cashflowForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
   assert.equal(later.spentSoFarPence, 1599);
   assert.equal(later.outPence, fifth.outPence);
-  assert.equal(later.savingsPence, sixth.savingsPence);
+  assert.equal(later.cardCheckPence, sixth.cardCheckPence);
 });
 
 test("a standing cash monthly sits in Out and never in spent so far", () => {
@@ -872,7 +874,7 @@ test("purchasing a planned one-off raises savings and leaves In and Out unchange
   const before = cashflowForMonth(hh, "2026-08", today);
   assert.equal(before.outPence, 40000);
   assert.equal(before.spentSoFarPence, 0);
-  assert.equal(before.savingsPence, -5000);
+  assert.equal(before.cardCheckPence, -5000);
   hh.oneOffs[0].purchased = true;
   const after = cashflowForMonth(hh, "2026-08", today);
   assert.equal(after.incomePence, before.incomePence);
@@ -880,7 +882,7 @@ test("purchasing a planned one-off raises savings and leaves In and Out unchange
   assert.equal(after.actualOnCardsPence, before.actualOnCardsPence);
   assert.equal(after.purchasedOneOffsPence, 40000);
   assert.equal(after.spentSoFarPence, 40000);
-  assert.equal(after.savingsPence, before.savingsPence + 40000);
+  assert.equal(after.cardCheckPence, before.cardCheckPence + 40000);
 });
 
 test("a future month date-gates spent so far and has no this-month verdict", () => {
@@ -909,7 +911,7 @@ test("a future month date-gates spent so far and has no this-month verdict", () 
   assert.equal(september.outPence, 34500);
   assert.equal(september.dueCardMonthliesPence, 0);
   assert.equal(september.spentSoFarPence, 0);
-  assert.equal(september.savingsPence, 0);
+  assert.equal(september.cardCheckPence, 0);
   assert.equal(spendVerdict(september.overUnderPence, formatMoney, { month: "2026-09", today }), "");
   assert.equal(savingLine(september, today).includes("This month"), false);
   assert.equal(currentPeriodHint("2026-09", today), "September 2026");
@@ -920,7 +922,7 @@ test("a future month date-gates spent so far and has no this-month verdict", () 
   assert.equal(after.incomePence, september.incomePence);
   assert.equal(after.dueCardMonthliesPence, 0);
   assert.equal(after.spentSoFarPence, 30000);
-  assert.equal(after.savingsPence, 30000);
+  assert.equal(after.cardCheckPence, 30000);
 });
 
 test("the settings category list keeps the sheet column set after a slip is saved", () => {
@@ -1091,3 +1093,65 @@ function slip(periodMonth, aniPence, extra = {}) {
     ...extra,
   };
 }
+
+test("Savings is In minus Out and Total savings adds the card under/overspend", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const flow = cashflowForMonth(household, "2026-08", today);
+  assert.equal(flow.incomePence, 500000);
+  assert.equal(flow.outPence, 229000);
+  assert.equal(flow.savingsPence, 271000);
+  assert.equal(flow.savingsPence, flow.leftPence);
+  assert.equal(flow.allowanceSoFarPence, 9000);
+  assert.equal(flow.actualOnCardsPence, 100000);
+  assert.equal(flow.overUnderPence, -91000);
+  assert.equal(flow.overspendPence, 91000);
+  assert.equal(flow.underspendPence, 0);
+  assert.equal(flow.totalSavingsPence, 271000 - 91000);
+});
+
+test("a card balance lowers Total savings pound for pound and leaves Savings alone", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const before = cashflowForMonth({ ...household, cards: [] }, "2026-08", today);
+  const after = cashflowForMonth({
+    ...household,
+    cards: [{ id: "card-1", name: "Amex", balancePence: 25000, updatedOn: "2026-08-01" }],
+  }, "2026-08", today);
+  assert.equal(after.savingsPence, before.savingsPence);
+  assert.equal(after.totalSavingsPence, before.totalSavingsPence - 25000);
+});
+
+test("an exception raises the card allowance without moving Savings", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const base = { ...household, cards: [{ id: "card-1", name: "Amex", balancePence: 65000, updatedOn: "2026-08-01" }], pendings: [] };
+  const before = cashflowForMonth(base, "2026-08", today);
+  const withException = cashflowForMonth({
+    ...base,
+    exceptions: [{ id: "x-1", name: "Travel insurance", month: "2026-08", amountPence: 56000 }],
+  }, "2026-08", today);
+  assert.equal(withException.exceptionsPence, 56000);
+  assert.equal(withException.allowanceSoFarPence, before.allowanceSoFarPence + 56000);
+  assert.equal(withException.savingsPence, before.savingsPence);
+  assert.equal(withException.overUnderPence, before.overUnderPence + 56000);
+  assert.equal(withException.totalSavingsPence, before.totalSavingsPence + 56000);
+
+  const otherMonth = cashflowForMonth({
+    ...base,
+    exceptions: [{ id: "x-1", name: "Travel insurance", month: "2026-07", amountPence: 56000 }],
+  }, "2026-08", today);
+  assert.equal(otherMonth.exceptionsPence, 0);
+  assert.equal(otherMonth.totalSavingsPence, before.totalSavingsPence);
+});
+
+test("exceptions are read for the month on screen", () => {
+  const hh = {
+    ...emptyHousehold(),
+    exceptions: [
+      { id: "x-1", name: "Travel insurance", month: "2026-08", amountPence: 56000 },
+      { id: "x-2", name: "School trip", month: "2026-08", amountPence: 4000 },
+      { id: "x-3", name: "Ski hire", month: "2026-09", amountPence: 12000 },
+    ],
+  };
+  assert.deepEqual(exceptionsForMonth(hh, "2026-08").map((item) => item.name), ["Travel insurance", "School trip"]);
+  assert.equal(exceptionsTotalPence(hh, "2026-08"), 60000);
+  assert.equal(exceptionsTotalPence(hh, "2026-10"), 0);
+});

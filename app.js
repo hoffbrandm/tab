@@ -15,6 +15,7 @@ import {
   donationGrossPence,
   keepPayslipFormRows,
   emptyHousehold,
+  exceptionsForMonth,
   giftAidGrossPence,
   isCurrentMonth,
   jumpToCurrentMonthLabel,
@@ -424,16 +425,79 @@ function emptyLines(text, action, label) {
   return `<div class="empty-lines"><p>${esc(text)}</p>${action ? `<button class="text-button" type="button" data-action="${action}">${esc(label)}</button>` : ""}</div>`;
 }
 
+
+function moneyClass(pence) {
+  return pence < 0 ? "negative" : "neutral";
+}
+
+function overUnderLabel(flow) {
+  if (flow.overUnderPence < 0) return "Overspend";
+  if (flow.overUnderPence > 0) return "Underspend";
+  return "On budget";
+}
+
+function overUnderAmount(flow) {
+  return formatMoney(Math.abs(flow.overUnderPence));
+}
+
+function statementSection(flow) {
+  return `<section class="statement" aria-label="Month statement" data-statement>
+        <div class="statement-row in">
+          <span>In</span>
+          <strong data-statement-in>${formatMoney(flow.incomePence)}</strong>
+        </div>
+        <div class="statement-row out">
+          <span>Out</span>
+          <strong data-statement-out>${formatMoney(flow.outPence)}</strong>
+        </div>
+        <div class="statement-row savings">
+          <span>Savings</span>
+          <strong class="${moneyClass(flow.savingsPence)}" data-statement-savings>${formatMoney(flow.savingsPence)}</strong>
+        </div>
+        <div class="statement-row check">
+          <span data-statement-check-label>${overUnderLabel(flow)}</span>
+          <strong class="${moneyClass(flow.overUnderPence)}" data-statement-check>${overUnderAmount(flow)}</strong>
+        </div>
+        <div class="statement-row left">
+          <span>Total savings</span>
+          <strong class="${moneyClass(flow.totalSavingsPence)}" data-statement-total>${formatMoney(flow.totalSavingsPence)}</strong>
+        </div>
+      </section>`;
+}
+
+/**
+ * Card balances, pending rows, and exception amounts are typed into inputs that
+ * stay on screen. A full render would take the caret with it, so the statement
+ * is patched in place on every keystroke instead of waiting for a refresh.
+ */
+function refreshStatement() {
+  const section = document.querySelector("[data-statement]");
+  if (!section) return;
+  const flow = cashflowForMonth(household(), viewMonth, new Date());
+  const set = (selector, text, pence) => {
+    const node = section.querySelector(selector);
+    if (!node) return;
+    node.textContent = text;
+    if (pence != null) node.className = moneyClass(pence);
+  };
+  set("[data-statement-in]", formatMoney(flow.incomePence));
+  set("[data-statement-out]", formatMoney(flow.outPence));
+  set("[data-statement-savings]", formatMoney(flow.savingsPence), flow.savingsPence);
+  set("[data-statement-check-label]", overUnderLabel(flow));
+  set("[data-statement-check]", overUnderAmount(flow), flow.overUnderPence);
+  set("[data-statement-total]", formatMoney(flow.totalSavingsPence), flow.totalSavingsPence);
+}
+
 function cashflowScreen() {
   const hh = household();
   const now = new Date();
   const flow = cashflowForMonth(hh, viewMonth, now);
-  const leftClass = flow.savingsPence < 0 ? "negative" : "neutral";
   const period = monthLabel(viewMonth);
   const weeklySlots = flow.weeklySlots || weeklySlotsForMonth(hh, viewMonth);
   const cards = cardsForMonth(hh, viewMonth, now);
   const pendingRows = flow.pendingRows || pendingsForMonth(hh, viewMonth, now);
   const planned = plannedForViewedMonth(hh);
+  const exceptions = exceptionsForMonth(hh, viewMonth);
   const otherPlannedCount = oneOffsOutsideMonth(hh, viewMonth).length;
   const incomeLines = flow.incomeLines || [];
 
@@ -441,20 +505,7 @@ function cashflowScreen() {
     eyebrow: "",
     title: "",
     month: true,
-    extra: `<section class="statement" aria-label="Month statement">
-        <div class="statement-row in">
-          <span>In</span>
-          <strong>${formatMoney(flow.incomePence)}</strong>
-        </div>
-        <div class="statement-row out">
-          <span>Out</span>
-          <strong>${formatMoney(flow.outPence)}</strong>
-        </div>
-        <div class="statement-row left">
-          <span>Left / savings</span>
-          <strong class="${leftClass}">${formatMoney(flow.savingsPence)}</strong>
-        </div>
-      </section>`,
+    extra: statementSection(flow),
     body: `
       ${homeAccordion("income", "Income", `
         ${incomeLines.length ? incomeLines.map((line) => lineRow({
@@ -489,6 +540,19 @@ function cashflowScreen() {
           <button class="text-button" type="button" data-action="add-pending-row">Add a row</button>
           <button class="text-button" type="button" data-action="clear-pending">Clear all</button>
         </div>
+      `)}
+      ${homeAccordion("exceptions", `Exceptions · ${period}`, `
+        <p class="helper">Spending that came from another pot. The card is allowed to be this much higher, and it does not change Savings.</p>
+        ${exceptions.length ? exceptions.map((item) => lineRow({
+          edit: "edit-exception",
+          id: item.id,
+          title: item.name,
+          detail: `Not from the normal amount`,
+          amount: formatMoney(item.amountPence),
+          removeAction: "remove-exception",
+          removeLabel: "Delete",
+        })).join("") : `<p class="helper">Nothing set aside in ${esc(period)}.</p>`}
+        <button class="text-button" type="button" data-action="add-exception">Add an exception</button>
       `)}
       ${homeAccordion("weeklies", "Weeklies", `
         ${weeklySlots.length ? weeklySlots.map((slot) => lineRow({
@@ -600,7 +664,7 @@ function monthliesScreen() {
   return shell({
     eyebrow: "Monthlies",
     title: "Standing outs.",
-    lede: "Name, amount, and due day. Optional first working day. These are config — they are not ticked. Cash lines, card lines, and reserve lines count in Out for the whole month on screen. Cash lines do not move Left / savings. Card lines do, on the due date, with no tick.",
+    lede: "Name, amount, and due day. Optional first working day. These are config — they are not ticked. Cash lines, card lines, and reserve lines count in Out for the whole month on screen. Cash lines do not move the card allowance. Card lines do, on the due date, with no tick.",
     month: true,
     body: `
       <section class="block">
@@ -1042,6 +1106,7 @@ function modalMarkup() {
     reserve: reserveForm,
     "payslip-category": payslipCategoryForm,
     oneoff: oneOffForm,
+    exception: exceptionForm,
     annual: annualForm,
     pot: potForm,
     pension: pensionForm,
@@ -1266,6 +1331,19 @@ function oneOffForm() {
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save one-off" : "Add one-off"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-oneoff">Delete one-off</button>' : ""}
+  </form>`;
+}
+
+function exceptionForm() {
+  const item = modal.item || {};
+  return `<form id="exception-form">${modalHead(item.id ? "Exception" : "New exception", item.id ? "Edit exception" : "Add an exception")}
+    <label>What<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Travel insurance, school trip…" /></label>
+    <label>Month<input required type="month" name="month" value="${item.month || viewMonth}" /></label>
+    ${moneyLabel("Amount", "amount", item.amountPence, { required: true })}
+    <p class="helper">This came from another pot, so the card is allowed to be this much higher without it reading as overspend.</p>
+    <p class="form-error" id="form-error"></p>
+    <button class="primary wide" type="submit">${item.id ? "Save exception" : "Add exception"}</button>
+    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-exception">Delete exception</button>' : ""}
   </form>`;
 }
 
@@ -1623,6 +1701,8 @@ document.addEventListener("click", async (event) => {
   if (action === "edit-sub") openItem("sub", "cardSubs", id);
   if (action === "add-oneoff") openItem("oneoff");
   if (action === "edit-oneoff") openItem("oneoff", "oneOffs", id);
+  if (action === "add-exception") openItem("exception");
+  if (action === "edit-exception") openItem("exception", "exceptions", id);
   if (action === "add-annual") openItem("annual");
   if (action === "edit-annual") openItem("annual", "annualBills", id);
   if (action === "add-pot") openItem("pot");
@@ -1645,6 +1725,11 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     removeListedItem("oneOffs", id, "one-off");
+  }
+  if (action === "remove-exception") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("exceptions", id, "exception");
   }
   if (action === "remove-monthly") {
     event.preventDefault();
@@ -1738,6 +1823,7 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-delete-payslip-category") askDelete("payslip-category", modal.item.id, "this category");
   if (action === "confirm-delete-sub") askDelete("sub", modal.item.id, "this subscription");
   if (action === "confirm-delete-oneoff") askDelete("oneoff", modal.item.id, "this one-off");
+  if (action === "confirm-delete-exception") askDelete("exception", modal.item.id, "this exception");
   if (action === "confirm-delete-annual") askDelete("annual", modal.item.id, "this annual bill");
   if (action === "confirm-delete-pot") askDelete("pot", modal.item.id, "this pot");
   if (action === "confirm-delete-pension") askDelete("pension", modal.item.id, "this pension name");
@@ -1790,6 +1876,7 @@ document.addEventListener("click", async (event) => {
       }
       if (targetModal.target === "sub") hh.cardSubs = hh.cardSubs.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "oneoff") hh.oneOffs = hh.oneOffs.filter((item) => item.id !== targetModal.id);
+      if (targetModal.target === "exception") hh.exceptions = (hh.exceptions || []).filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "annual") hh.annualBills = hh.annualBills.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "pot") hh.pots = hh.pots.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "pension") hh.pensions = hh.pensions.filter((item) => item.id !== targetModal.id);
@@ -1866,6 +1953,7 @@ document.addEventListener("submit", (event) => {
     "payslip-category-form": savePayslipCategory,
     "home-card-form": saveHomeCard,
     "oneoff-form": saveOneOff,
+    "exception-form": saveException,
     "annual-form": saveAnnual,
     "pot-form": savePot,
     "pension-form": savePension,
@@ -2329,6 +2417,19 @@ async function saveOneOff(event) {
   });
 }
 
+async function saveException(event) {
+  return saveNamedMoney(event, {
+    list: "exceptions",
+    toastAdd: "Exception added",
+    toastEdit: "Exception updated",
+    build: (data) => ({
+      name: requireName(data.get("name"), "exception"),
+      month: coerceMonthKey(data.get("month")) || viewMonth,
+      amountPence: requireMoney(data.get("amount"), "amount"),
+    }),
+  });
+}
+
 async function saveAnnual(event) {
   return saveNamedMoney(event, {
     list: "annualBills",
@@ -2498,6 +2599,7 @@ function updatePendingField(input) {
   if (total) {
     total.textContent = formatMoney(pendingListTotalPence(pendingsForMonth(household(), viewMonth)));
   }
+  refreshStatement();
   persistQueue.schedule();
 }
 
@@ -2518,6 +2620,7 @@ function updateCardBalance(input) {
     card.updatedOn = today();
   }
   storeGeneration += 1;
+  refreshStatement();
   persistQueue.schedule();
 }
 

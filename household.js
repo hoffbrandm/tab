@@ -81,6 +81,7 @@ export function emptyHousehold() {
     pendings: [],
     reserves: [],
     oneOffs: [],
+    exceptions: [],
     annualBills: [],
     pots: [],
     pensions: [],
@@ -105,6 +106,7 @@ export function householdHasData(household) {
     "pendings",
     "reserves",
     "oneOffs",
+    "exceptions",
     "annualBills",
     "pots",
     "pensions",
@@ -575,11 +577,20 @@ export function proRateDay(viewMonth, today = new Date()) {
 }
 
 /**
- * Live spend versus cards (sheet column L / footer). In and Out stay the month
- * plan. Cash monthlies never enter this total. Cash-in-reserve / £30-a-day is
- * a standing Out line only — the sheet pro-rated it by day-of-month; this app
- * does not invent that pro-rate, so reserves stay out of spentSoFar.
+ * Allowed Expenses in the sheet: what the card is allowed to carry by today.
+ * In and Out stay the month plan. Cash monthlies never enter this total.
+ * Cash-in-reserve / £30-a-day is a standing Out line only — the sheet
+ * pro-rated it by day-of-month; this app does not invent that pro-rate, so
+ * reserves stay out of spentSoFar.
  */
+export function exceptionsForMonth(household, month) {
+  return (household?.exceptions || []).filter((item) => item.month === month);
+}
+
+export function exceptionsTotalPence(household, month) {
+  return sumPence(exceptionsForMonth(household, month), (item) => item.amountPence);
+}
+
 export function spentSoFarForMonth(household, month, today = new Date()) {
   const dayOfMonth = proRateDay(month, today);
   const monthlies = monthliesOf(household);
@@ -650,8 +661,19 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const reserveSpentPence = live.reserveSpentPence;
   const spentSoFarPence = live.spentSoFarPence;
   const actualOnCardsPence = cardSidePence;
-  const savingsPence = spentSoFarPence - actualOnCardsPence;
-  const overUnderPence = savingsPence;
+  // Exceptions are paid from another pot, so the card is allowed to be that
+  // much higher without it reading as overspend, and they never touch savings.
+  const exceptions = exceptionsForMonth(household, month);
+  const exceptionsPence = sumPence(exceptions, (item) => item.amountPence);
+  const allowanceSoFarPence = spentSoFarPence + exceptionsPence;
+  // Sheet footer: Savings is In minus Out; the card check is the over/underspend
+  // against the allowance; Total Savings adds the two.
+  const savingsPence = leftPence;
+  const overUnderPence = allowanceSoFarPence - actualOnCardsPence;
+  const cardCheckPence = overUnderPence;
+  const totalSavingsPence = savingsPence + overUnderPence;
+  const overspendPence = overUnderPence < 0 ? -overUnderPence : 0;
+  const underspendPence = overUnderPence > 0 ? overUnderPence : 0;
 
   return {
     month,
@@ -692,7 +714,14 @@ export function cashflowForMonth(household, month, today = new Date()) {
     reserveSpentPence,
     spentSoFarPence,
     actualOnCardsPence,
+    exceptions,
+    exceptionsPence,
+    allowanceSoFarPence,
     savingsPence,
+    cardCheckPence,
+    overspendPence,
+    underspendPence,
+    totalSavingsPence,
   };
 }
 

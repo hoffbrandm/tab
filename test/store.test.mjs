@@ -382,3 +382,28 @@ test("weekday weekly rules keep their calendar cadence", () => {
   assert.equal(parsed.household.weeklyRules[0].weekday, 2);
   assert.deepEqual(parsed.household.weeklyRules[0].tickedKeys, ["2026-08:2026-08-04"]);
 });
+
+test("exceptions round-trip and need a month, a name, and an amount", () => {
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      exceptions: [{ id: "x-1", name: "Travel insurance", month: "2026-08", amountPence: 56000 }],
+    },
+  });
+  assert.deepEqual(parsed.household.exceptions, [
+    { id: "x-1", name: "Travel insurance", month: "2026-08", amountPence: 56000 },
+  ]);
+
+  const older = parseStore({ version: 1, friends: [], transactions: [], household: { ...emptyHousehold(), exceptions: undefined } });
+  assert.deepEqual(older.household.exceptions, []);
+
+  assert.throws(() => parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: { ...emptyHousehold(), exceptions: [{ id: "x-1", name: "No month", amountPence: 100 }] },
+  }), /Exception month must be YYYY-MM\./);
+});
