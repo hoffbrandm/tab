@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { emptyHousehold } from "../household.js";
+import { cashflowForMonth, emptyHousehold, oneOffsForMonth } from "../household.js";
 import { emptyStore, parseStore, StoreError } from "../store.js";
 
 const friend = {
@@ -286,9 +286,38 @@ test("one-off months such as August 2026 match the viewed month", () => {
         { id: "o-2", name: "Sofa", month: "2026-08-15", estimatePence: 120000, purchased: true },
       ],
     },
-  });
+  }, new Date("2026-08-15T12:00:00Z"));
   assert.equal(parsed.household.oneOffs[0].month, "2026-08");
   assert.equal(parsed.household.oneOffs[1].month, "2026-08");
+});
+
+test("unpurchased one-offs from the same month last year roll to this year", () => {
+  const today = new Date("2026-08-15T12:00:00Z");
+  const parsed = parseStore({
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      oneOffs: [
+        { id: "o-open", name: "Open item", month: "2025-08", estimatePence: 5000, purchased: false },
+        { id: "o-bought", name: "Bought item", month: "2025-08", estimatePence: 7000, purchased: true },
+        { id: "o-other", name: "Other month", month: "2025-01", estimatePence: 3000, purchased: false },
+      ],
+    },
+  }, today);
+  const open = parsed.household.oneOffs.find((item) => item.id === "o-open");
+  const bought = parsed.household.oneOffs.find((item) => item.id === "o-bought");
+  const other = parsed.household.oneOffs.find((item) => item.id === "o-other");
+  assert.equal(open.month, "2026-08");
+  assert.equal(bought.month, "2025-08");
+  assert.equal(other.month, "2025-01");
+  assert.deepEqual(oneOffsForMonth(parsed.household, "2026-08").map((item) => item.id), ["o-open"]);
+  const flow = cashflowForMonth(parsed.household, "2026-08", today);
+  assert.equal(flow.oneOffsPence, 5000);
+  assert.equal(flow.outPence, 5000);
+  assert.equal(flow.oneOffs.some((item) => item.id === "o-open"), true);
+  assert.equal(flow.oneOffs.some((item) => item.id === "o-bought"), false);
 });
 
 test("weekday weekly rules keep their calendar cadence", () => {

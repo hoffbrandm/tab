@@ -50,6 +50,7 @@ import {
   weeklySlotsForMonth,
   normalizeWeeklyCadence,
   oneOffsForMonth,
+  oneOffsOutsideMonth,
 } from "../household.js";
 
 const household = {
@@ -790,6 +791,7 @@ test("one-offs for month X appear on Home for viewMonth X and sit in Out", () =>
   hh.oneOffs = hh.oneOffs.map((item) => ({ ...item, month: coerceMonthKey(item.month) }));
   const august = oneOffsForMonth(hh, "2026-08");
   assert.deepEqual(august.map((item) => item.name).sort(), ["MOT", "Sofa"]);
+  assert.deepEqual(oneOffsOutsideMonth(hh, "2026-08").map((item) => item.name), ["Holiday"]);
   const flow = cashflowForMonth(hh, "2026-08", today);
   assert.deepEqual(flow.oneOffs.map((item) => item.name).sort(), ["MOT", "Sofa"]);
   assert.equal(flow.oneOffsPence, 160000);

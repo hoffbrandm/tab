@@ -922,6 +922,10 @@ export function oneOffsForMonth(household, month) {
   return (household?.oneOffs || []).filter((item) => oneOffMonthKey(item) === month);
 }
 
+export function oneOffsOutsideMonth(household, month) {
+  return (household?.oneOffs || []).filter((item) => oneOffMonthKey(item) !== month);
+}
+
 export function clearPendingsForMonth(household, month, today = new Date()) {
   const items = household?.pendings || [];
   const visible = new Set(pendingsForMonth(household, month, today).map((item) => item.id));

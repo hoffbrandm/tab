@@ -24,6 +24,7 @@ import {
   monthliesOf,
   normalizeWeeklyCadence,
   oneOffsForMonth,
+  oneOffsOutsideMonth,
   payslipAmountForCategory,
   masterPayslipCategories,
   payslipIsConfirmed,
@@ -422,7 +423,8 @@ function cashflowScreen() {
   const weeklySlots = flow.weeklySlots || weeklySlotsForMonth(hh, viewMonth);
   const cards = cardsForMonth(hh, viewMonth, now);
   const pendingRows = flow.pendingRows || pendingsForMonth(hh, viewMonth, now);
-  const planned = flow.oneOffs || oneOffsForMonth(hh, viewMonth);
+  const planned = plannedForViewedMonth(hh);
+  const otherPlannedCount = oneOffsOutsideMonth(hh, viewMonth).length;
   const incomeLines = flow.incomeLines || [];
 
   return shell({
@@ -506,7 +508,7 @@ function cashflowScreen() {
           tickAction: "toggle-oneoff",
           ticked: item.purchased,
           tickLabel: item.purchased ? "Purchased" : "Not purchased",
-        })).join("") : emptyLines(`Nothing planned for ${period}.`, "add-oneoff", "Add a one-off")}
+        })).join("") : homePlannedEmpty(period, otherPlannedCount)}
         <button class="text-button" type="button" data-action="add-oneoff">Add</button>
       `)}
     `,
@@ -607,11 +609,20 @@ function monthliesScreen() {
   });
 }
 
+function plannedForViewedMonth(hh = household()) {
+  return [...oneOffsForMonth(hh, viewMonth)].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function homePlannedEmpty(period, otherCount) {
+  const empty = emptyLines(`Nothing planned for ${period}.`);
+  if (!otherCount) return empty;
+  return `${empty}<p class="helper"><button class="text-button" type="button" data-action="go-planned">${otherCount} planned in other months</button></p>`;
+}
+
 function plannedScreen() {
   const hh = household();
-  const thisMonth = [...oneOffsForMonth(hh, viewMonth)].sort((a, b) => a.name.localeCompare(b.name));
-  const later = [...hh.oneOffs]
-    .filter((item) => !thisMonth.some((row) => row.id === item.id))
+  const thisMonth = plannedForViewedMonth(hh);
+  const later = [...oneOffsOutsideMonth(hh, viewMonth)]
     .sort((a, b) => String(a.month).localeCompare(String(b.month)) || a.name.localeCompare(b.name));
   return shell({
     eyebrow: "Planned",
@@ -621,7 +632,7 @@ function plannedScreen() {
     body: `
       <section class="block">
         ${sectionHead(monthLabel(viewMonth), "add-oneoff", "Add")}
-        ${thisMonth.length ? thisMonth.map(oneOffRow).join("") : emptyLines(`Nothing planned for ${monthLabel(viewMonth)}.`, "add-oneoff", "Add a one-off")}
+        ${thisMonth.length ? thisMonth.map(oneOffRow).join("") : emptyLines(`Nothing planned for ${monthLabel(viewMonth)}.`)}
       </section>
       ${later.length ? `<section class="block">${sectionHead("Other months", "", "")}${later.map(oneOffRow).join("")}</section>` : ""}
     `,

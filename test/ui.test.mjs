@@ -50,3 +50,17 @@ test("Home has income, pending clear-all, and planned accordion hooks", () => {
   assert.match(app, /data-action="add-payslip"/);
   assert.match(app, /class="primary home-add-payslip"/);
 });
+
+test("Home Planned and the Planned room keep one add control", () => {
+  assert.match(app, /emptyLines\(`Nothing planned for \$\{period\}\.`\)/);
+  assert.match(app, /emptyLines\(`Nothing planned for \$\{monthLabel\(viewMonth\)\}\.`\)/);
+  assert.match(app, /\$\{otherCount\} planned in other months/);
+  assert.match(app, /data-action="go-planned"/);
+  assert.match(app, /function plannedForViewedMonth/);
+  const homePlanned = app.match(/homeAccordion\("planned",[\s\S]*?`\)}/)?.[0] || "";
+  assert.match(homePlanned, /data-action="add-oneoff">Add</);
+  assert.equal((homePlanned.match(/data-action="add-oneoff"/g) || []).length, 1);
+  const plannedRoom = app.match(/function plannedScreen\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(plannedRoom, /sectionHead\(monthLabel\(viewMonth\), "add-oneoff", "Add"\)/);
+  assert.doesNotMatch(plannedRoom, /emptyLines\([^)]*"add-oneoff"/);
+});

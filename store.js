@@ -7,6 +7,8 @@ import {
   isMonthKey,
   coerceMonthKey,
   isTaxYearLabel,
+  monthKey,
+  parseMonthKey,
   normalizeWeeklyCadence,
   PAYSLIP_CATEGORY_KINDS,
   PENSION_STATUSES,
@@ -29,7 +31,7 @@ export function emptyStore() {
   return { version: 1, friends: [], transactions: [], household: emptyHousehold() };
 }
 
-export function parseStore(value) {
+export function parseStore(value, today = new Date()) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new StoreError("Store must be an object.");
   }
@@ -52,7 +54,7 @@ export function parseStore(value) {
     throw new StoreError("Transaction ids must be unique.");
   }
 
-  return { version: 1, friends, transactions, household: parseHousehold(value.household) };
+  return { version: 1, friends, transactions, household: parseHousehold(value.household, today) };
 }
 
 function parseFriend(friend) {
@@ -131,7 +133,7 @@ function parseTransaction(transaction, friendIds) {
   return parsed;
 }
 
-function parseHousehold(value) {
+function parseHousehold(value, today = new Date()) {
   if (value == null) return emptyHousehold();
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new StoreError("Household must be an object.");
@@ -177,7 +179,7 @@ function parseHousehold(value) {
   const weeklyExtras = list(value.weeklyExtras).map(parseWeeklyExtra);
   const pendings = list(value.pendings).map(parsePending);
   const reserves = list(value.reserves).map(parseReserve);
-  const oneOffs = list(value.oneOffs).map(parseOneOff);
+  const oneOffs = list(value.oneOffs).map((item) => parseOneOff(item, today));
   const annualBills = list(value.annualBills).map(parseAnnualBill);
   const pots = list(value.pots).map(parsePot);
   const pensions = list(value.pensions).map(parsePension);
@@ -411,18 +413,41 @@ function parseCardSub(sub, cardIds) {
   return parsed;
 }
 
-function parseOneOff(item) {
+function parseOneOff(item, today = new Date()) {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     throw new StoreError("Each planned one-off must be an object.");
   }
   const month = coerceMonthKey(item.month);
   if (!isMonthKey(month)) throw new StoreError("One-off month must be YYYY-MM.");
-  return {
+  return rollUnpurchasedOneOffToViewYear({
     id: requiredId(item.id, "One-off"),
     name: requiredName(item.name, "One-off"),
     month,
     estimatePence: moneyPence(item.estimatePence, "One-off"),
     purchased: Boolean(item.purchased),
+  }, today);
+}
+
+function referenceMonthKey(today) {
+  if (typeof today === "string") {
+    const coerced = coerceMonthKey(today);
+    if (isMonthKey(coerced)) return coerced;
+  }
+  if (today instanceof Date && !Number.isNaN(today.getTime())) return monthKey(today);
+  return monthKey(new Date());
+}
+
+// Unpurchased leftovers from the same calendar month in a past year (e.g. 2025-08
+// when today/view is 2026-08) move to the current/view year. Purchased stay as history.
+function rollUnpurchasedOneOffToViewYear(item, today = new Date()) {
+  if (item.purchased) return item;
+  const view = parseMonthKey(referenceMonthKey(today));
+  const planned = parseMonthKey(item.month);
+  if (!view || !planned) return item;
+  if (planned.month !== view.month || planned.year >= view.year) return item;
+  return {
+    ...item,
+    month: `${String(view.year).padStart(4, "0")}-${String(view.month).padStart(2, "0")}`,
   };
 }
 
