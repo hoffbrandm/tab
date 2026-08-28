@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "stage": "node stage-site.mjs"
   }
 }
