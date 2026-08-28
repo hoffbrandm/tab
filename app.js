@@ -34,6 +34,7 @@ import {
   resolvedPayslipReading,
   payslipReadingSummary,
   outBreakdownForMonth,
+  monthStatementRows,
   plannedMonthTotals,
   payslipAmountForCategory,
   masterPayslipCategories,
@@ -632,99 +633,76 @@ function statementNote(flow) {
 }
 
 /**
- * Three blocks, three questions: what was planned, where today sits against it,
- * and what the month ends up saving. The plan and the live position used to sit
- * in one column, which left "on to the card" (a plan figure) reading next to
- * "card balance now" (a live one) as if they were the same kind of number.
+ * The month in the shape the household is actually read in: the source
+ * spreadsheet's Main Table, one row per category across its three columns.
+ * A rearrangement of the same figures was harder to trust than the layout
+ * they have been read in for years, so Home shows that layout instead.
  */
+function statementRow(row) {
+  const cell = (pence, extra = "") => (pence == null || pence === 0
+    ? `<span class="statement-cell empty">—</span>`
+    : `<span class="statement-cell${extra}">${formatMoney(pence)}</span>`);
+  return `<div class="statement-line${row.outsideSavings ? " aside" : ""}">
+    <span class="statement-cell name">${esc(row.label)}${row.outsideSavings ? "<small>not in savings</small>" : ""}</span>
+    ${cell(row.flowPence, row.flowPence < 0 ? " negative" : "")}
+    ${cell(row.allowedPence)}
+    ${cell(row.cardPence)}
+  </div>`;
+}
+
 function statementSection(flow) {
+  const table = monthStatementRows(household(), viewMonth, new Date());
+  const check = table.cardCheckKnown
+    ? `<div class="statement-line check">
+        <span class="statement-cell name">${esc(table.overUnderPence < 0 ? "Overspend" : table.overUnderPence > 0 ? "Underspend" : "On budget")}</span>
+        <span class="statement-cell empty">—</span>
+        <span class="statement-cell empty">—</span>
+        <span class="statement-cell ${trackClass(table.overUnderPence)}">${formatMoney(Math.abs(table.overUnderPence))}</span>
+      </div>`
+    : "";
   return `<section class="statement" aria-label="Month statement" data-statement>
         <div class="statement-hero">
           <p class="statement-eyebrow" data-statement-eyebrow>${esc(forecastEyebrow(flow))}</p>
           <strong class="${trackClass(flow.forecastSavingPence)}" data-statement-forecast>${forecastAmount(flow)}</strong>
           <p class="statement-summary" data-statement-summary>${esc(positionSummary(flow))}</p>
         </div>
-        <div class="statement-block">
-          <h2>The plan for ${esc(monthLabel(flow.month))}</h2>
-          <div class="statement-row in">
-            <span>In</span>
-            <strong data-statement-in>${formatMoney(flow.incomePence)}</strong>
+        <div class="statement-table" data-statement-table>
+          <div class="statement-line head">
+            <span class="statement-cell name">${esc(table.monthPhase === "future" ? "Not started" : `Day ${table.dayOfMonth} of ${table.daysInMonth}`)}</span>
+            <span class="statement-cell">In and out</span>
+            <span class="statement-cell">Allowed</span>
+            <span class="statement-cell">On cards</span>
           </div>
-          <div class="statement-row out">
-            <span>Out</span>
-            <strong data-statement-out>${formatMoney(flow.outPence)}</strong>
+          ${table.rows.map(statementRow).join("")}
+          <div class="statement-line total">
+            <span class="statement-cell name">Savings</span>
+            <span class="statement-cell ${moneyClass(table.savingsPence)}">${formatMoney(table.savingsPence)}</span>
+            <span class="statement-cell">${formatMoney(table.allowedPence)}</span>
+            <span class="statement-cell">${formatMoney(table.onCardsPence)}</span>
           </div>
-          <div class="statement-split">
-            <p><span>Cash and direct debits</span><strong data-statement-cash-out>${formatMoney(flow.cashOutPence)}</strong></p>
-            <p><span>Planned on to the cards</span><strong data-statement-card-out>${formatMoney(flow.cardPlanPence)}</strong></p>
-          </div>
-          <div class="statement-row savings">
-            <span>Planned saving</span>
-            <strong class="${moneyClass(flow.savingsPence)}" data-statement-savings>${formatMoney(flow.savingsPence)}</strong>
+          ${check}
+          <div class="statement-line grand">
+            <span class="statement-cell name">Total savings</span>
+            <span class="statement-cell ${trackClass(table.totalSavingsPence)}">${formatMoney(table.totalSavingsPence)}</span>
+            <span class="statement-cell empty">—</span>
+            <span class="statement-cell empty">—</span>
           </div>
         </div>
-        ${flow.monthPhase === "future" ? "" : `<div class="statement-block">
-          <h2 data-statement-today-head>${esc(todayHeading(flow))}</h2>
-          <div class="statement-row line">
-            <span data-statement-allowed-label>${esc(allowedLabel(flow))}</span>
-            <strong data-statement-allowed>${formatMoney(flow.allowanceSoFarPence)}</strong>
-          </div>
-          <div class="statement-row line">
-            <span data-statement-card-label>${esc(cardsNowLabel(flow))}</span>
-            <strong data-statement-card-balance>${formatMoney(flow.actualOnCardsPence)}</strong>
-          </div>
-          <div class="statement-row check">
-            <span data-statement-check-label>${overUnderLabel(flow)}</span>
-            <strong class="${trackClass(flow.overUnderPence, flow.cardCheckKnown)}" data-statement-check>${overUnderAmount(flow)}</strong>
-          </div>
-          ${flow.monthPhase === "past" ? "" : `<div class="statement-row line">
-            <span data-statement-committed-label>${esc(committedLabel(flow))}</span>
-            <strong data-statement-committed>${committedAmount(flow)}</strong>
-          </div>`}
-          ${flow.monthPhase === "past" || !hasDayMoney(flow) ? "" : `<div class="statement-row line">
-            <span data-statement-day-label>${esc(reserveLeftLabel(flow))}</span>
-            <strong class="${trackClass(flow.reserveLeftPence)}" data-statement-day>${reserveLeftAmount(flow)}</strong>
-          </div>`}
-          <p class="statement-note" data-statement-note>${esc(statementNote(flow))}</p>
-        </div>`}
+        <p class="statement-note" data-statement-note>${esc(statementNote(flow))}</p>
       </section>`;
 }
 
 /**
- * Card balances, pending rows, and exception amounts are typed into inputs that
- * stay on screen. A full render would take the caret with it, so the statement
- * is patched in place on every keystroke instead of waiting for a refresh.
+ * Card balances, pending rows and exception amounts are typed into inputs that
+ * stay on screen, and a full render would take the caret with it. The statement
+ * holds no inputs of its own, so it is re-rendered whole rather than patched
+ * cell by cell — one source of truth for the markup, and no hook to go stale.
  */
 function refreshStatement() {
   const section = document.querySelector("[data-statement]");
   if (!section) return;
   const flow = cashflowForMonth(household(), viewMonth, new Date());
-  const set = (selector, text, className) => {
-    const node = section.querySelector(selector);
-    if (!node) return;
-    node.textContent = text;
-    if (className != null) node.className = className;
-  };
-  set("[data-statement-eyebrow]", forecastEyebrow(flow));
-  set("[data-statement-forecast]", forecastAmount(flow), trackClass(flow.forecastSavingPence));
-  set("[data-statement-summary]", positionSummary(flow));
-  set("[data-statement-in]", formatMoney(flow.incomePence));
-  set("[data-statement-out]", formatMoney(flow.outPence));
-  set("[data-statement-cash-out]", formatMoney(flow.cashOutPence));
-  set("[data-statement-card-out]", formatMoney(flow.cardPlanPence));
-  set("[data-statement-savings]", formatMoney(flow.savingsPence), moneyClass(flow.savingsPence));
-  set("[data-statement-today-head]", todayHeading(flow));
-  set("[data-statement-allowed-label]", allowedLabel(flow));
-  set("[data-statement-allowed]", formatMoney(flow.allowanceSoFarPence));
-  set("[data-statement-card-label]", cardsNowLabel(flow));
-  set("[data-statement-card-balance]", formatMoney(flow.actualOnCardsPence));
-  set("[data-statement-check-label]", overUnderLabel(flow));
-  set("[data-statement-check]", overUnderAmount(flow), trackClass(flow.overUnderPence, flow.cardCheckKnown));
-  set("[data-statement-committed-label]", committedLabel(flow));
-  set("[data-statement-committed]", committedAmount(flow));
-  set("[data-statement-day-label]", reserveLeftLabel(flow));
-  set("[data-statement-day]", reserveLeftAmount(flow), trackClass(flow.reserveLeftPence));
-  set("[data-statement-note]", statementNote(flow));
+  section.outerHTML = statementSection(flow);
 }
 
 /**
@@ -1158,8 +1136,10 @@ function payslipsScreen() {
             edit: "edit-payslip",
             id: slip.id,
             title: `${personById(slip.personId)?.name || "Person"} · ${labels.period}`,
-            detail: `${confirmed ? "Confirmed" : "Forecast"} · ${labels.taxYear} · lands ${labels.lands} · net ${formatMoney(payslipNetAsReadPence(slip))}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
-            amount: formatMoney(slip.grossPence || slip.salaryPence),
+            // Net is the figure the month is actually built on, so it is the
+            // one in the amount column; gross moves into the detail line.
+            detail: `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · gross ${formatMoney(slip.grossPence || slip.salaryPence)}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
+            amount: formatMoney(payslipNetAsReadPence(slip)),
           });
         }).join("") : emptyLines("Add a month when you have a slip — or a forecast row you do not treat as fact.", "add-payslip", "Add a payslip")}
       </section>

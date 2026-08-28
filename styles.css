@@ -712,6 +712,65 @@ legend { padding: 0; margin-bottom: 7px; }
   font-size: 0.9rem;
   font-weight: 750;
 }
+.statement-table {
+  display: grid;
+  gap: 1px;
+  margin-top: 4px;
+}
+.statement-line {
+  display: grid;
+  /* Three numeric columns wide enough for a five-figure sum with pence: a
+     truncated number is worse than a small one. */
+  grid-template-columns: minmax(0, 1fr) repeat(3, 78px);
+  align-items: baseline;
+  gap: 5px;
+  padding: 5px 0;
+  font-size: 0.74rem;
+}
+.statement-cell {
+  text-align: right;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.statement-cell.name {
+  text-align: left;
+  font-weight: 700;
+  font-size: 0.82rem;
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.statement-cell.name small { color: var(--muted); font-weight: 650; font-size: 0.66rem; }
+.statement-cell.empty { color: #c9c6bf; font-weight: 600; }
+.statement-line.head {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+}
+.statement-line.head .statement-cell {
+  color: var(--muted);
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.58rem;
+}
+.statement-line.head .statement-cell.name { font-size: 0.58rem; }
+.statement-line.aside .statement-cell.name { color: var(--muted); }
+.statement-line.total {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+.statement-line.check .statement-cell.name { color: var(--muted); }
+.statement-line.grand {
+  border-top: 2px solid var(--ink);
+  padding-top: 8px;
+}
+.statement-line.total .statement-cell.name,
+.statement-line.grand .statement-cell.name { font-size: 0.9rem; }
+.statement-line.grand .statement-cell { font-size: 0.82rem; }
 .breakdown { display: grid; gap: 18px; }
 .breakdown-half { display: grid; gap: 2px; }
 .breakdown-half h3 {
