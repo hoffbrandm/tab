@@ -131,6 +131,18 @@ test("regularly cleared lists swipe left to delete; setup entities do not", () =
   assert.doesNotMatch(income, /removeAction/);
 });
 
+test("Home can be walked back to the lines that make each total", () => {
+  assert.match(app, /homeAccordion\("breakdown", "How this adds up"/);
+  assert.match(app, /function breakdownSection/);
+  assert.match(app, /function breakdownHalf/);
+  assert.match(app, /outBreakdownForMonth\(hh, viewMonth, now\)/);
+  assert.match(app, /breakdownHalf\("Out of the bank"/);
+  assert.match(app, /breakdownHalf\("On to the cards"/);
+  // A weekly rule shows its working rather than four identical rows.
+  assert.match(app, /item\.count \? `\$\{item\.count\} × \$\{formatMoney\(item\.eachPence\)\}`/);
+  assert.match(css, /\.breakdown-half/);
+});
+
 test("Home leads with what the month ends up saving, not with a bare total", () => {
   assert.match(app, /data-statement-eyebrow/);
   assert.match(app, /data-statement-forecast/);
@@ -143,12 +155,11 @@ test("Home leads with what the month ends up saving, not with a bare total", () 
   const summary = app.slice(app.indexOf("function positionSummary"), app.indexOf("function statementNote"));
   assert.match(summary, /above what the plan allows by today/);
   assert.match(summary, /below what the plan allows by today/);
-  assert.match(summary, /Keep the rest under/);
   assert.match(summary, /a day/);
-  assert.match(summary, /ends up saving/);
-  assert.match(summary, /pull it back/);
   assert.match(summary, /has not started/);
   assert.match(summary, /finished .*over plan/);
+  // "Keep the rest under £X" counted committed bills as spending room.
+  assert.doesNotMatch(app, /Keep the rest under/);
 });
 
 test("Home statement shows the plan, the live position, and the month-end saving", () => {
@@ -174,11 +185,33 @@ test("Home statement shows the plan, the live position, and the month-end saving
   assert.match(app, /trackClass\(flow\.forecastSavingPence\)/);
 });
 
-test("Home says how much of the month's plan is still there to spend", () => {
-  assert.match(app, /data-statement-left-label/);
-  assert.match(app, /data-statement-left/);
-  assert.match(app, /function remainingLabel/);
-  assert.match(app, /return flow\.remainingPlanPence < 0 \? "Over the month's plan" : "Left to spend";/);
+test("what is still to come splits into what is owed and what is chosen", () => {
+  // Weeklies and monthlies are expected to be paid, so they are never offered
+  // as room to spend; the reserve is the only half with a per-day rate.
+  assert.doesNotMatch(app, /"Left to spend"/);
+  assert.doesNotMatch(app, /data-statement-left-label/);
+  assert.match(app, /data-statement-committed-label/);
+  assert.match(app, /data-statement-committed/);
+  assert.match(app, /data-statement-day-label/);
+  assert.match(app, /data-statement-day/);
+  assert.match(app, /"Still to be paid"/);
+  assert.match(app, /"Day money left"/);
+  assert.match(app, /function stillToComeSentence/);
+  assert.match(app, /of weeklies and monthlies is still expected to be paid/);
+  assert.match(app, /is the part you choose/);
+  assert.match(app, /flow\.perDayReserveLeftPence/);
+  assert.doesNotMatch(app, /flow\.perDayLeftPence/);
+  // A household with no reserve has no day money to name.
+  assert.match(app, /function hasDayMoney/);
+  assert.match(app, /flow\.monthPhase === "past" \|\| !hasDayMoney\(flow\) \? "" :/);
+  // The close only says "hold that" when there is day money to hold to; with
+  // none, the rest of the month is not a choice and it says what lands.
+  assert.match(app, /Hold that and/);
+  assert.match(app, /If that is all that lands,/);
+  assert.match(app, /Nothing more is due, so/);
+  assert.match(app, /function nothingLeftToCome/);
+  // The pull-it-back nudge needs a lever to pull, so it needs day money left.
+  assert.match(app, /flow\.overUnderPence < 0 && lever/);
   // A finished month has nothing still to come, so the row is not rendered.
   assert.match(app, /flow\.monthPhase === "past" \? "" : `<div class="statement-row line">/);
   // A month that has not started has no "so far" at all, so the whole live
@@ -266,7 +299,8 @@ test("the plan's card half and the live card balance sit in different blocks", (
     "data-statement-card-out",
     "data-statement-allowed",
     "data-statement-card-balance",
-    "data-statement-left",
+    "data-statement-committed",
+    "data-statement-day",
   ]) assert.match(refresh, new RegExp(hook));
 });
 

@@ -582,6 +582,26 @@ export function envelopeMonthlyPence(weeklyPence, month) {
   return Math.round((weeklyPence * days) / 7);
 }
 
+/**
+ * A reserve line says where it is spent, the same way a monthly does. Only the
+ * ones spent on a card belong in the card allowance: the sheet pro-rates the
+ * "£30 a day" row into Allowed Expenses and leaves cleaner and nails out, and
+ * pro-rating those two put the card allowance ~£197 over the sheet's on day 26.
+ * Absent means card, so an existing household keeps the daily envelope working
+ * and only the odd ones out need saying.
+ */
+export function reserveIsOnCard(reserve) {
+  return reserve?.paidFrom !== "cash";
+}
+
+export function cardReservesOf(household) {
+  return (household?.reserves || []).filter(reserveIsOnCard);
+}
+
+export function cashReservesOf(household) {
+  return (household?.reserves || []).filter((item) => !reserveIsOnCard(item));
+}
+
 export function paidInMonth(item, month) {
   return Array.isArray(item?.paidMonths) && item.paidMonths.includes(month);
 }
@@ -643,7 +663,7 @@ export function spentSoFarForMonth(household, month, today = new Date()) {
     (item) => item.estimatePence,
   );
   const days = daysInMonthKey(month);
-  const reserveTotalPence = sumPence(household?.reserves, (item) => item.amountPence);
+  const reserveTotalPence = sumPence(cardReservesOf(household), (item) => item.amountPence);
   const reserveSpentPence = days > 0 ? Math.round((reserveTotalPence * dayOfMonth) / days) : 0;
   return {
     dayOfMonth,
@@ -654,6 +674,48 @@ export function spentSoFarForMonth(household, month, today = new Date()) {
     purchasedOneOffsPence,
     reserveSpentPence,
     spentSoFarPence: tickedWeeklyPence + dueCardMonthliesPence + purchasedOneOffsPence + reserveSpentPence,
+  };
+}
+
+/**
+ * Every line behind Out, named and totalled, so the statement can be walked
+ * rather than trusted. Grouped the way the money leaves: what goes out of the
+ * bank, then what lands on the cards. Weekly rules collapse to one row each
+ * ("Food shop · 4 × £400.00") because four identical slots is noise, not detail.
+ */
+export function outBreakdownForMonth(household, month, today = new Date()) {
+  const flow = cashflowForMonth(household, month, today);
+  const weeklyByRule = new Map();
+  for (const slot of flow.weeklySlots) {
+    const key = slot.ruleId || slot.id;
+    const seen = weeklyByRule.get(key) || { name: slot.name, count: 0, amountPence: 0, eachPence: slot.amountPence };
+    seen.count += 1;
+    seen.amountPence += slot.amountPence;
+    weeklyByRule.set(key, seen);
+  }
+  const cash = [
+    ...flow.cashMonthlies.map((item) => ({ name: item.name, amountPence: item.amountPence, detail: monthlyDueLabel(item, month) })),
+    ...(flow.annualReservePence ? [{ name: "Annual bills, saved monthly", amountPence: flow.annualReservePence, detail: "Annual total ÷ 12" }] : []),
+    ...cashReservesOf(household).map((item) => ({ name: item.name || "Cash in reserve", amountPence: item.amountPence, detail: "Paid in cash" })),
+  ];
+  const card = [
+    ...flow.cardMonthlies.map((item) => ({ name: item.name, amountPence: item.amountPence, detail: monthlyDueLabel(item, month) })),
+    // count and eachPence rather than a formatted string: money is formatted in
+    // one place, and that place is the view.
+    ...[...weeklyByRule.values()].map((rule) => ({
+      name: rule.name,
+      amountPence: rule.amountPence,
+      count: rule.count,
+      eachPence: rule.eachPence,
+    })),
+    ...flow.oneOffs.map((item) => ({ name: item.name, amountPence: item.estimatePence, detail: "Planned" })),
+    ...cardReservesOf(household).map((item) => ({ name: item.name || "Cash in reserve", amountPence: item.amountPence, detail: "Spent on the cards" })),
+  ];
+  return {
+    cash,
+    card,
+    cashTotalPence: sumPence(cash, (item) => item.amountPence),
+    cardTotalPence: sumPence(card, (item) => item.amountPence),
   };
 }
 
@@ -675,13 +737,22 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const billsPence = sumPence(cashMonthlies, (item) => item.amountPence);
   const cardOutPence = sumPence(cardMonthlies, (item) => item.amountPence);
   const reservePence = sumPence(household?.reserves, (item) => item.amountPence);
+  const cardReservePence = sumPence(cardReservesOf(household), (item) => item.amountPence);
+  const cashReservePence = reservePence - cardReservePence;
   const annualReserve = annualReservePence(annualBills);
   const oneOffsPence = sumPence(oneOffs, (item) => item.estimatePence);
   const envelopesMonthlyPence = sumPence(weeklySlots, (item) => item.amountPence);
-  // Out splits the way the money leaves: standing cash and the month's reserve
-  // on one side, everything that lands on a card on the other.
-  const cashOutPence = billsPence + annualReserve + reservePence;
-  const cardPlanPence = cardOutPence + oneOffsPence + envelopesMonthlyPence;
+  // Out splits the way the money actually leaves. The reserve — the £30 a day —
+  // is spent on the cards, not in cash, so it belongs on the card side: it was
+  // on the cash side while pro-rating into the card allowance, which is the same
+  // £1,000 counted as bank money in the plan and card money in the check.
+  // Cash is what leaves the bank: standing cash monthlies and the annual saving.
+  const cashOutPence = billsPence + annualReserve + cashReservePence;
+  // Card commitments are the ones that are going to be paid: card monthlies,
+  // this month's planned, and every weekly slot. The reserve rides on top and is
+  // the part that is chosen day by day, so it is tracked apart from them.
+  const cardCommitmentsPence = cardOutPence + oneOffsPence + envelopesMonthlyPence;
+  const cardPlanPence = cardCommitmentsPence + cardReservePence;
   const outPence = cashOutPence + cardPlanPence;
   const leftPence = incomePence - outPence;
   const committedOutPence = outPence;
@@ -727,9 +798,17 @@ export function cashflowForMonth(household, month, today = new Date()) {
   // left to spend, which is the number that answers "can we still pull it back".
   const phase = monthPhase(month, today);
   const daysLeft = Math.max(0, days - dayOfMonth);
-  const fullMonthAllowancePence = cardPlanPence + reservePence + exceptionsPence;
+  const fullMonthAllowancePence = cardPlanPence + exceptionsPence;
   const remainingPlanPence = fullMonthAllowancePence - allowanceSoFarPence;
-  const perDayLeftPence = daysLeft > 0 && remainingPlanPence > 0 ? Math.round(remainingPlanPence / daysLeft) : 0;
+  // What is still to come splits in two, and the halves are not the same kind
+  // of money. Weeklies, card monthlies and planned one-offs are expected to be
+  // paid — they are not a lever, and treating them as spending money left says
+  // there is more room in the month than there is. The reserve is the part that
+  // is genuinely chosen day to day, so it is the only half worth a per-day
+  // figure. The two add back to the whole remaining plan.
+  const committedToComePence = cardCommitmentsPence - (tickedWeeklyPence + dueCardMonthliesPence + purchasedOneOffsPence);
+  const reserveLeftPence = cardReservePence - reserveSpentPence;
+  const perDayReserveLeftPence = daysLeft > 0 && reserveLeftPence > 0 ? Math.round(reserveLeftPence / daysLeft) : 0;
   // Where the month lands: the plan's saving carried forward with however far
   // ahead or behind today already is. Same number as Total savings — named for
   // the question it answers rather than for the sheet row it came from.
@@ -743,7 +822,9 @@ export function cashflowForMonth(household, month, today = new Date()) {
     daysLeft,
     fullMonthAllowancePence,
     remainingPlanPence,
-    perDayLeftPence,
+    committedToComePence,
+    reserveLeftPence,
+    perDayReserveLeftPence,
     forecastSavingPence,
     forecastCardsPence,
     daysInMonth: days,
@@ -754,8 +835,11 @@ export function cashflowForMonth(household, month, today = new Date()) {
     billsPence,
     cardOutPence,
     cashOutPence,
+    cardCommitmentsPence,
     cardPlanPence,
     reservePence,
+    cardReservePence,
+    cashReservePence,
     reserveTotalPence: live.reserveTotalPence,
     monthlies,
     cashMonthlies,

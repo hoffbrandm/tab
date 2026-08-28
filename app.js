@@ -30,6 +30,8 @@ import {
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
+  reserveIsOnCard,
+  outBreakdownForMonth,
   plannedMonthTotals,
   payslipAmountForCategory,
   masterPayslipCategories,
@@ -465,12 +467,32 @@ function overUnderAmount(flow) {
   return formatMoney(Math.abs(flow.overUnderPence));
 }
 
-function remainingLabel(flow) {
-  return flow.remainingPlanPence < 0 ? "Over the month's plan" : "Left to spend";
+/**
+ * What is still to come is two kinds of money, and one row called "left to
+ * spend" made them look like one. Weeklies and monthlies are expected to be
+ * paid, so counting them as spending room says the month has more slack in it
+ * than it has; the reserve is the half that is actually chosen day by day.
+ */
+function committedLabel(flow) {
+  if (flow.committedToComePence < 0) return "Paid beyond the plan";
+  return flow.monthPhase === "past" ? "Never came out" : "Still to be paid";
 }
 
-function remainingAmount(flow) {
-  return formatMoney(Math.abs(flow.remainingPlanPence));
+function committedAmount(flow) {
+  return formatMoney(Math.abs(flow.committedToComePence));
+}
+
+function reserveLeftLabel(flow) {
+  return flow.reserveLeftPence < 0 ? "Day money overspent" : "Day money left";
+}
+
+function reserveLeftAmount(flow) {
+  return formatMoney(Math.abs(flow.reserveLeftPence));
+}
+
+/** A household with no reserve set has no day money to talk about. */
+function hasDayMoney(flow) {
+  return flow.reserveTotalPence > 0;
 }
 
 function todayHeading(flow) {
@@ -539,15 +561,51 @@ function positionSummary(flow) {
     : flow.overUnderPence > 0
       ? `The cards are ${formatMoney(flow.overUnderPence)} below what the plan allows by today`
       : `The cards are exactly where the plan allows by today`;
-  if (flow.remainingPlanPence <= 0) {
-    return `${standing}, ${daysLeftPhrase(flow)}. The month's plan is already spent, so every pound from here comes straight off the ${forecast} that ${label} ends up saving.`;
+  const versus = flow.overUnderPence < 0
+    ? ` — ${formatMoney(-flow.overUnderPence)} less than planned`
+    : flow.overUnderPence > 0
+      ? `, ${formatMoney(flow.overUnderPence)} more than planned`
+      : "";
+  // The close only tells you to hold to something when there is something to
+  // hold to. With no day money left the rest of the month is not a choice, so
+  // it says what lands rather than handing over an instruction to nobody.
+  const lever = hasDayMoney(flow) && flow.reserveLeftPence > 0;
+  const close = nothingLeftToCome(flow)
+    ? `Nothing more is due, so ${label} lands on ${forecast}${versus}.`
+    : lever
+      ? `Hold that and ${label} saves ${forecast}${versus}.`
+      : `If that is all that lands, ${label} saves ${forecast}${versus}.`;
+  const nudge = flow.overUnderPence < 0 && lever ? " Spend under it to pull some back." : "";
+  return `${standing}, ${daysLeftPhrase(flow)}. ${stillToComeSentence(flow)} ${close}${nudge}`;
+}
+
+function nothingLeftToCome(flow) {
+  return flow.committedToComePence <= 0 && (!hasDayMoney(flow) || flow.reserveLeftPence <= 0);
+}
+
+/**
+ * The middle sentence, and the point of the whole screen: the weeklies and
+ * monthlies still to come are going to be paid whatever happens, so the only
+ * figure worth acting on is the day money left. Saying "keep the rest under
+ * £496.77" put the two together and made a committed bill look like room.
+ */
+function stillToComeSentence(flow) {
+  const committed = flow.committedToComePence > 0
+    ? `${formatMoney(flow.committedToComePence)} of weeklies and monthlies is still expected to be paid`
+    : "";
+  if (!hasDayMoney(flow)) {
+    return committed ? `${committed[0].toUpperCase()}${committed.slice(1)}.` : "Everything planned has been paid.";
   }
-  const perDay = flow.daysLeft > 0 ? ` (about ${formatMoney(flow.perDayLeftPence)} a day)` : "";
-  const room = `Keep the rest under ${formatMoney(flow.remainingPlanPence)}${perDay}`;
-  const close = flow.overUnderPence < 0
-    ? `${room} and ${label} still saves ${forecast} — ${formatMoney(-flow.overUnderPence)} less than planned. Spend under that to pull it back.`
-    : `${room} and ${label} saves ${forecast}${flow.overUnderPence > 0 ? `, ${formatMoney(flow.overUnderPence)} more than planned` : ""}.`;
-  return `${standing}, ${daysLeftPhrase(flow)}. ${close}`;
+  const perDay = flow.daysLeft > 0 && flow.perDayReserveLeftPence > 0
+    ? ` (about ${formatMoney(flow.perDayReserveLeftPence)} a day)`
+    : "";
+  const day = flow.reserveLeftPence > 0
+    ? `the ${formatMoney(flow.reserveLeftPence)} of day money left${perDay} is the part you choose`
+    : flow.reserveLeftPence < 0
+      ? `the day money is ${formatMoney(-flow.reserveLeftPence)} overspent already`
+      : `the day money for the month is gone`;
+  if (!committed) return `Everything planned has been paid, and ${day}.`;
+  return `${committed[0].toUpperCase()}${committed.slice(1)}; ${day}.`;
 }
 
 /**
@@ -617,8 +675,12 @@ function statementSection(flow) {
             <strong class="${trackClass(flow.overUnderPence, flow.cardCheckKnown)}" data-statement-check>${overUnderAmount(flow)}</strong>
           </div>
           ${flow.monthPhase === "past" ? "" : `<div class="statement-row line">
-            <span data-statement-left-label>${esc(remainingLabel(flow))}</span>
-            <strong data-statement-left>${remainingAmount(flow)}</strong>
+            <span data-statement-committed-label>${esc(committedLabel(flow))}</span>
+            <strong data-statement-committed>${committedAmount(flow)}</strong>
+          </div>`}
+          ${flow.monthPhase === "past" || !hasDayMoney(flow) ? "" : `<div class="statement-row line">
+            <span data-statement-day-label>${esc(reserveLeftLabel(flow))}</span>
+            <strong class="${trackClass(flow.reserveLeftPence)}" data-statement-day>${reserveLeftAmount(flow)}</strong>
           </div>`}
           <p class="statement-note" data-statement-note>${esc(statementNote(flow))}</p>
         </div>`}
@@ -655,9 +717,37 @@ function refreshStatement() {
   set("[data-statement-card-balance]", formatMoney(flow.actualOnCardsPence));
   set("[data-statement-check-label]", overUnderLabel(flow));
   set("[data-statement-check]", overUnderAmount(flow), trackClass(flow.overUnderPence, flow.cardCheckKnown));
-  set("[data-statement-left-label]", remainingLabel(flow));
-  set("[data-statement-left]", remainingAmount(flow));
+  set("[data-statement-committed-label]", committedLabel(flow));
+  set("[data-statement-committed]", committedAmount(flow));
+  set("[data-statement-day-label]", reserveLeftLabel(flow));
+  set("[data-statement-day]", reserveLeftAmount(flow), trackClass(flow.reserveLeftPence));
   set("[data-statement-note]", statementNote(flow));
+}
+
+/**
+ * The statement's two Out halves, itemised. Every figure on Home should be
+ * walkable back to the lines that make it, so a total that looks too good can
+ * be checked against the rows rather than taken on trust.
+ */
+function breakdownRow(item) {
+  const detail = item.count ? `${item.count} × ${formatMoney(item.eachPence)}` : item.detail;
+  return `<p><span>${esc(item.name)}${detail ? ` <small>${esc(detail)}</small>` : ""}</span><strong>${formatMoney(item.amountPence)}</strong></p>`;
+}
+
+function breakdownHalf(title, rows, totalPence, note) {
+  return `<div class="breakdown-half">
+    <h3>${esc(title)}<strong>${formatMoney(totalPence)}</strong></h3>
+    ${rows.length ? rows.map(breakdownRow).join("") : `<p class="helper">Nothing here yet.</p>`}
+    ${note ? `<p class="helper">${esc(note)}</p>` : ""}
+  </div>`;
+}
+
+function breakdownSection(flow, breakdown) {
+  return `<div class="breakdown">
+    <p class="helper">In ${formatMoney(flow.incomePence)} less everything below is the planned saving of ${formatMoney(flow.savingsPence)}. Every line the month expects to pay is here, once.</p>
+    ${breakdownHalf("Out of the bank", breakdown.cash, breakdown.cashTotalPence, "Cash monthlies and the monthly share of the annual bills. None of this touches the cards.")}
+    ${breakdownHalf("On to the cards", breakdown.card, breakdown.cardTotalPence, "Card monthlies on their due date, every weekly slot, this month's planned, and the reserve — all of it expected on a card by month end.")}
+  </div>`;
 }
 
 function cashflowScreen() {
@@ -680,6 +770,7 @@ function cashflowScreen() {
     month: true,
     extra: statementSection(flow),
     body: `
+      ${homeAccordion("breakdown", "How this adds up", breakdownSection(flow, outBreakdownForMonth(hh, viewMonth, now)))}
       ${homeAccordion("income", "Income", `
         ${incomeLines.length ? incomeLines.map((line) => lineRow({
           edit: "edit-payslip",
@@ -1483,11 +1574,14 @@ function pendingForm() {
 }
 
 function reserveLineDetail(item) {
+  // Where it is spent decides whether it enters the card allowance, so the list
+  // says which side each line is on rather than leaving it to the edit screen.
+  const where = reserveIsOnCard(item) ? "On a card" : "Cash";
   const name = String(item?.name || "").toLowerCase();
   if (/\ba day\b|daily|thousand|envelope|float/.test(name)) {
-    return "Daily envelope / monthly thousand · no tick";
+    return `Daily envelope / monthly thousand · ${where}`;
   }
-  return "Standing monthly out · no tick";
+  return `Standing monthly out · ${where}`;
 }
 
 function reserveForm() {
@@ -1496,7 +1590,11 @@ function reserveForm() {
   return `<form id="reserve-form">${modalHead(adding ? "Cash in reserve" : "Reserve", adding ? "Daily envelope / monthly thousand" : "Edit reserve")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="£30 a day" /></label>
     ${moneyLabel("Monthly amount", "amount", item.amountPence)}
-    <p class="helper">This is the daily envelope and the monthly thousand — the same line. Type the amount; it is not stored in the app. Cleaner and nails are siblings. Insurance saving stays on Annual as year ÷ 12.</p>
+    <label>Spent on<select name="paidFrom">
+      <option value="card"${reserveIsOnCard(item) ? " selected" : ""}>A card</option>
+      <option value="cash"${reserveIsOnCard(item) ? "" : " selected"}>Cash</option>
+    </select></label>
+    <p class="helper">This is the daily envelope and the monthly thousand — the same line. Type the amount; it is not stored in the app. Cleaner and nails are siblings — set those to cash, because only what is spent on a card belongs in the card allowance. Insurance saving stays on Annual as year ÷ 12.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save reserve" : "Add reserve"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-reserve">Delete reserve</button>' : ""}
@@ -2587,6 +2685,7 @@ async function saveReserve(event) {
     build: (data) => ({
       name: requireName(data.get("name"), "name"),
       amountPence: requireMoney(data.get("amount"), "amount"),
+      paidFrom: data.get("paidFrom") === "cash" ? "cash" : "card",
     }),
   });
 }

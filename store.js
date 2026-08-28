@@ -336,6 +336,9 @@ function parseReserve(item) {
     id: requiredId(item.id, "Reserve"),
     name: requiredName(item.name, "Reserve"),
     amountPence: moneyPence(item.amountPence, "Reserve"),
+    // Where it is spent decides whether it enters the card allowance. Absent
+    // means card, so an older gist keeps the daily envelope in the allowance.
+    paidFrom: item.paidFrom === "cash" ? "cash" : "card",
   };
 }
 

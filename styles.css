@@ -712,6 +712,40 @@ legend { padding: 0; margin-bottom: 7px; }
   font-size: 0.9rem;
   font-weight: 750;
 }
+.breakdown { display: grid; gap: 18px; }
+.breakdown-half { display: grid; gap: 2px; }
+.breakdown-half h3 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  margin: 0 0 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+}
+.breakdown-half h3 strong {
+  color: var(--ink);
+  font-size: 1rem;
+  letter-spacing: -0.03em;
+  text-transform: none;
+}
+.breakdown-half p {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  margin: 0;
+  padding: 3px 0;
+  font-size: 0.9rem;
+}
+.breakdown-half p small { color: var(--muted); font-weight: 650; }
+.breakdown-half strong { white-space: nowrap; font-weight: 750; }
+.breakdown-half p.helper { display: block; padding-top: 6px; }
 .planned-months {
   display: grid;
   gap: 2px;
