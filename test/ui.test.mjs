@@ -283,7 +283,9 @@ test("the payslip form says what Gross means and checks it against the slip", ()
 
 test("the payslips list shows the live net, never a stale cached one", () => {
   assert.doesNotMatch(app, /formatMoney\(slip\.netPence\)/);
-  assert.match(app, /net \$\{formatMoney\(payslipNetPence\(slip\)\)\}/);
+  // And read the way the payslip's own net says to read it, not from flags
+  // that may have been saved before the net settled them.
+  assert.match(app, /net \$\{formatMoney\(payslipNetAsReadPence\(slip\)\)\}/);
 });
 
 test("the plan's card half and the live card balance sit in different blocks", () => {
