@@ -6,6 +6,8 @@ import {
   builtinPayslipCategory,
   outBreakdownForMonth,
   reserveIsOnCard,
+  resolvedPayslipReading,
+  payslipReadingSummary,
   looksLikeDailyEnvelope,
   payslipGrossReadingWarning,
   aniFromHousehold,
@@ -1491,37 +1493,57 @@ test("every built-in category maps to its own kind, whatever the order", () => {
   // every one after it: a salary sacrifice registered as the new category and
   // tax as the pension. Nothing about the list's order may matter again.
   const slip = {
-    bonusPence: 7, benefitsPence: 5, allowancePence: 6, salarySacrificePensionPence: 100,
+    bonusPence: 7, benefitsPence: 5, salarySacrificePensionPence: 100,
     reliefAtSourcePensionPence: 400, taxPence: 200, niPence: 300,
   };
   const byKind = Object.fromEntries(payslipCategoriesOf({ payslips: [slip] }).map((c) => [c.kind, c.label]));
   assert.deepEqual(byKind, {
     bonus: "Bonus",
-    benefits: "Benefit in kind",
-    allowance: "Cash allowance",
+    benefits: "Benefits",
     sacrifice: "Salary sacrifice pension",
     pension: "Pension (relief at source)",
     tax: "Tax",
     ni: "NI",
   });
-  for (const kind of ["bonus", "benefits", "allowance", "sacrifice", "pension", "tax", "ni"]) {
+  for (const kind of ["bonus", "benefits", "sacrifice", "pension", "tax", "ni"]) {
     assert.equal(builtinPayslipCategory(kind).kind, kind);
   }
 });
 
-test("a cash allowance is paid and taxed; a benefit in kind is only taxed", () => {
-  // One "Benefits" column cannot mean both. A car allowance reaches the bank
-  // and is taxable; a benefit in kind is taxed but never paid.
-  const base = { salaryPence: 11657300, grossPence: 971442, taxPence: 302445, niPence: 37290 };
-  const allowance = { ...base, allowancePence: 60953 };
-  const benefit = { ...base, benefitsPence: 60953 };
+test("a benefit is taxed either way; the payslip's net says if it is money", () => {
+  // Nobody should have to know "benefit in kind" from "cash allowance" to enter
+  // their own pay. Both are the payslip's "Benefits"; the net settles which.
+  const base = { salaryPence: 11657300, grossPence: 971442, taxPence: 302445, niPence: 37290, benefitsPence: 60953 };
+  const paid = { ...base, benefitsPaid: true };
 
-  // The allowance is in net; the benefit is not.
-  assert.equal(payslipNetPence(allowance) - payslipNetPence(benefit), 60953);
-  assert.equal(payslipNetPence(allowance), 971442 + 60953 - 302445 - 37290);
-  // Both are taxable, so both count for the £100k line, by the same amount.
-  assert.equal(payslipAniPence(allowance), payslipAniPence(benefit));
-  assert.equal(payslipAniPence(allowance), 971442 + 60953);
+  assert.equal(payslipNetPence(paid) - payslipNetPence(base), 60953);
+  assert.equal(payslipNetPence(paid), 971442 + 60953 - 302445 - 37290);
+  // Taxable either way, so the £100k line does not care which it is.
+  assert.equal(payslipAniPence(paid), payslipAniPence(base));
+  assert.equal(payslipAniPence(paid), 971442 + 60953);
+});
+
+test("typing the payslip's net settles every reading at once", () => {
+  const slip = {
+    salaryPence: 11657300, grossPence: 971442, taxPence: 302445, niPence: 37290,
+    benefitsPence: 60953, otherDeductions: [{ id: "d", label: "Dental", amountPence: 5411 }],
+  };
+  // Two readings exist because there is a benefit; the stated net picks one.
+  assert.equal(payslipNetReadings(slip).length, 2);
+  assert.equal(resolvedPayslipReading(slip), null);
+
+  const stated = { ...slip, statedNetPence: 971442 + 60953 - 302445 - 37290 - 5411 };
+  const reading = resolvedPayslipReading(stated);
+  assert.equal(reading.benefitsPaid, true);
+  assert.match(payslipReadingSummary(reading), /money you actually receive/);
+
+  // And the other way: a net without the benefit reads it as notional.
+  const notional = { ...slip, statedNetPence: 971442 - 302445 - 37290 - 5411 };
+  assert.equal(resolvedPayslipReading(notional).benefitsPaid, false);
+  assert.match(payslipReadingSummary(resolvedPayslipReading(notional)), /taxed but never paid to you/);
+
+  // A net that matches nothing resolves to nothing, rather than guessing.
+  assert.equal(resolvedPayslipReading({ ...slip, statedNetPence: 1 }), null);
 });
 
 test("gross typed as salary ÷ 12 with an untaken sacrifice is called out", () => {
@@ -1538,6 +1560,8 @@ test("gross typed as salary ÷ 12 with an untaken sacrifice is called out", () =
   // No sacrifice, or no salary to compare against, means nothing to warn about.
   assert.equal(payslipGrossReadingWarning({ ...slip, salarySacrificePensionPence: 0 }), "");
   assert.equal(payslipGrossReadingWarning({ ...slip, salaryPence: 0 }), "");
+  // And a net that settles the reading has already answered it.
+  assert.equal(payslipGrossReadingWarning({ ...slip, statedNetPence: 579778 }), "");
 });
 
 test("a reserve with no side recorded reads as the daily envelope or as cash", () => {

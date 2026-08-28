@@ -31,6 +31,8 @@ import {
   oneOffsForMonth,
   oneOffsOutsideMonth,
   reserveIsOnCard,
+  resolvedPayslipReading,
+  payslipReadingSummary,
   outBreakdownForMonth,
   plannedMonthTotals,
   payslipAmountForCategory,
@@ -1279,8 +1281,7 @@ function moreScreen() {
 function payslipKindLabel(kind) {
   return {
     bonus: "Paid, and taxed",
-    benefits: "Taxed, but never paid to you",
-    allowance: "Paid in your pay, and taxed",
+    benefits: "Taxed; paid or not is read off your net",
     extra: "Paid, adds to net",
     sacrifice: "Deduction",
     tax: "Deduction",
@@ -1609,7 +1610,7 @@ function payslipCategoryForm() {
   return `<form id="payslip-category-form">${modalHead(item.id ? "Category" : "New category", item.id ? "Edit category" : "Add a category")}
     <label>Name<input required maxlength="80" name="label" value="${esc(item.label)}" placeholder="Bonus, tax, gym…" /></label>
     <label>On the slip<select name="kind">
-      <option value="extra" ${kind === "extra" || kind === "bonus" || kind === "benefits" || kind === "allowance" ? "selected" : ""}>Extra — adds to net</option>
+      <option value="extra" ${kind === "extra" || kind === "bonus" || kind === "benefits" ? "selected" : ""}>Extra — adds to net</option>
       <option value="deduction" ${kind === "deduction" || kind === "sacrifice" || kind === "tax" || kind === "ni" ? "selected" : ""}>Deduction — leaves net</option>
       <option value="parental" ${kind === "parental" ? "selected" : ""}>On the slip — not in net</option>
     </select></label>
@@ -1705,6 +1706,7 @@ function payslipForm() {
     <p class="helper">Gross is the Payments total on the slip — basic, bonus, and any parental pay — after any salary sacrifice has come off. Tax and NI go in Categories below. If your slip writes it another way, say so under Net.</p>
     <input type="hidden" name="grossBeforeSacrifice" value="${item.grossBeforeSacrifice ? "on" : ""}" />
     <input type="hidden" name="grossExcludesBonus" value="${item.grossExcludesBonus ? "on" : ""}" />
+    <input type="hidden" name="benefitsPaid" value="${item.benefitsPaid ? "on" : ""}" />
     <section class="payslip-cats">
       <h3>Categories</h3>
       <p class="helper">Pick a category and enter the amount. Names live in Account. Net is calculated.</p>
@@ -1735,6 +1737,7 @@ function payslipForm() {
  */
 function payslipNetBlock(live) {
   const check = payslipNetCheck(live);
+  const resolved = resolvedPayslipReading(live);
   const hints = payslipNetHints(live);
   return `<div class="payslip-net" data-payslip-net-block>
     <p class="payslip-net-line"><span>Gross paid</span><strong>${formatMoney(payslipGrossPaidPence(live))}</strong></p>
@@ -1742,7 +1745,7 @@ function payslipNetBlock(live) {
     <p class="payslip-net-line total"><span>Net</span><strong data-payslip-net>${formatMoney(payslipNetPence(live))}</strong></p>
     ${check
       ? (check.matches
-        ? `<p class="payslip-net-check ok">Matches the net on the slip.</p>`
+        ? `<p class="payslip-net-check ok">Matches the net on the slip.${resolved ? ` Read as: ${esc(payslipReadingSummary(resolved))}` : ""}</p>`
         : `<p class="payslip-net-check off">${esc(`${formatMoney(Math.abs(check.differencePence))} ${check.differencePence > 0 ? "more" : "less"} than the ${formatMoney(check.statedPence)} on the slip.`)}</p>
            ${hints.map((hint) => `<p class="payslip-net-hint">${esc(hint)}</p>`).join("")}`)
       : ""}
@@ -1751,11 +1754,13 @@ function payslipNetBlock(live) {
 }
 
 /**
- * Which net these figures mean depends on how the slip writes Gross, and that
- * is a fact about the payslip. Show every reading with its number so the one
- * that matches the payslip can be picked by eye, with no convention to learn.
+ * The payslip prints its net, so typing that one figure settles how gross is
+ * written and whether a benefit is money — no category to choose, no
+ * convention to learn. The list of readings is the fallback for when the typed
+ * net matches nothing, or matches more than one thing.
  */
 function payslipReadings(live) {
+  if (resolvedPayslipReading(live)) return "";
   const readings = payslipNetReadings(live);
   if (readings.length < 2) return "";
   return `<div class="payslip-readings">
@@ -1808,6 +1813,7 @@ function livePayslipFromForm(slip, categories) {
     statedNetPence: readMoney("statedNet"),
     grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
     grossExcludesBonus: data.get("grossExcludesBonus") === "on",
+    benefitsPaid: data.get("benefitsPaid") === "on",
   }, modal.slipCategories || categories || [], form);
 }
 
@@ -1816,11 +1822,11 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
     ...slip,
     bonusPence: 0,
     benefitsPence: 0,
-    allowancePence: 0,
     salarySacrificePensionPence: 0,
     reliefAtSourcePensionPence: 0,
     grossBeforeSacrifice: Boolean(slip?.grossBeforeSacrifice),
     grossExcludesBonus: Boolean(slip?.grossExcludesBonus),
+    benefitsPaid: Boolean(slip?.benefitsPaid),
     taxPence: 0,
     niPence: 0,
     otherDeductions: [],
@@ -1830,7 +1836,6 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
     const amount = raw == null ? payslipAmountForCategory(slip, category) : (parseMoneyAllowZero(raw) || 0);
     if (category.kind === "bonus") next.bonusPence = amount;
     else if (category.kind === "benefits") next.benefitsPence = amount;
-    else if (category.kind === "allowance") next.allowancePence = amount;
     else if (category.kind === "sacrifice") next.salarySacrificePensionPence = amount;
     else if (category.kind === "pension") next.reliefAtSourcePensionPence = amount;
     else if (category.kind === "tax") next.taxPence = amount;
@@ -2708,7 +2713,7 @@ async function savePayslipCategory(event) {
     return showFormError(error.message);
   }
   const existing = modal.item || {};
-  const special = ["bonus", "benefits", "allowance", "sacrifice", "tax", "ni"].includes(existing.kind);
+  const special = ["bonus", "benefits", "sacrifice", "tax", "ni"].includes(existing.kind);
   const kind = special ? existing.kind : (
     data.get("kind") === "extra" ? "extra" : data.get("kind") === "parental" ? "parental" : "deduction"
   );
@@ -2880,6 +2885,7 @@ async function savePayslip(event) {
     grossPence,
     grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
     grossExcludesBonus: data.get("grossExcludesBonus") === "on",
+    benefitsPaid: data.get("benefitsPaid") === "on",
   }, modal.slipCategories || [], event.target);
   if ((amounts.otherDeductions || []).some((row) => row.amountPence == null)) {
     return showFormError("Use a valid amount, such as 12.50.");
@@ -2892,7 +2898,7 @@ async function savePayslip(event) {
     grossPence,
     bonusPence: amounts.bonusPence,
     benefitsPence: amounts.benefitsPence,
-    allowancePence: amounts.allowancePence,
+    benefitsPaid: data.get("benefitsPaid") === "on",
     salarySacrificePensionPence: amounts.salarySacrificePensionPence,
     reliefAtSourcePensionPence: amounts.reliefAtSourcePensionPence,
     otherDeductions: amounts.otherDeductions,
@@ -2967,7 +2973,15 @@ function snapshotPayslipForm() {
 function updatePayslipNet() {
   const block = document.querySelector("[data-payslip-net-block]");
   if (!block) return;
-  const live = livePayslipFromForm(modal?.payslip || {}, modal?.slipCategories || []);
+  const form = document.querySelector("#payslip-form");
+  let live = livePayslipFromForm(modal?.payslip || {}, modal?.slipCategories || []);
+  const resolved = resolvedPayslipReading(live);
+  if (form && resolved && !resolved.current) {
+    form.elements.grossBeforeSacrifice.value = resolved.grossBeforeSacrifice ? "on" : "";
+    form.elements.grossExcludesBonus.value = resolved.grossExcludesBonus ? "on" : "";
+    form.elements.benefitsPaid.value = resolved.benefitsPaid ? "on" : "";
+    live = livePayslipFromForm(modal?.payslip || {}, modal?.slipCategories || []);
+  }
   block.outerHTML = payslipNetBlock(live);
 }
 

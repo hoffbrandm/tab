@@ -615,8 +615,9 @@ function parsePayslip(slip, personIds) {
     salaryPence: moneyPence(slip.salaryPence, "Payslip salary"),
     grossPence: moneyPence(slip.grossPence, "Payslip gross"),
     bonusPence: moneyPence(slip.bonusPence, "Payslip bonus"),
-    benefitsPence: moneyPence(slip.benefitsPence, "Payslip benefits"),
-    allowancePence: moneyPence(slip.allowancePence, "Payslip cash allowance"),
+    // An allowance was briefly its own field; it is a benefit that gets paid.
+    benefitsPence: moneyPence(slip.benefitsPence, "Payslip benefits") || moneyPence(slip.allowancePence, "Payslip benefits"),
+    benefitsPaid: Boolean(slip.benefitsPaid) || moneyPence(slip.allowancePence, "Payslip benefits") > 0,
     salarySacrificePensionPence: moneyPence(slip.salarySacrificePensionPence, "Payslip salary sacrifice"),
     reliefAtSourcePensionPence: moneyPence(slip.reliefAtSourcePensionPence, "Payslip relief-at-source pension"),
     grossBeforeSacrifice: Boolean(slip.grossBeforeSacrifice),

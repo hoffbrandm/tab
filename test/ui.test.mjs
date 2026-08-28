@@ -261,8 +261,12 @@ test("each payslip category says what it does to net", () => {
   // "Benefit in kind" and "Cash allowance" are indistinguishable to anyone who
   // does not already know payroll terms, and the form showed a bare name.
   assert.match(app, /payslip-cat-name">\$\{esc\(category\.label\)\}<small>\$\{esc\(payslipKindLabel\(category\.kind\)\)\}<\/small>/);
-  assert.match(app, /benefits: "Taxed, but never paid to you"/);
-  assert.match(app, /allowance: "Paid in your pay, and taxed"/);
+  assert.match(app, /benefits: "Taxed; paid or not is read off your net"/);
+  // The payslip's net settles the readings, so the picker is the fallback and
+  // the form applies what it worked out rather than waiting to be tapped.
+  assert.match(app, /if \(resolvedPayslipReading\(live\)\) return "";/);
+  assert.match(app, /form\.elements\.benefitsPaid\.value = resolved\.benefitsPaid \? "on" : "";/);
+  assert.match(app, /Read as: \$\{esc\(payslipReadingSummary\(resolved\)\)\}/);
   assert.match(css, /\.payslip-cat-name small/);
 });
 
