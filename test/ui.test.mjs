@@ -143,6 +143,33 @@ test("Home can be walked back to the lines that make each total", () => {
   assert.match(css, /\.breakdown-half/);
 });
 
+test("Home shows the month as the household's own Main Table lays it out", () => {
+  // A rearrangement of the same figures was harder to trust than the layout
+  // they have been read in for years, so Home shows that layout.
+  assert.match(app, /monthStatementRows\(household\(\), viewMonth, new Date\(\)\)/);
+  assert.match(app, /function statementRow/);
+  assert.match(app, /class="statement-table" data-statement-table/);
+  // The sheet's three columns, and its two totals.
+  assert.match(app, />In and out</);
+  assert.match(app, />Allowed</);
+  assert.match(app, />On cards</);
+  assert.match(app, />Savings</);
+  assert.match(app, />Total savings</);
+  assert.match(app, /"Overspend" : .*"Underspend" : "On budget"/);
+  // Exceptions are shown but stepped over by the savings total, as the sheet
+  // does, and the row says so rather than leaving it to be worked out.
+  assert.match(app, /row\.outsideSavings \? "<small>not in savings<\/small>" : ""/);
+  // The statement holds no inputs, so it re-renders whole rather than being
+  // patched cell by cell — no hook can go stale against the markup.
+  const refresh = app.slice(app.indexOf("function refreshStatement"), app.indexOf("function cashflowScreen"));
+  assert.match(refresh, /section\.outerHTML = statementSection\(flow\)/);
+  for (const stale of ["data-statement-cash-out", "data-statement-committed", "data-statement-today-head"]) {
+    assert.doesNotMatch(app, new RegExp(stale), `${stale} should be gone with the old layout`);
+  }
+  assert.match(css, /\.statement-line/);
+  assert.match(css, /font-variant-numeric:\s*tabular-nums/);
+});
+
 test("Home leads with what the month ends up saving, not with a bare total", () => {
   assert.match(app, /data-statement-eyebrow/);
   assert.match(app, /data-statement-forecast/);
@@ -160,71 +187,6 @@ test("Home leads with what the month ends up saving, not with a bare total", () 
   assert.match(summary, /finished .*over plan/);
   // "Keep the rest under £X" counted committed bills as spending room.
   assert.doesNotMatch(app, /Keep the rest under/);
-});
-
-test("Home statement shows the plan, the live position, and the month-end saving", () => {
-  assert.match(app, /<span>Planned saving<\/span>/);
-  assert.match(app, /data-statement-savings/);
-  assert.match(app, /data-statement-check-label/);
-  // The headline is the month-end figure, so the statement states it once.
-  assert.doesNotMatch(app, /data-statement-total/);
-  assert.doesNotMatch(app, /class="statement-row left"/);
-  assert.doesNotMatch(app, /<span>Left \/ savings<\/span>/);
-  // "Total savings" read like a lifetime pot; "underspend" said nothing about
-  // whether the month is in front of the plan or behind it.
-  assert.doesNotMatch(app, /<span>Total savings<\/span>/);
-  assert.doesNotMatch(app, /return "Overspend";/);
-  assert.doesNotMatch(app, /return "Underspend";/);
-  assert.match(app, /return "Behind plan";/);
-  assert.match(app, /return "Ahead of plan";/);
-  assert.match(app, /return "Exactly on plan";/);
-  assert.match(app, /return "Ahead \/ behind plan";/);
-  // Ahead is good news and behind is bad, so the check and the headline colour.
-  assert.match(app, /function trackClass/);
-  assert.match(app, /trackClass\(flow\.overUnderPence, flow\.cardCheckKnown\)/);
-  assert.match(app, /trackClass\(flow\.forecastSavingPence\)/);
-});
-
-test("what is still to come splits into what is owed and what is chosen", () => {
-  // Weeklies and monthlies are expected to be paid, so they are never offered
-  // as room to spend; the reserve is the only half with a per-day rate.
-  assert.doesNotMatch(app, /"Left to spend"/);
-  assert.doesNotMatch(app, /data-statement-left-label/);
-  assert.match(app, /data-statement-committed-label/);
-  assert.match(app, /data-statement-committed/);
-  assert.match(app, /data-statement-day-label/);
-  assert.match(app, /data-statement-day/);
-  assert.match(app, /"Still to be paid"/);
-  assert.match(app, /"Day money left"/);
-  assert.match(app, /function stillToComeSentence/);
-  assert.match(app, /of weeklies and monthlies is still expected to be paid/);
-  assert.match(app, /is the part you choose/);
-  assert.match(app, /flow\.perDayReserveLeftPence/);
-  assert.doesNotMatch(app, /flow\.perDayLeftPence/);
-  // A household with no reserve has no day money to name.
-  assert.match(app, /function hasDayMoney/);
-  assert.match(app, /flow\.monthPhase === "past" \|\| !hasDayMoney\(flow\) \? "" :/);
-  // The close only says "hold that" when there is day money to hold to; with
-  // none, the rest of the month is not a choice and it says what lands.
-  assert.match(app, /Hold that and/);
-  assert.match(app, /If that is all that lands,/);
-  assert.match(app, /Nothing more is due, so/);
-  assert.match(app, /function nothingLeftToCome/);
-  // The pull-it-back nudge needs a lever to pull, so it needs day money left.
-  assert.match(app, /flow\.overUnderPence < 0 && lever/);
-  // A finished month has nothing still to come, so the row is not rendered.
-  assert.match(app, /flow\.monthPhase === "past" \? "" : `<div class="statement-row line">/);
-  // A month that has not started has no "so far" at all, so the whole live
-  // block goes rather than showing a by-today allowance that cannot exist yet.
-  assert.match(app, /flow\.monthPhase === "future" \? "" : `<div class="statement-block">/);
-  // A finished month is past tense on both sides of the check.
-  assert.match(app, /"The plan allowed"/);
-  assert.match(app, /"Ended up on the cards"/);
-  // "Type a August balance" — the month name never follows the article.
-  assert.doesNotMatch(app, /Type a \$\{monthName/);
-  assert.match(app, /function todayHeading/);
-  assert.match(app, /day \$\{flow\.dayOfMonth\} of \$\{flow\.daysInMonth\}/);
-  assert.match(app, /data-statement-today-head/);
 });
 
 test("typing a card balance or a pending amount repaints the statement without a refresh", () => {
@@ -285,38 +247,10 @@ test("the payslips list shows the live net, never a stale cached one", () => {
   assert.doesNotMatch(app, /formatMoney\(slip\.netPence\)/);
   // And read the way the payslip's own net says to read it, not from flags
   // that may have been saved before the net settled them.
-  assert.match(app, /net \$\{formatMoney\(payslipNetAsReadPence\(slip\)\)\}/);
-});
-
-test("the plan's card half and the live card balance sit in different blocks", () => {
-  const statement = app.slice(app.indexOf("function statementSection"), app.indexOf("function refreshStatement"));
-  const plan = statement.slice(statement.indexOf("The plan for"), statement.indexOf("data-statement-today-head"));
-  const today = statement.slice(statement.indexOf("data-statement-today-head"));
-  // "On to the card" next to "Card balance now" read as one kind of number.
-  // The planned half belongs to the plan; what is really on the cards does not.
-  assert.doesNotMatch(app, /<span>On to the card<\/span>/);
-  assert.doesNotMatch(app, /<span>Card balance now<\/span>/);
-  assert.match(plan, /<span>Cash and direct debits<\/span>/);
-  assert.match(plan, /<span>Planned on to the cards<\/span>/);
-  assert.doesNotMatch(plan, /data-statement-card-balance/);
-  assert.match(today, /data-statement-card-label/);
-  assert.match(today, /data-statement-allowed-label/);
-  assert.match(app, /"On the cards now"/);
-  // Both sides of the check are rows now, so neither has to be taken on trust.
-  assert.match(app, /data-statement-allowed/);
-  // The whole statement repaints on a keystroke, not only on a render.
-  const refresh = app.slice(app.indexOf("function refreshStatement"), app.indexOf("function cashflowScreen"));
-  for (const hook of [
-    "data-statement-eyebrow",
-    "data-statement-forecast",
-    "data-statement-summary",
-    "data-statement-cash-out",
-    "data-statement-card-out",
-    "data-statement-allowed",
-    "data-statement-card-balance",
-    "data-statement-committed",
-    "data-statement-day",
-  ]) assert.match(refresh, new RegExp(hook));
+  // Net is the figure the month is built on, so it takes the amount column and
+  // gross moves into the detail line — it was the other way round.
+  assert.match(app, /amount: formatMoney\(payslipNetAsReadPence\(slip\)\)/);
+  assert.match(app, /gross \$\{formatMoney\(slip\.grossPence \|\| slip\.salaryPence\)\}/);
 });
 
 test("a month input is sized to a month, and an accordion looks like one", () => {

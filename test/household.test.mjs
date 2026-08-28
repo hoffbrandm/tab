@@ -1525,6 +1525,26 @@ test("a benefit is taxed either way; the payslip's net says if it is money", () 
   assert.equal(payslipAniPence(paid), 971442 + 60953);
 });
 
+test("a funded cashplan goes on and straight back off, netting to nothing", () => {
+  // The payslip shows it twice — added to the payments, then deducted — so the
+  // app takes it as two lines rather than making anyone net it off by hand.
+  const slip = {
+    salaryPence: 12000000, grossPence: 1000000, salarySacrificePensionPence: 151700,
+    taxPence: 234806, niPence: 33716, statedNetPence: 579778,
+    otherDeductions: [
+      { id: "cf", label: "Cashplan funded", amountPence: 652, extra: true },
+      { id: "cd", label: "Cashplan deducted", amountPence: 652 },
+    ],
+  };
+  assert.equal(payslipNetAsReadPence(slip), 579778);
+  // Both lines are offered by name, so neither has to be typed as a custom one.
+  const labels = DEFAULT_PAYSLIP_CATEGORIES.map((c) => c.label);
+  assert.ok(labels.includes("Cashplan funded"));
+  assert.ok(labels.includes("Cashplan deducted"));
+  assert.equal(DEFAULT_PAYSLIP_CATEGORIES.find((c) => c.label === "Cashplan funded").kind, "extra");
+  assert.equal(DEFAULT_PAYSLIP_CATEGORIES.find((c) => c.label === "Cashplan deducted").kind, "deduction");
+});
+
 test("a stored slip is read the way its own net says, without being reopened", () => {
   // The form resolves while it is open, but a slip saved before that — or saved
   // with the wrong flag — would stay wrong everywhere else. The payslip's net

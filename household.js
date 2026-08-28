@@ -38,6 +38,11 @@ export const BUILTIN_PAYSLIP_CATEGORIES = [
   { id: "ni", label: "NI", kind: "ni" },
 ];
 export const SHEET_PAYSLIP_DEDUCTIONS = [
+  // A funded cashplan is added to the payments and taken straight back off, so
+  // it shows on the slip as two lines that cancel. Both are here, because a
+  // slip that shows two lines should be enterable as two lines.
+  { id: "cashplan-funded", label: "Cashplan funded", kind: "extra" },
+  { id: "cashplan-deducted", label: "Cashplan deducted", kind: "deduction" },
   { id: "will-writing", label: "Will writing", kind: "deduction" },
   { id: "critical-illness-ee", label: "Critical illness EE", kind: "deduction" },
   { id: "critical-illness-dp", label: "Critical illness DP", kind: "deduction" },
@@ -697,6 +702,45 @@ export function spentSoFarForMonth(household, month, today = new Date()) {
  * bank, then what lands on the cards. Weekly rules collapse to one row each
  * ("Food shop · 4 × £400.00") because four identical slots is noise, not detail.
  */
+/**
+ * The month as the source spreadsheet's Main Table lays it out: one row per
+ * category, with the three columns it uses — what the category does to In and
+ * Out, what it lets the cards carry by today, and what is really on the cards.
+ *
+ * This is the shape the household is actually read in, so Home shows it rather
+ * than a rearrangement of it. Every figure here already existed on the flow;
+ * nothing is recomputed, so the rows and the totals cannot drift apart.
+ */
+export function monthStatementRows(household, month, today = new Date()) {
+  const flow = cashflowForMonth(household, month, today);
+  const rows = [
+    { id: "income", label: "Income", flowPence: flow.incomePence },
+    // The annual saving is a standing cash line on the sheet, not its own row.
+    { id: "cash", label: "Cash out", flowPence: -(flow.billsPence + flow.annualReservePence) },
+    { id: "reserve", label: "Cash in reserve", flowPence: -flow.reservePence, allowedPence: flow.reserveSpentPence },
+    { id: "cardout", label: "Credit card out", flowPence: -flow.cardOutPence, allowedPence: flow.dueCardMonthliesPence },
+    { id: "weekly", label: "Weekly expenses", flowPence: -flow.envelopesMonthlyPence, allowedPence: flow.tickedWeeklyPence },
+    { id: "planned", label: "Monthly expenses", flowPence: -flow.oneOffsPence, allowedPence: flow.purchasedOneOffsPence },
+    // Paid from another pot: it lets the cards carry more without ever moving
+    // savings, which is why the sheet's own Savings total steps over this row.
+    { id: "exceptions", label: "Exceptions", flowPence: flow.exceptionsPence, allowedPence: flow.exceptionsPence, outsideSavings: true },
+    { id: "pending", label: "Pending", cardPence: flow.pendingPence },
+    { id: "cards", label: "Credit cards", cardPence: flow.cardBalancesPence },
+  ];
+  return {
+    rows,
+    savingsPence: flow.savingsPence,
+    allowedPence: flow.allowanceSoFarPence,
+    onCardsPence: flow.actualOnCardsPence,
+    overUnderPence: flow.overUnderPence,
+    cardCheckKnown: flow.cardCheckKnown,
+    totalSavingsPence: flow.totalSavingsPence,
+    dayOfMonth: flow.dayOfMonth,
+    daysInMonth: flow.daysInMonth,
+    monthPhase: flow.monthPhase,
+  };
+}
+
 export function outBreakdownForMonth(household, month, today = new Date()) {
   const flow = cashflowForMonth(household, month, today);
   const weeklyByRule = new Map();
