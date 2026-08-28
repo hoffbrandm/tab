@@ -84,10 +84,22 @@ test("Home Planned and the Planned room keep one add control", () => {
   assert.match(app, /if \(payload\.oneOffsRewritten\) persist\(\)/);
 });
 
+test("the per diem is one figure of its own, not a line in a list", () => {
+  // It was a "cash in reserve" row among others, which made the month's
+  // spending money look like config to be filed rather than a number to change.
+  assert.match(app, /sectionHead\("Per diem", "edit-per-diem"/);
+  assert.match(app, /if \(action === "edit-per-diem"\) openItem\("per-diem"\)/);
+  assert.match(app, /"per-diem": perDiemForm/);
+  assert.match(app, /"per-diem-form": savePerDiem/);
+  assert.match(app, /household\(\)\.perDiem = \{ amountPence \}/);
+  // And the list it used to live in is gone entirely, form and all.
+  assert.doesNotMatch(app, /reserveForm|saveReserve|add-reserve|edit-reserve/);
+  assert.doesNotMatch(app, /hh\.reserves/);
+});
+
 test("regularly cleared lists swipe left to delete; setup entities do not", () => {
   assert.match(app, /removeAction: "remove-oneoff"/);
   assert.match(app, /removeAction: "remove-monthly"/);
-  assert.match(app, /removeAction: "remove-reserve"/);
   assert.match(app, /removeAction: "remove-weekly-extra"/);
   assert.match(app, /removeAction: "remove-weekly-rule"/);
   assert.match(app, /removeAction: "remove-annual"/);
@@ -100,7 +112,6 @@ test("regularly cleared lists swipe left to delete; setup entities do not", () =
   assert.match(app, /action === "undo-delete"/);
   assert.match(app, /action === "remove-weekly-rule"/);
   assert.match(app, /action === "remove-weekly-extra"/);
-  assert.match(app, /action === "remove-reserve"/);
   assert.match(app, /action === "remove-annual"/);
   assert.match(app, /action === "remove-donation"/);
   assert.match(app, /removeListedItem\("pendings"/);
@@ -139,7 +150,8 @@ test("Home can be walked back to the lines that make each total", () => {
   assert.match(app, /breakdownHalf\("Out of the bank"/);
   assert.match(app, /breakdownHalf\("On to the cards"/);
   // A weekly rule shows its working rather than four identical rows.
-  assert.match(app, /item\.count \? `\$\{item\.count\} × \$\{formatMoney\(item\.eachPence\)\}`/);
+  assert.match(app, /`\$\{item\.count\} × \$\{formatMoney\(item\.eachPence\)\}`/);
+  assert.match(app, /`\$\{formatMoney\(item\.dailyPence\)\} a day`/);
   assert.match(css, /\.breakdown-half/);
 });
 

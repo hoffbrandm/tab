@@ -5,12 +5,16 @@ import {
   ANI_LIMIT_PENCE,
   builtinPayslipCategory,
   outBreakdownForMonth,
-  reserveIsOnCard,
   resolvedPayslipReading,
   payslipAsRead,
+  grossIsSalaryOverTwelve,
+  benefitsArePaid,
   payslipNetAsReadPence,
   payslipReadingSummary,
   looksLikeDailyEnvelope,
+  perDiemDailyPence,
+  perDiemSoFarPence,
+  perDiemTotalPence,
   payslipGrossReadingWarning,
   aniFromHousehold,
   aniProjection,
@@ -118,7 +122,7 @@ const household = {
 test("empty household templates are not treated as live data", () => {
   assert.equal(householdHasData(emptyHousehold()), false);
   assert.equal(householdHasData(household), true);
-  assert.deepEqual(emptyHousehold().reserves, []);
+  assert.deepEqual(emptyHousehold().perDiem, { amountPence: 0 });
 });
 
 test("cashflow income is net pay from payslips that land in the month", () => {
@@ -170,12 +174,12 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
 
   const reserved = cashflowForMonth({
     ...household,
-    reserves: [{ id: "r-1", name: "Daily float", amountPence: 90000 }],
+    perDiem: { amountPence: 90000 },
   }, "2026-08", today);
   assert.equal(reserved.reservePence, 90000);
   assert.equal(reserved.outPence, 319000);
   assert.equal(reserved.leftPence, 181000);
-  // Cash in reserve is the month's spending money, allowed a day at a time.
+  // The per diem is the month's spending money, allowed a day at a time.
   // On the 10th of a 31-day month, 10/31 of the £900 is allowed.
   assert.equal(reserved.reserveSpentPence, Math.round((90000 * 10) / 31));
   assert.equal(reserved.spentSoFarPence, flow.spentSoFarPence + reserved.reserveSpentPence);
@@ -692,16 +696,18 @@ test("payslip net is the slip's own arithmetic: gross paid less deductions", () 
       { id: "mat", label: "Enhanced maternity", amountPence: 80000, inNet: false },
     ],
   };
-  // Gross is the Payments total, so the bonus is already inside it. A taxable
-  // benefit is never paid, so it is not in there and is not added. The salary
+  // Gross is the Payments total, so the bonus is already inside it. The salary
   // sacrifice reduced gross before it was struck, so it is not a deduction.
-  // 4000 gross − (600 tax + 200 NI + 40 gym + 80 cycle + 20 jury) = 3060.
+  // 4000 gross + 50 benefits − (600 tax + 200 NI + 40 gym + 80 cycle + 20 jury)
+  // = 3110. A payslip's "Benefits" is money in the pay unless the slip's own net
+  // says it is notional, which is what benefitsPaid: false records.
   assert.equal(payslipGrossPaidPence(slip), 400000);
   assert.equal(payslipDeductionsPence(slip), 94000);
-  assert.equal(payslipNetPence(slip), 306000);
+  assert.equal(payslipNetPence(slip), 311000);
+  assert.equal(payslipNetPence({ ...slip, benefitsPaid: false }), 306000);
 
   // The same slip, but the gross typed in is the figure before the sacrifice.
-  assert.equal(payslipNetPence({ ...slip, grossBeforeSacrifice: true }), 276000);
+  assert.equal(payslipNetPence({ ...slip, grossBeforeSacrifice: true }), 281000);
   assert.equal(payslipNetPence({
     grossPence: 400000,
     netPence: 999999,
@@ -1298,12 +1304,17 @@ test("the net on the slip is checked against the net these figures produce", () 
   assert.match(payslipNetHints(other)[0], /a deduction is probably missing/);
 });
 
-test("a taxable benefit counts for the £100k line and never for take-home", () => {
-  const slip = { grossPence: 400000, benefitsPence: 60000, taxPence: 80000, niPence: 20000 };
+test("a notional benefit counts for the £100k line and never for take-home", () => {
+  const slip = { grossPence: 400000, benefitsPence: 60000, taxPence: 80000, niPence: 20000, benefitsPaid: false };
   // A benefit in kind is notional. It is taxed but never paid.
   assert.equal(payslipNetPence(slip), 300000);
   assert.equal(payslipTaxablePayPence(slip), 400000);
   assert.equal(payslipAniPence(slip), 460000);
+  // A cash benefit is the same line on the payslip and is money in the pay, so
+  // it lands in net as well. It is taxable either way.
+  const cash = { ...slip, benefitsPaid: true };
+  assert.equal(payslipNetPence(cash), 360000);
+  assert.equal(payslipAniPence(cash), 460000);
 });
 
 test("a relief-at-source pension comes off pay, and off ANI grossed up", () => {
@@ -1379,11 +1390,8 @@ test("a gross that leaves the bonus out counts it once, in net and in ANI", () =
   assert.equal(payslipAniPence(slip), 400000);
 });
 
-test("cash in reserve is allowed a day at a time, not all at once", () => {
-  const hh = {
-    ...emptyHousehold(),
-    reserves: [{ id: "r-1", name: "£30 a day", amountPence: 93000 }],
-  };
+test("the per diem is allowed a day at a time, not all at once", () => {
+  const hh = { ...emptyHousehold(), perDiem: { amountPence: 93000 } };
   const day = (n) => spentSoFarForMonth(hh, "2026-08", new Date(`2026-08-${String(n).padStart(2, "0")}T12:00:00Z`));
   assert.equal(day(1).reserveSpentPence, 3000);
   assert.equal(day(10).reserveSpentPence, 30000);
@@ -1396,18 +1404,18 @@ test("cash in reserve is allowed a day at a time, not all at once", () => {
   assert.equal(spentSoFarForMonth(hh, "2026-09", today).reserveSpentPence, 0);
 });
 
-test("Out splits by where the money leaves, and the reserve leaves by card", () => {
+test("Out splits by where the money leaves, and the per diem leaves by card", () => {
   const today = new Date("2026-08-10T12:00:00Z");
-  // The fixture has no reserve, so give it one: the £30 a day is spent on the
-  // cards, and it used to sit on the cash side while pro-rating into the card
-  // allowance — the same £1,000 counted as bank money and as card money.
-  const withReserve = { ...household, reserves: [{ id: "r-1", name: "£30 a day", amountPence: 100000 }] };
+  // The fixture has no per diem, so give it one: it is spent on the cards, and
+  // counting it as bank money in the plan and card money in the check would be
+  // the same £1,000 twice.
+  const withReserve = { ...household, perDiem: { amountPence: 100000 } };
   const flow = cashflowForMonth(withReserve, "2026-08", today);
   assert.equal(flow.reservePence, 100000);
 
   // Cash is only what leaves the bank: standing cash monthlies + annual saving.
   assert.equal(flow.cashOutPence, flow.billsPence + flow.annualReservePence);
-  // Card commitments are what is going to be paid; the reserve rides on top.
+  // Card commitments are what is going to be paid; the per diem rides on top.
   assert.equal(flow.cardCommitmentsPence, flow.cardOutPence + flow.oneOffsPence + flow.envelopesMonthlyPence);
   assert.equal(flow.cardPlanPence, flow.cardCommitmentsPence + flow.reservePence);
   assert.equal(flow.cashOutPence + flow.cardPlanPence, flow.outPence);
@@ -1464,7 +1472,7 @@ test("the Out breakdown names every line and ties to the totals", () => {
     ],
     weeklyRules: [{ id: "w", name: "Food shop", amountPence: 40000, cadence: "times", timesPerMonth: 4, tickedKeys: [] }],
     oneOffs: [{ id: "o", name: "MOT", month: "2026-08", estimatePence: 20000 }],
-    reserves: [{ id: "r", name: "£30 a day", amountPence: 93000 }],
+    perDiem: { amountPence: 93000 },
     annualBills: [{ id: "a", name: "Insurance", amountPence: 120000, month: 3 }],
   };
   const today = new Date("2026-08-10T12:00:00Z");
@@ -1479,8 +1487,8 @@ test("the Out breakdown names every line and ties to the totals", () => {
 
   // Cash is the bank side only: the mortgage and the annual saving.
   assert.deepEqual(out.cash.map((row) => row.name), ["Mortgage", "Annual bills, saved monthly"]);
-  // The card side carries the reserve, because that is where it is spent.
-  assert.deepEqual(out.card.map((row) => row.name), ["Netflix", "Food shop", "MOT", "£30 a day"]);
+  // The card side carries the per diem, because that is where it is spent.
+  assert.deepEqual(out.card.map((row) => row.name), ["Netflix", "Food shop", "MOT", "Per diem"]);
   assert.equal(out.card.at(-1).amountPence, 93000);
 
   // Four identical slots collapse to one row that still shows the working.
@@ -1516,12 +1524,18 @@ test("a benefit is taxed either way; the payslip's net says if it is money", () 
   // Nobody should have to know "benefit in kind" from "cash allowance" to enter
   // their own pay. Both are the payslip's "Benefits"; the net settles which.
   const base = { salaryPence: 11657300, grossPence: 971442, taxPence: 302445, niPence: 37290, benefitsPence: 60953 };
+  const notional = { ...base, benefitsPaid: false };
   const paid = { ...base, benefitsPaid: true };
+  // A payslip that prints "Benefits" is nearly always printing money that was
+  // paid, so that is what an unmarked slip reads as; the net corrects it.
+  assert.equal(benefitsArePaid(base), true);
+  assert.equal(benefitsArePaid(notional), false);
+  assert.equal(payslipNetPence(base), payslipNetPence(paid));
 
-  assert.equal(payslipNetPence(paid) - payslipNetPence(base), 60953);
+  assert.equal(payslipNetPence(paid) - payslipNetPence(notional), 60953);
   assert.equal(payslipNetPence(paid), 971442 + 60953 - 302445 - 37290);
   // Taxable either way, so the £100k line does not care which it is.
-  assert.equal(payslipAniPence(paid), payslipAniPence(base));
+  assert.equal(payslipAniPence(paid), payslipAniPence(notional));
   assert.equal(payslipAniPence(paid), 971442 + 60953);
 });
 
@@ -1569,10 +1583,19 @@ test("a stored slip is read the way its own net says, without being reopened", (
   // The £100k line reads it the same way, since gross feeds taxable pay.
   assert.equal(payslipAniPence(slip), 1000000 - 151700);
 
-  // A slip with no stated net is left exactly as it is, never guessed at.
+  // With no net typed, gross written as salary ÷ 12 is still read as the
+  // contractual monthly figure it is — that is before any salary sacrifice by
+  // definition — so the slip does not read a whole sacrifice too high.
   const unstated = { ...slip, statedNetPence: 0 };
-  assert.equal(payslipNetAsReadPence(unstated), 731478);
-  assert.equal(payslipAsRead(unstated), unstated);
+  assert.equal(payslipAsRead(unstated).grossBeforeSacrifice, true);
+  assert.equal(payslipNetAsReadPence(unstated), 579778);
+  assert.equal(grossIsSalaryOverTwelve(unstated), true);
+
+  // A gross that is not salary ÷ 12 says nothing about itself, so nothing is
+  // inferred: the slip is left exactly as it is.
+  const other = { ...unstated, grossPence: 984300, grossBeforeSacrifice: undefined };
+  assert.equal(grossIsSalaryOverTwelve(other), false);
+  assert.equal(payslipAsRead(other), other);
 });
 
 test("typing the payslip's net settles every reading at once", () => {
@@ -1616,70 +1639,61 @@ test("gross typed as salary ÷ 12 with an untaken sacrifice is called out", () =
   assert.equal(payslipGrossReadingWarning({ ...slip, statedNetPence: 579778 }), "");
 });
 
-test("a reserve with no side recorded reads as the daily envelope or as cash", () => {
-  assert.equal(looksLikeDailyEnvelope("£30 a day"), true);
-  assert.equal(looksLikeDailyEnvelope("Cleaner"), false);
-  // The sheet pro-rates only its daily row, so an unmarked cleaner is cash.
-  assert.equal(reserveIsOnCard({ name: "£30 a day" }), true);
-  assert.equal(reserveIsOnCard({ name: "Cleaner" }), false);
-  assert.equal(reserveIsOnCard({ name: "Nails" }), false);
-  // An explicit choice always wins over the guess, in both directions.
-  assert.equal(reserveIsOnCard({ name: "£30 a day", paidFrom: "cash" }), false);
-  assert.equal(reserveIsOnCard({ name: "Cleaner", paidFrom: "card" }), true);
-
-  // End to end: the sheet's three lines, with nothing marked, split correctly.
-  const hh = { ...emptyHousehold(), reserves: [
-    { id: "c", name: "Cleaner", amountPence: 20000 },
-    { id: "n", name: "Nails", amountPence: 3500 },
-    { id: "d", name: "£30 a day", amountPence: 100000 },
-  ] };
-  const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
-  assert.equal(flow.cardReservePence, 100000);
-  assert.equal(flow.cashReservePence, 23500);
-  assert.equal(flow.allowanceSoFarPence, 83871);
+test("the per diem is one figure for the month, spread over its days", () => {
+  const hh = { ...emptyHousehold(), perDiem: { amountPence: 100000 } };
+  // £1,000 over a 30-day month is £33.33 a day, and what it allows by today is
+  // the days gone by at that rate: on the 10th, ten of them.
+  assert.equal(perDiemTotalPence(hh), 100000);
+  assert.equal(perDiemDailyPence(hh, "2026-09"), 3333);
+  assert.equal(perDiemSoFarPence(hh, "2026-09", new Date("2026-09-10T12:00:00Z")), 33333);
+  assert.equal(perDiemSoFarPence(hh, "2026-09", new Date("2026-09-30T12:00:00Z")), 100000);
+  // A month already gone is allowed in full; one still ahead is allowed none.
+  assert.equal(perDiemSoFarPence(hh, "2026-08", new Date("2026-09-10T12:00:00Z")), 100000);
+  assert.equal(perDiemSoFarPence(hh, "2026-10", new Date("2026-09-10T12:00:00Z")), 0);
+  // Nothing set is nothing allowed, and a nonsense figure is not spending money.
+  assert.equal(perDiemTotalPence(emptyHousehold()), 0);
+  assert.equal(perDiemTotalPence({ perDiem: { amountPence: -500 } }), 0);
+  assert.equal(perDiemDailyPence(emptyHousehold(), "2026-09"), 0);
 });
 
-test("only a reserve spent on a card enters the card allowance", () => {
+test("an old cash-in-reserve name says which line was the day money", () => {
+  // The only thing this decides now is which of those rows becomes the per diem
+  // when an older household is read; the rest were standing cash costs.
+  assert.equal(looksLikeDailyEnvelope("£30 a day"), true);
+  assert.equal(looksLikeDailyEnvelope("Daily float"), true);
+  assert.equal(looksLikeDailyEnvelope("Cleaner"), false);
+  assert.equal(looksLikeDailyEnvelope("Nails"), false);
+});
+
+test("the per diem is card money; standing cash costs are not", () => {
   // The sheet pro-rates its "£30 a day" row into Allowed Expenses and leaves
   // cleaner and nails out of it, because those are not card spending. Pro-rating
   // all three put the card allowance ~£197 over the sheet's on day 26 of 31.
   const hh = {
     ...emptyHousehold(),
-    reserves: [
-      { id: "cleaner", name: "Cleaner", amountPence: 20000, paidFrom: "cash" },
-      { id: "nails", name: "Nails", amountPence: 3500, paidFrom: "cash" },
-      { id: "daily", name: "£30 a day", amountPence: 100000, paidFrom: "card" },
+    perDiem: { amountPence: 100000 },
+    monthlies: [
+      { id: "cleaner", name: "Cleaner", amountPence: 20000, dueDay: 1, paidFrom: "cash" },
+      { id: "nails", name: "Nails", amountPence: 3500, dueDay: 1, paidFrom: "cash" },
     ],
   };
   const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
 
   // All three still leave the household, so Out and the saving carry all three.
-  assert.equal(flow.reservePence, 123500);
   assert.equal(flow.outPence, 123500);
   assert.equal(flow.savingsPence, -123500);
-  // But only the daily envelope is card money, and only it pro-rates.
+  // But only the per diem is card money, and only it pro-rates.
+  assert.equal(flow.reservePence, 100000);
   assert.equal(flow.cardReservePence, 100000);
-  assert.equal(flow.cashReservePence, 23500);
   assert.equal(flow.cashOutPence, 23500);
   assert.equal(flow.cardPlanPence, 100000);
   assert.equal(flow.reserveSpentPence, Math.round((100000 * 26) / 31));
   assert.equal(flow.allowanceSoFarPence, 83871);
 
-  // Absent means card, so an older gist keeps the daily envelope working.
-  assert.equal(reserveIsOnCard({ name: "£30 a day" }), true);
-  assert.equal(reserveIsOnCard({ name: "Cleaner", paidFrom: "cash" }), false);
-  const legacy = cashflowForMonth(
-    { ...emptyHousehold(), reserves: [{ id: "d", name: "£30 a day", amountPence: 100000 }] },
-    "2026-08",
-    new Date("2026-08-26T12:00:00Z"),
-  );
-  assert.equal(legacy.cardReservePence, 100000);
-  assert.equal(legacy.reserveSpentPence, 83871);
-
   // The breakdown puts each on the side it is actually spent from.
   const out = outBreakdownForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
   assert.deepEqual(out.cash.map((r) => r.name), ["Cleaner", "Nails"]);
-  assert.deepEqual(out.card.map((r) => r.name), ["£30 a day"]);
+  assert.deepEqual(out.card.map((r) => r.name), ["Per diem"]);
   assert.equal(out.cashTotalPence, flow.cashOutPence);
   assert.equal(out.cardTotalPence, flow.cardPlanPence);
 });
@@ -1689,13 +1703,13 @@ test("a weekly not yet ticked is money owed, not room to spend", () => {
     ...emptyHousehold(),
     weeklyRules: [{ id: "food", name: "Food shop", amountPence: 40000, cadence: "times", timesPerMonth: 4, tickedKeys: ["2026-08:1"] }],
     monthlies: [{ id: "m-1", name: "Subs", amountPence: 10000, dueDay: 25, paidFrom: "card" }],
-    reserves: [{ id: "r-1", name: "£30 a day", amountPence: 93000 }],
+    perDiem: { amountPence: 93000 },
   };
   const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-10T12:00:00Z"));
   // Three unticked shops and a monthly not yet due: all of it is going to be
   // paid, so none of it is spending room.
   assert.equal(flow.committedToComePence, 130000);
-  // The reserve is the half that is actually chosen: 21 of 31 days still to go.
+  // The per diem is the half that is actually chosen: 21 of 31 days to go.
   assert.equal(flow.reserveSpentPence, 30000);
   assert.equal(flow.reserveLeftPence, 63000);
   assert.equal(flow.perDayReserveLeftPence, 3000);

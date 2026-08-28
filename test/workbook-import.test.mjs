@@ -16,17 +16,20 @@ test("a synthetic workbook maps into household lines and keeps friend tabs", asy
   const { household, report } = await importFake();
 
   assert.equal(report.incomes, 2);
-  assert.equal(report.bills, 3);
+  assert.equal(report.bills, 5);
   assert.ok(household.bills.some((item) => item.name === "Mortgage" && item.amountPence === 90000 && item.dueDay === 1));
   assert.ok(household.bills.some((item) => item.name === "Phone contract"));
   assert.equal(household.bills.some((item) => item.name === "MOT"), false);
   assert.equal(household.bills.some((item) => item.name === "Insurance saving"), false);
   assert.equal("paidMonths" in household.bills.find((item) => item.name === "Mortgage"), false);
-  assert.equal(report.reserves, 3);
-  assert.ok(household.reserves.some((item) => item.name === "Cleaner" && item.amountPence === 8000));
-  assert.ok(household.reserves.some((item) => item.name === "Nails"));
-  assert.ok(household.reserves.some((item) => item.name === "£30 a day"));
-  assert.equal(household.reserves.some((item) => item.name === "Insurance saving"), false);
+  // "Cash in reserve" holds two different things: the day money is the per
+  // diem, and the standing costs beside it are ordinary cash monthlies.
+  assert.equal(report.perDiem, 1);
+  assert.equal(household.perDiem.amountPence, 10000);
+  assert.ok(household.bills.some((item) => item.name === "Cleaner" && item.amountPence === 8000));
+  assert.ok(household.bills.some((item) => item.name === "Nails"));
+  assert.equal(household.bills.some((item) => item.name === "£30 a day"), false);
+  assert.equal(household.bills.some((item) => item.name === "Insurance saving"), false);
   assert.equal(household.pendings[0].note, "Flight hold");
   assert.equal(report.envelopes, 1);
   assert.equal(household.envelopes[0].weeklyPence, 7000);
@@ -123,7 +126,7 @@ test("a synthetic workbook maps into household lines and keeps friend tabs", asy
   assert.equal(importHasData(report), true);
   assert.equal(importHasData({
     incomes: 0, bills: 0, envelopes: 0, cardSubs: 0, cards: 0, pendings: 0,
-    oneOffs: 0, annualBills: 0, pots: 0, pensions: 0, payslips: 0, donations: 0, reserves: 0, skipped: 2,
+    oneOffs: 0, annualBills: 0, pots: 0, pensions: 0, payslips: 0, donations: 0, perDiem: 0, skipped: 2,
   }), false);
 });
 

@@ -22,21 +22,40 @@ const expense = {
   myShareAdjustmentPence: 0,
 };
 
-test("a reserve keeps where it is spent across a gist round-trip", () => {
+test("an old cash-in-reserve list splits into the per diem and cash monthlies", () => {
   const store = parseStore({
     version: 1, friends: [], transactions: [],
     household: { reserves: [
-      { id: "daily", name: "£30 a day", amountPence: 100000, paidFrom: "card" },
-      { id: "cleaner", name: "Cleaner", amountPence: 20000, paidFrom: "cash" },
-      { id: "legacy", name: "Nails", amountPence: 3500 },
+      { id: "daily", name: "£30 a day", amountPence: 100000 },
+      { id: "cleaner", name: "Cleaner", amountPence: 20000 },
+      { id: "nails", name: "Nails", amountPence: 3500 },
     ] },
   });
-  assert.equal(store.household.reserves[0].paidFrom, "card");
-  assert.equal(store.household.reserves[1].paidFrom, "cash");
-  // An older gist has no field, and absent stays absent so the name decides.
-  assert.equal("paidFrom" in store.household.reserves[2], false);
+  // The day money is the per diem now, in its own right.
+  assert.equal(store.household.perDiem.amountPence, 100000);
+  assert.equal("reserves" in store.household, false);
+  // The standing costs beside it were always cash going out of the bank, so
+  // they are read as the cash monthlies they are — Out does not move.
+  const monthlies = store.household.monthlies;
+  assert.equal(monthlies.length, 2);
+  assert.deepEqual(monthlies.map((item) => item.name).sort(), ["Cleaner", "Nails"]);
+  assert.ok(monthlies.every((item) => item.paidFrom === "cash" && item.dueDay === 1));
   // And it survives being written back out and read again.
-  assert.deepEqual(parseStore(JSON.parse(JSON.stringify(store))).household.reserves, store.household.reserves);
+  const again = parseStore(JSON.parse(JSON.stringify(store))).household;
+  assert.deepEqual(again.perDiem, store.household.perDiem);
+  assert.deepEqual(again.monthlies, monthlies);
+});
+
+test("a per diem already set is kept as it stands", () => {
+  const store = parseStore({
+    version: 1, friends: [], transactions: [],
+    household: { perDiem: { amountPence: 123400 } },
+  });
+  assert.equal(store.household.perDiem.amountPence, 123400);
+  assert.throws(() => parseStore({
+    version: 1, friends: [], transactions: [],
+    household: { perDiem: { amountPence: -1 } },
+  }), /Per diem/);
 });
 
 
@@ -272,7 +291,7 @@ test("parental-pay categories stay outside net when parsed", () => {
   assert.equal(parsed.household.payslips[0].otherDeductions[0].inNet, false);
 });
 
-test("pendings keep a note and month, and reserves are standing outs", () => {
+test("pendings keep a note and month", () => {
   const parsed = parseStore({
     version: 1,
     friends: [],
@@ -280,14 +299,11 @@ test("pendings keep a note and month, and reserves are standing outs", () => {
     household: {
       ...emptyHousehold(),
       pendings: [{ id: "p-1", name: "Flight hold", amountPence: 3000, month: "2026-08" }],
-      reserves: [{ id: "r-1", name: "Daily float", amountPence: 90000 }],
     },
   });
   assert.equal(parsed.household.pendings[0].note, "Flight hold");
   assert.equal(parsed.household.pendings[0].month, "2026-08");
   assert.equal("name" in parsed.household.pendings[0], false);
-  assert.equal(parsed.household.reserves[0].name, "Daily float");
-  assert.equal(parsed.household.reserves[0].amountPence, 90000);
 });
 
 test("once-a-month weekly rules become N times with N=1", () => {

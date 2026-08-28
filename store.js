@@ -7,6 +7,7 @@ import {
   isMonthKey,
   coerceMonthKey,
   isTaxYearLabel,
+  looksLikeDailyEnvelope,
   monthKey,
   parseMonthKey,
   normalizeWeeklyCadence,
@@ -153,7 +154,23 @@ function parseHousehold(value, today = new Date()) {
   const cards = list(value.cards).map(parseCard);
   const cardIds = new Set(cards.map((card) => card.id));
   const cardSubs = list(value.cardSubs).map((item) => parseCardSub(item, cardIds));
-  const monthlies = list(value.monthlies).length
+  // "Cash in reserve" was one list holding two different things: the day money,
+  // which is now the per diem in its own right, and standing cash costs like the
+  // cleaner. The standing ones are read as the cash monthlies they always were,
+  // which leaves Out exactly where it was — they counted as cash either way.
+  const legacyReserves = list(value.reserves).map(parseReserve);
+  const perDiem = parsePerDiem(value.perDiem, legacyReserves);
+  const reservesAsMonthlies = legacyReserves
+    .filter((item) => !looksLikeDailyEnvelope(item.name))
+    .map((item) => ({
+      id: `reserve-${item.id}`,
+      name: item.name,
+      amountPence: item.amountPence,
+      dueDay: 1,
+      dueRoll: normalizeDueRoll(),
+      paidFrom: "cash",
+    }));
+  const monthlies = [...(list(value.monthlies).length
     ? list(value.monthlies).map(parseMonthly)
     : [
       ...bills.map((item) => ({ ...item, id: `cash-${item.id}`, paidFrom: "cash" })),
@@ -164,7 +181,7 @@ function parseHousehold(value, today = new Date()) {
         dueDay: item.dueDay,
         paidFrom: "card",
       })),
-    ];
+    ]), ...reservesAsMonthlies];
   const weeklyRules = list(value.weeklyRules).length
     ? list(value.weeklyRules).map(parseWeeklyRule)
     : envelopes.map((item) => ({
@@ -179,7 +196,6 @@ function parseHousehold(value, today = new Date()) {
     }));
   const weeklyExtras = list(value.weeklyExtras).map(parseWeeklyExtra);
   const pendings = list(value.pendings).map(parsePending);
-  const reserves = list(value.reserves).map(parseReserve);
   const oneOffs = normalizeOneOffsForViewMonth(list(value.oneOffs).map(parseOneOff), today).items;
   const exceptions = list(value.exceptions).map(parseException);
   const annualBills = list(value.annualBills).map(parseAnnualBill);
@@ -201,7 +217,6 @@ function parseHousehold(value, today = new Date()) {
   uniqueIds(cards, "Card");
   uniqueIds(cardSubs, "Card subscription");
   uniqueIds(pendings, "Pending");
-  uniqueIds(reserves, "Reserve");
   uniqueIds(oneOffs, "One-off");
   uniqueIds(exceptions, "Exception");
   uniqueIds(annualBills, "Annual bill");
@@ -221,7 +236,7 @@ function parseHousehold(value, today = new Date()) {
     cards,
     cardSubs,
     pendings,
-    reserves,
+    perDiem,
     oneOffs,
     exceptions,
     annualBills,
@@ -326,6 +341,25 @@ function parsePending(item) {
     parsed.month = item.month;
   }
   return parsed;
+}
+
+/**
+ * The month's spending money: one figure for the whole month. An older
+ * household kept it as the daily "cash in reserve" line, so that is where it is
+ * read from when nothing has been set yet.
+ */
+function parsePerDiem(value, legacyReserves) {
+  if (value != null) {
+    if (typeof value !== "object" || Array.isArray(value)) {
+      throw new StoreError("Per diem must be an object.");
+    }
+    return { amountPence: moneyPence(value.amountPence, "Per diem") };
+  }
+  return {
+    amountPence: legacyReserves
+      .filter((item) => looksLikeDailyEnvelope(item.name))
+      .reduce((sum, item) => sum + item.amountPence, 0),
+  };
 }
 
 function parseReserve(item) {
