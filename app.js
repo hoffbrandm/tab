@@ -1278,10 +1278,10 @@ function moreScreen() {
 
 function payslipKindLabel(kind) {
   return {
-    bonus: "Extra",
-    benefits: "Taxed, never paid",
-    allowance: "Cash, and taxed",
-    extra: "Extra",
+    bonus: "Paid, and taxed",
+    benefits: "Taxed, but never paid to you",
+    allowance: "Paid in your pay, and taxed",
+    extra: "Paid, adds to net",
     sacrifice: "Deduction",
     tax: "Deduction",
     ni: "Deduction",
@@ -1786,7 +1786,7 @@ function payslipFormCategories(slip, personId) {
 function payslipCategoryField(category, slip) {
   const amount = payslipAmountForCategory(slip, category);
   return `<div class="payslip-cat-row" data-payslip-category="${esc(category.id)}">
-    <span class="payslip-cat-name">${esc(category.label)}</span>
+    <span class="payslip-cat-name">${esc(category.label)}<small>${esc(payslipKindLabel(category.kind))}</small></span>
     ${moneyControl({ pence: amount, extra: `data-cat-amount="${esc(category.id)}"` })}
     <button type="button" class="danger-link" data-action="remove-payslip-category" data-id="${esc(category.id)}">Remove</button>
   </div>`;

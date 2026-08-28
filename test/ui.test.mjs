@@ -257,6 +257,15 @@ test("the £100k helper takes grossed-up Gift Aid off, and never adds it on", ()
   assert.match(app, /Grossed-up Gift Aid taken off/);
 });
 
+test("each payslip category says what it does to net", () => {
+  // "Benefit in kind" and "Cash allowance" are indistinguishable to anyone who
+  // does not already know payroll terms, and the form showed a bare name.
+  assert.match(app, /payslip-cat-name">\$\{esc\(category\.label\)\}<small>\$\{esc\(payslipKindLabel\(category\.kind\)\)\}<\/small>/);
+  assert.match(app, /benefits: "Taxed, but never paid to you"/);
+  assert.match(app, /allowance: "Paid in your pay, and taxed"/);
+  assert.match(css, /\.payslip-cat-name small/);
+});
+
 test("the payslip form says what Gross means and checks it against the slip", () => {
   assert.match(app, /Gross is the Payments total on the slip/);
   assert.match(app, /name="grossBeforeSacrifice"/);

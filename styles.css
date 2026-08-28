@@ -926,7 +926,8 @@ legend { padding: 0; margin-bottom: 7px; }
   gap: 10px;
   align-items: center;
 }
-.payslip-cat-name { font-weight: 750; }
+.payslip-cat-name { font-weight: 750; display: grid; gap: 1px; min-width: 0; }
+.payslip-cat-name small { color: var(--muted); font-weight: 650; font-size: 0.72rem; }
 .payslip-net {
   margin: 8px 0 14px;
   padding: 12px 14px;

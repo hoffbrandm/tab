@@ -27,7 +27,7 @@ export const DUE_ROLLS = ["calendar", "nextWorking"];
 export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "allowance", "sacrifice", "pension", "tax", "ni", "extra", "deduction", "parental"];
 export const BUILTIN_PAYSLIP_CATEGORIES = [
   { id: "bonus", label: "Bonus", kind: "bonus" },
-  { id: "benefits", label: "Benefits", kind: "benefits" },
+  { id: "benefits", label: "Benefit in kind", kind: "benefits" },
   // A benefit in kind is taxed but never paid. A cash allowance is both: it
   // reaches the bank and it is taxable, so it belongs in net and in the £100k
   // line. One "Benefits" column for both is how a car allowance ends up either
@@ -1014,6 +1014,10 @@ export function keepPayslipFormRows(rows) {
   return (rows || []).filter((item) => item && String(item.id || "").trim());
 }
 
+export function builtinPayslipCategory(kind) {
+  return BUILTIN_PAYSLIP_CATEGORIES.find((category) => category.kind === kind);
+}
+
 export function payslipCategoriesOf(household) {
   const seen = new Map();
   const remember = (category) => {
@@ -1028,13 +1032,16 @@ export function payslipCategoriesOf(household) {
   };
   for (const item of household?.payslipCategories || []) remember(item);
   for (const slip of household?.payslips || []) {
-    if (slip.bonusPence) remember(BUILTIN_PAYSLIP_CATEGORIES[0]);
-    if (slip.benefitsPence) remember(BUILTIN_PAYSLIP_CATEGORIES[1]);
-    if (slip.allowancePence) remember(BUILTIN_PAYSLIP_CATEGORIES[2]);
-    if (slip.salarySacrificePensionPence) remember(BUILTIN_PAYSLIP_CATEGORIES[2]);
-    if (slip.reliefAtSourcePensionPence) remember(BUILTIN_PAYSLIP_CATEGORIES[3]);
-    if (slip.taxPence) remember(BUILTIN_PAYSLIP_CATEGORIES[4]);
-    if (slip.niPence) remember(BUILTIN_PAYSLIP_CATEGORIES[5]);
+    // By kind, never by position: these were index lookups, and adding a
+    // category in the middle silently shifted every one after it, so a salary
+    // sacrifice registered as the new category, tax as the pension, and so on.
+    if (slip.bonusPence) remember(builtinPayslipCategory("bonus"));
+    if (slip.benefitsPence) remember(builtinPayslipCategory("benefits"));
+    if (slip.allowancePence) remember(builtinPayslipCategory("allowance"));
+    if (slip.salarySacrificePensionPence) remember(builtinPayslipCategory("sacrifice"));
+    if (slip.reliefAtSourcePensionPence) remember(builtinPayslipCategory("pension"));
+    if (slip.taxPence) remember(builtinPayslipCategory("tax"));
+    if (slip.niPence) remember(builtinPayslipCategory("ni"));
     for (const row of slip.otherDeductions || []) {
       if (row.label) remember({
         id: row.id,
