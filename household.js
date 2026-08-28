@@ -24,15 +24,13 @@ export const MONTHLY_PAID_FROM = ["card", "cash"];
 // "First working day of the month" was only ever "day 1, or the next working
 // day" — the same rule with dueDay 1 — so it is no longer its own roll.
 export const DUE_ROLLS = ["calendar", "nextWorking"];
-export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "allowance", "sacrifice", "pension", "tax", "ni", "extra", "deduction", "parental"];
+export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "sacrifice", "pension", "tax", "ni", "extra", "deduction", "parental"];
 export const BUILTIN_PAYSLIP_CATEGORIES = [
   { id: "bonus", label: "Bonus", kind: "bonus" },
-  { id: "benefits", label: "Benefit in kind", kind: "benefits" },
-  // A benefit in kind is taxed but never paid. A cash allowance is both: it
-  // reaches the bank and it is taxable, so it belongs in net and in the £100k
-  // line. One "Benefits" column for both is how a car allowance ends up either
-  // missing from net or missing from adjusted net income.
-  { id: "allowance", label: "Cash allowance", kind: "allowance" },
+  // The payslip's own word. Whether the benefit is money you receive or is only
+  // taxed is settled by the net the payslip prints, not by picking a category:
+  // nobody should have to know the difference to enter their own pay.
+  { id: "benefits", label: "Benefits", kind: "benefits" },
   // "Pensions" said nothing about which kind, and the two behave differently.
   { id: "sacrifice", label: "Salary sacrifice pension", kind: "sacrifice" },
   { id: "pension", label: "Pension (relief at source)", kind: "pension" },
@@ -1037,7 +1035,6 @@ export function payslipCategoriesOf(household) {
     // sacrifice registered as the new category, tax as the pension, and so on.
     if (slip.bonusPence) remember(builtinPayslipCategory("bonus"));
     if (slip.benefitsPence) remember(builtinPayslipCategory("benefits"));
-    if (slip.allowancePence) remember(builtinPayslipCategory("allowance"));
     if (slip.salarySacrificePensionPence) remember(builtinPayslipCategory("sacrifice"));
     if (slip.reliefAtSourcePensionPence) remember(builtinPayslipCategory("pension"));
     if (slip.taxPence) remember(builtinPayslipCategory("tax"));
@@ -1094,7 +1091,6 @@ export function payslipAmountForCategory(slip, category) {
   if (!slip || !category) return 0;
   if (category.kind === "bonus") return slip.bonusPence || 0;
   if (category.kind === "benefits") return slip.benefitsPence || 0;
-  if (category.kind === "allowance") return slip.allowancePence || 0;
   if (category.kind === "sacrifice") return slip.salarySacrificePensionPence || 0;
   if (category.kind === "pension") return slip.reliefAtSourcePensionPence || 0;
   if (category.kind === "tax") return slip.taxPence || 0;
@@ -1105,7 +1101,7 @@ export function payslipAmountForCategory(slip, category) {
 }
 
 export function payslipCategoryIsExtra(category) {
-  return category?.kind === "bonus" || category?.kind === "benefits" || category?.kind === "allowance" || category?.kind === "extra";
+  return category?.kind === "bonus" || category?.kind === "benefits" || category?.kind === "extra";
 }
 
 export function isParentalPayLabel(label) {
@@ -1149,22 +1145,33 @@ export function payslipGrossPaidPence(slip) {
 export function payslipNetReadings(slip) {
   const sacrifice = slip?.salarySacrificePensionPence || 0;
   const bonus = slip?.bonusPence || 0;
+  const benefits = slip?.benefitsPence || 0;
   const sacrificeWays = sacrifice > 0 ? [false, true] : [false];
   const bonusWays = bonus > 0 ? [false, true] : [false];
+  // Whether a benefit is money is the same kind of question as how gross is
+  // written, so it is read off the payslip's net the same way rather than asked.
+  const benefitWays = benefits > 0 ? [false, true] : [false];
   const readings = [];
   for (const grossBeforeSacrifice of sacrificeWays) {
     for (const grossExcludesBonus of bonusWays) {
-      const shape = { ...slip, grossBeforeSacrifice, grossExcludesBonus };
-      readings.push({
-        id: `${grossBeforeSacrifice ? "pre" : "post"}-sacrifice-${grossExcludesBonus ? "without" : "with"}-bonus`,
-        grossBeforeSacrifice,
-        grossExcludesBonus,
-        label: payslipReadingLabel(grossBeforeSacrifice, grossExcludesBonus),
-        grossPaidPence: payslipGrossPaidPence(shape),
-        netPence: payslipNetPence(shape),
-        current: Boolean(slip?.grossBeforeSacrifice) === grossBeforeSacrifice
-          && Boolean(slip?.grossExcludesBonus) === grossExcludesBonus,
-      });
+      for (const benefitsPaid of benefitWays) {
+        const shape = { ...slip, grossBeforeSacrifice, grossExcludesBonus, benefitsPaid };
+        readings.push({
+          // The benefit half of the id only appears when there is a benefit,
+          // so a slip without one keeps the id it always had.
+          id: `${grossBeforeSacrifice ? "pre" : "post"}-sacrifice-${grossExcludesBonus ? "without" : "with"}-bonus${benefits > 0 ? `-${benefitsPaid ? "paid" : "notional"}-benefit` : ""}`,
+          grossBeforeSacrifice,
+          grossExcludesBonus,
+          benefitsPaid,
+          hasBenefits: benefits > 0,
+          label: payslipReadingLabel(grossBeforeSacrifice, grossExcludesBonus, benefitsPaid, benefits > 0),
+          grossPaidPence: payslipGrossPaidPence(shape),
+          netPence: payslipNetPence(shape),
+          current: Boolean(slip?.grossBeforeSacrifice) === grossBeforeSacrifice
+            && Boolean(slip?.grossExcludesBonus) === grossExcludesBonus
+            && Boolean(slip?.benefitsPaid) === benefitsPaid,
+        });
+      }
     }
   }
   const stated = slip?.statedNetPence;
@@ -1174,11 +1181,41 @@ export function payslipNetReadings(slip) {
   return readings;
 }
 
-function payslipReadingLabel(grossBeforeSacrifice, grossExcludesBonus) {
-  if (!grossBeforeSacrifice && !grossExcludesBonus) return "Gross is the Payments total on the slip";
-  if (grossBeforeSacrifice && !grossExcludesBonus) return "Gross is before the salary sacrifice";
-  if (!grossBeforeSacrifice && grossExcludesBonus) return "Gross is basic pay, with the bonus on top";
-  return "Gross is basic pay before the sacrifice, with the bonus on top";
+/**
+ * The one reading that lands on the net the payslip prints. A payslip always
+ * prints its net, so typing that single figure settles every ambiguity at once
+ * — how gross is written, whether a bonus sits inside it, whether a benefit is
+ * money — with nobody having to know the words for any of them.
+ */
+export function resolvedPayslipReading(slip) {
+  const stated = slip?.statedNetPence;
+  if (!Number.isInteger(stated) || stated <= 0) return null;
+  const matching = payslipNetReadings(slip).filter((reading) => reading.netPence === stated);
+  return matching.length === 1 ? matching[0] : null;
+}
+
+/** What the app worked out, in the words of the payslip rather than payroll. */
+export function payslipReadingSummary(reading) {
+  if (!reading) return "";
+  const parts = [reading.grossBeforeSacrifice
+    ? "the salary sacrifice comes off the gross you typed"
+    : "the gross you typed is what the slip pays"];
+  if (reading.grossExcludesBonus) parts.push("the bonus is paid on top of it");
+  if (reading.hasBenefits) {
+    parts.push(reading.benefitsPaid
+      ? "the benefit is money you actually receive"
+      : "the benefit is taxed but never paid to you");
+  }
+  return `${parts.join(", ")}.`;
+}
+
+function payslipReadingLabel(grossBeforeSacrifice, grossExcludesBonus, benefitsPaid, hasBenefits) {
+  const gross = !grossBeforeSacrifice && !grossExcludesBonus ? "Gross is the Payments total on the slip"
+    : grossBeforeSacrifice && !grossExcludesBonus ? "Gross is before the salary sacrifice"
+      : !grossBeforeSacrifice && grossExcludesBonus ? "Gross is basic pay, with the bonus on top"
+        : "Gross is basic pay before the sacrifice, with the bonus on top";
+  if (!hasBenefits) return gross;
+  return `${gross}, and the benefit ${benefitsPaid ? "is paid to you" : "is taxed but not paid"}`;
 }
 
 /**
@@ -1210,9 +1247,18 @@ export function payslipAdditionsPence(slip) {
  * is taxed but never paid, so it cannot raise the money that lands in the bank.
  * It belongs in adjusted net income, and only there.
  */
+/**
+ * A benefit is taxable either way. Whether it is also money depends on the
+ * slip: a car allowance is paid, private medical is not. benefitsPaid says
+ * which, and the net printed on the payslip is what settles it.
+ */
+export function payslipBenefitsInNetPence(slip) {
+  return slip?.benefitsPaid ? (slip.benefitsPence || 0) : 0;
+}
+
 export function payslipNetPence(slip) {
   if (!slip) return 0;
-  return payslipGrossPaidPence(slip) + payslipAdditionsPence(slip) + (slip.allowancePence || 0) - payslipDeductionsPence(slip);
+  return payslipGrossPaidPence(slip) + payslipAdditionsPence(slip) + payslipBenefitsInNetPence(slip) - payslipDeductionsPence(slip);
 }
 
 /**
@@ -1261,6 +1307,9 @@ export function payslipNetCheck(slip) {
  * does not wait for one.
  */
 export function payslipGrossReadingWarning(slip) {
+  // A net that settles the reading has already answered this; warning anyway
+  // would be telling someone to check what the app just worked out for them.
+  if (resolvedPayslipReading(slip)) return "";
   const sacrifice = slip?.salarySacrificePensionPence || 0;
   const salary = slip?.salaryPence || 0;
   const gross = slip?.grossPence || 0;
@@ -1449,7 +1498,6 @@ export function payslipAniPence(payslip) {
   if (!payslip) return 0;
   return payslipTaxablePayPence(payslip)
     + (payslip.benefitsPence || 0)
-    + (payslip.allowancePence || 0)
     - basicRateGrossUpPence(payslip.reliefAtSourcePensionPence || 0);
 }
 
