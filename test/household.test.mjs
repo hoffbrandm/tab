@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { formatMoney } from "../calculations.js";
 import {
   ANI_LIMIT_PENCE,
+  builtinPayslipCategory,
   outBreakdownForMonth,
   reserveIsOnCard,
   looksLikeDailyEnvelope,
@@ -1483,6 +1484,29 @@ test("the Out breakdown names every line and ties to the totals", () => {
   assert.equal(food.count, 4);
   assert.equal(food.eachPence, 40000);
   assert.equal(food.amountPence, 160000);
+});
+
+test("every built-in category maps to its own kind, whatever the order", () => {
+  // These were positional lookups, so adding a category in the middle shifted
+  // every one after it: a salary sacrifice registered as the new category and
+  // tax as the pension. Nothing about the list's order may matter again.
+  const slip = {
+    bonusPence: 7, benefitsPence: 5, allowancePence: 6, salarySacrificePensionPence: 100,
+    reliefAtSourcePensionPence: 400, taxPence: 200, niPence: 300,
+  };
+  const byKind = Object.fromEntries(payslipCategoriesOf({ payslips: [slip] }).map((c) => [c.kind, c.label]));
+  assert.deepEqual(byKind, {
+    bonus: "Bonus",
+    benefits: "Benefit in kind",
+    allowance: "Cash allowance",
+    sacrifice: "Salary sacrifice pension",
+    pension: "Pension (relief at source)",
+    tax: "Tax",
+    ni: "NI",
+  });
+  for (const kind of ["bonus", "benefits", "allowance", "sacrifice", "pension", "tax", "ni"]) {
+    assert.equal(builtinPayslipCategory(kind).kind, kind);
+  }
 });
 
 test("a cash allowance is paid and taxed; a benefit in kind is only taxed", () => {
