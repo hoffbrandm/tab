@@ -7,6 +7,8 @@ import {
   outBreakdownForMonth,
   reserveIsOnCard,
   resolvedPayslipReading,
+  payslipAsRead,
+  payslipNetAsReadPence,
   payslipReadingSummary,
   looksLikeDailyEnvelope,
   payslipGrossReadingWarning,
@@ -1521,6 +1523,36 @@ test("a benefit is taxed either way; the payslip's net says if it is money", () 
   // Taxable either way, so the £100k line does not care which it is.
   assert.equal(payslipAniPence(paid), payslipAniPence(base));
   assert.equal(payslipAniPence(paid), 971442 + 60953);
+});
+
+test("a stored slip is read the way its own net says, without being reopened", () => {
+  // The form resolves while it is open, but a slip saved before that — or saved
+  // with the wrong flag — would stay wrong everywhere else. The payslip's net
+  // is the authority wherever the slip is used.
+  const slip = {
+    id: "m", personId: "m", periodMonth: "2026-07", moneyLandsMonth: "2026-08", confirmed: true,
+    salaryPence: 12000000, grossPence: 1000000, salarySacrificePensionPence: 151700,
+    taxPence: 234806, niPence: 33716, statedNetPence: 579778,
+    grossBeforeSacrifice: false, // saved wrong: reads £1,517 a month too high
+  };
+  assert.equal(payslipNetPence(slip), 731478);
+  assert.equal(payslipNetAsReadPence(slip), 579778);
+  assert.equal(payslipAsRead(slip).grossBeforeSacrifice, true);
+
+  // Home's income uses the corrected figure without anyone opening the slip.
+  const flow = cashflowForMonth(
+    { ...emptyHousehold(), people: [{ id: "m", name: "Matthew" }], payslips: [slip] },
+    "2026-08",
+    new Date("2026-08-26T12:00:00Z"),
+  );
+  assert.equal(flow.incomePence, 579778);
+  // The £100k line reads it the same way, since gross feeds taxable pay.
+  assert.equal(payslipAniPence(slip), 1000000 - 151700);
+
+  // A slip with no stated net is left exactly as it is, never guessed at.
+  const unstated = { ...slip, statedNetPence: 0 };
+  assert.equal(payslipNetAsReadPence(unstated), 731478);
+  assert.equal(payslipAsRead(unstated), unstated);
 });
 
 test("typing the payslip's net settles every reading at once", () => {

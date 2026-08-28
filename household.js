@@ -273,7 +273,7 @@ export function incomeLinesFromPayslips(household, month) {
     id: slip.id,
     personId: slip.personId,
     personName: people.find((person) => person.id === slip.personId)?.name || "",
-    amountPence: payslipNetPence(slip),
+    amountPence: payslipNetAsReadPence(slip),
     forecast: Boolean(slip.forecast),
     periodMonth: slip.periodMonth,
     moneyLandsMonth: payslipLandsMonth(slip),
@@ -1194,6 +1194,29 @@ export function resolvedPayslipReading(slip) {
   return matching.length === 1 ? matching[0] : null;
 }
 
+/**
+ * The slip as the payslip's own net says to read it. A payslip that prints its
+ * net has already settled how gross is written and whether a benefit is money,
+ * so a slip carrying that figure is read correctly wherever it is used — not
+ * only while its form happens to be open. When nothing resolves, the slip is
+ * left exactly as it was rather than guessed at.
+ */
+export function payslipAsRead(slip) {
+  const resolved = resolvedPayslipReading(slip);
+  if (!resolved) return slip;
+  return {
+    ...slip,
+    grossBeforeSacrifice: resolved.grossBeforeSacrifice,
+    grossExcludesBonus: resolved.grossExcludesBonus,
+    benefitsPaid: resolved.benefitsPaid,
+  };
+}
+
+/** Net as the payslip itself says it, when the payslip says it. */
+export function payslipNetAsReadPence(slip) {
+  return payslipNetPence(payslipAsRead(slip));
+}
+
 /** What the app worked out, in the words of the payslip rather than payroll. */
 export function payslipReadingSummary(reading) {
   if (!reading) return "";
@@ -1496,9 +1519,10 @@ export function payslipIsConfirmed(payslip, today = new Date()) {
  */
 export function payslipAniPence(payslip) {
   if (!payslip) return 0;
-  return payslipTaxablePayPence(payslip)
-    + (payslip.benefitsPence || 0)
-    - basicRateGrossUpPence(payslip.reliefAtSourcePensionPence || 0);
+  const slip = payslipAsRead(payslip);
+  return payslipTaxablePayPence(slip)
+    + (slip.benefitsPence || 0)
+    - basicRateGrossUpPence(slip.reliefAtSourcePensionPence || 0);
 }
 
 /**

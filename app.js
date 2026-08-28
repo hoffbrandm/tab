@@ -39,6 +39,7 @@ import {
   masterPayslipCategories,
   payslipIsConfirmed,
   payslipNetPence,
+  payslipNetAsReadPence,
   payslipNetCheck,
   payslipNetHints,
   payslipGrossPaidPence,
@@ -1157,7 +1158,7 @@ function payslipsScreen() {
             edit: "edit-payslip",
             id: slip.id,
             title: `${personById(slip.personId)?.name || "Person"} · ${labels.period}`,
-            detail: `${confirmed ? "Confirmed" : "Forecast"} · ${labels.taxYear} · lands ${labels.lands} · net ${formatMoney(payslipNetPence(slip))}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
+            detail: `${confirmed ? "Confirmed" : "Forecast"} · ${labels.taxYear} · lands ${labels.lands} · net ${formatMoney(payslipNetAsReadPence(slip))}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
             amount: formatMoney(slip.grossPence || slip.salaryPence),
           });
         }).join("") : emptyLines("Add a month when you have a slip — or a forecast row you do not treat as fact.", "add-payslip", "Add a payslip")}
