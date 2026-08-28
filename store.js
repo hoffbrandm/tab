@@ -336,9 +336,10 @@ function parseReserve(item) {
     id: requiredId(item.id, "Reserve"),
     name: requiredName(item.name, "Reserve"),
     amountPence: moneyPence(item.amountPence, "Reserve"),
-    // Where it is spent decides whether it enters the card allowance. Absent
-    // means card, so an older gist keeps the daily envelope in the allowance.
-    paidFrom: item.paidFrom === "cash" ? "cash" : "card",
+    // Where it is spent decides whether it enters the card allowance. Absent is
+    // a real state, not a default: the line's name decides on read, so a value
+    // is only kept when it was actually chosen.
+    ...(item.paidFrom === "cash" || item.paidFrom === "card" ? { paidFrom: item.paidFrom } : {}),
   };
 }
 
@@ -615,6 +616,7 @@ function parsePayslip(slip, personIds) {
     grossPence: moneyPence(slip.grossPence, "Payslip gross"),
     bonusPence: moneyPence(slip.bonusPence, "Payslip bonus"),
     benefitsPence: moneyPence(slip.benefitsPence, "Payslip benefits"),
+    allowancePence: moneyPence(slip.allowancePence, "Payslip cash allowance"),
     salarySacrificePensionPence: moneyPence(slip.salarySacrificePensionPence, "Payslip salary sacrifice"),
     reliefAtSourcePensionPence: moneyPence(slip.reliefAtSourcePensionPence, "Payslip relief-at-source pension"),
     grossBeforeSacrifice: Boolean(slip.grossBeforeSacrifice),

@@ -24,10 +24,15 @@ export const MONTHLY_PAID_FROM = ["card", "cash"];
 // "First working day of the month" was only ever "day 1, or the next working
 // day" — the same rule with dueDay 1 — so it is no longer its own roll.
 export const DUE_ROLLS = ["calendar", "nextWorking"];
-export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "sacrifice", "pension", "tax", "ni", "extra", "deduction", "parental"];
+export const PAYSLIP_CATEGORY_KINDS = ["bonus", "benefits", "allowance", "sacrifice", "pension", "tax", "ni", "extra", "deduction", "parental"];
 export const BUILTIN_PAYSLIP_CATEGORIES = [
   { id: "bonus", label: "Bonus", kind: "bonus" },
   { id: "benefits", label: "Benefits", kind: "benefits" },
+  // A benefit in kind is taxed but never paid. A cash allowance is both: it
+  // reaches the bank and it is taxable, so it belongs in net and in the £100k
+  // line. One "Benefits" column for both is how a car allowance ends up either
+  // missing from net or missing from adjusted net income.
+  { id: "allowance", label: "Cash allowance", kind: "allowance" },
   // "Pensions" said nothing about which kind, and the two behave differently.
   { id: "sacrifice", label: "Salary sacrifice pension", kind: "sacrifice" },
   { id: "pension", label: "Pension (relief at source)", kind: "pension" },
@@ -590,8 +595,19 @@ export function envelopeMonthlyPence(weeklyPence, month) {
  * Absent means card, so an existing household keeps the daily envelope working
  * and only the odd ones out need saying.
  */
+/** The sheet's own shape: the daily envelope goes on a card, siblings do not. */
+export function looksLikeDailyEnvelope(name) {
+  return /\ba day\b|daily|thousand|envelope|float/i.test(String(name || ""));
+}
+
 export function reserveIsOnCard(reserve) {
-  return reserve?.paidFrom !== "cash";
+  if (reserve?.paidFrom === "cash") return false;
+  if (reserve?.paidFrom === "card") return true;
+  // Nothing recorded: the daily envelope is card spending and a cleaner or a
+  // set of nails is not, which is exactly how the source sheet pro-rates only
+  // its "£30 a day" row into the card allowance. Saving the line makes it
+  // explicit, and both the list and the breakdown show which side it landed on.
+  return looksLikeDailyEnvelope(reserve?.name);
 }
 
 export function cardReservesOf(household) {
@@ -1014,6 +1030,7 @@ export function payslipCategoriesOf(household) {
   for (const slip of household?.payslips || []) {
     if (slip.bonusPence) remember(BUILTIN_PAYSLIP_CATEGORIES[0]);
     if (slip.benefitsPence) remember(BUILTIN_PAYSLIP_CATEGORIES[1]);
+    if (slip.allowancePence) remember(BUILTIN_PAYSLIP_CATEGORIES[2]);
     if (slip.salarySacrificePensionPence) remember(BUILTIN_PAYSLIP_CATEGORIES[2]);
     if (slip.reliefAtSourcePensionPence) remember(BUILTIN_PAYSLIP_CATEGORIES[3]);
     if (slip.taxPence) remember(BUILTIN_PAYSLIP_CATEGORIES[4]);
@@ -1070,6 +1087,7 @@ export function payslipAmountForCategory(slip, category) {
   if (!slip || !category) return 0;
   if (category.kind === "bonus") return slip.bonusPence || 0;
   if (category.kind === "benefits") return slip.benefitsPence || 0;
+  if (category.kind === "allowance") return slip.allowancePence || 0;
   if (category.kind === "sacrifice") return slip.salarySacrificePensionPence || 0;
   if (category.kind === "pension") return slip.reliefAtSourcePensionPence || 0;
   if (category.kind === "tax") return slip.taxPence || 0;
@@ -1080,7 +1098,7 @@ export function payslipAmountForCategory(slip, category) {
 }
 
 export function payslipCategoryIsExtra(category) {
-  return category?.kind === "bonus" || category?.kind === "benefits" || category?.kind === "extra";
+  return category?.kind === "bonus" || category?.kind === "benefits" || category?.kind === "allowance" || category?.kind === "extra";
 }
 
 export function isParentalPayLabel(label) {
@@ -1187,7 +1205,7 @@ export function payslipAdditionsPence(slip) {
  */
 export function payslipNetPence(slip) {
   if (!slip) return 0;
-  return payslipGrossPaidPence(slip) + payslipAdditionsPence(slip) - payslipDeductionsPence(slip);
+  return payslipGrossPaidPence(slip) + payslipAdditionsPence(slip) + (slip.allowancePence || 0) - payslipDeductionsPence(slip);
 }
 
 /**
@@ -1229,14 +1247,30 @@ export function payslipNetCheck(slip) {
  * one figure on the slip, and naming which one is more use than "does not
  * match" — the conventions here are the part people get wrong.
  */
+/**
+ * Gross typed as salary ÷ 12 is the contractual figure, which is before any
+ * salary sacrifice. Left un-ticked it overstates net by the whole sacrifice
+ * every month, and nothing catches it unless a net is typed — so this check
+ * does not wait for one.
+ */
+export function payslipGrossReadingWarning(slip) {
+  const sacrifice = slip?.salarySacrificePensionPence || 0;
+  const salary = slip?.salaryPence || 0;
+  const gross = slip?.grossPence || 0;
+  if (sacrifice <= 0 || salary <= 0 || gross <= 0 || slip?.grossBeforeSacrifice) return "";
+  if (Math.abs(gross - Math.round(salary / 12)) > 1) return "";
+  return "Gross here is salary ÷ 12, which is the figure before the salary sacrifice comes off. Either tick “Gross is before salary sacrifice”, or type the Total gross pay the payslip itself shows.";
+}
+
 export function payslipNetHints(slip) {
+  const warning = payslipGrossReadingWarning(slip);
   const check = payslipNetCheck(slip);
-  if (!check || check.matches) return [];
+  if (!check || check.matches) return warning ? [warning] : [];
   const difference = check.differencePence;
   const sacrifice = slip?.salarySacrificePensionPence || 0;
   const bonus = slip?.bonusPence || 0;
   const benefits = slip?.benefitsPence || 0;
-  const hints = [];
+  const hints = warning ? [warning] : [];
   if (sacrifice > 0 && difference === sacrifice && !slip?.grossBeforeSacrifice) {
     hints.push("That is exactly the salary sacrifice, so the Gross typed here looks like the figure before it came off. Tick “Gross is before salary sacrifice”.");
   }
@@ -1248,6 +1282,9 @@ export function payslipNetHints(slip) {
   }
   if (bonus > 0 && difference === bonus && slip?.grossExcludesBonus) {
     hints.push("That is exactly the bonus, and it is being counted twice — the Payments total already has it.");
+  }
+  if (benefits > 0 && difference === benefits) {
+    hints.push("That is exactly the taxable benefit, and the slip pays it in cash. Move it to “Cash allowance”, which counts in net as well as for the £100k line.");
   }
   if (benefits > 0 && difference === -benefits) {
     hints.push("That is exactly the taxable benefit. A benefit in kind is never paid to you, so it does not belong in Gross — it counts for the £100k line only.");
@@ -1405,6 +1442,7 @@ export function payslipAniPence(payslip) {
   if (!payslip) return 0;
   return payslipTaxablePayPence(payslip)
     + (payslip.benefitsPence || 0)
+    + (payslip.allowancePence || 0)
     - basicRateGrossUpPence(payslip.reliefAtSourcePensionPence || 0);
 }
 
