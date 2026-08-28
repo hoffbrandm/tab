@@ -91,7 +91,10 @@ export function emptyHousehold() {
     cards: [],
     cardSubs: [],
     pendings: [],
-    reserves: [],
+    // The month's spending money as one figure for the whole month. It is
+    // divided by the days in the month to give a rate, and the days elapsed
+    // decide how much of it the cards are allowed to carry so far.
+    perDiem: { amountPence: 0 },
     oneOffs: [],
     exceptions: [],
     annualBills: [],
@@ -116,7 +119,6 @@ export function householdHasData(household) {
     "cards",
     "cardSubs",
     "pendings",
-    "reserves",
     "oneOffs",
     "exceptions",
     "annualBills",
@@ -590,35 +592,38 @@ export function envelopeMonthlyPence(weeklyPence, month) {
   return Math.round((weeklyPence * days) / 7);
 }
 
+export function perDiemTotalPence(household) {
+  const amount = household?.perDiem?.amountPence;
+  return Number.isInteger(amount) && amount > 0 ? amount : 0;
+}
+
+/** The whole-month figure spread over the month: a per diem's daily rate. */
+export function perDiemDailyPence(household, month) {
+  const days = daysInMonthKey(month);
+  const total = perDiemTotalPence(household);
+  return days > 0 ? Math.round(total / days) : 0;
+}
+
 /**
- * A reserve line says where it is spent, the same way a monthly does. Only the
- * ones spent on a card belong in the card allowance: the sheet pro-rates the
- * "£30 a day" row into Allowed Expenses and leaves cleaner and nails out, and
- * pro-rating those two put the card allowance ~£197 over the sheet's on day 26.
- * Absent means card, so an existing household keeps the daily envelope working
- * and only the odd ones out need saying.
+ * What the per diem allows by today: the days gone by, times the whole month's
+ * figure over the days in the month. In a 30-day month on the 10th, a £1,000
+ * per diem allows £333.33 — ten days of it.
  */
-/** The sheet's own shape: the daily envelope goes on a card, siblings do not. */
+export function perDiemSoFarPence(household, month, today = new Date()) {
+  const days = daysInMonthKey(month);
+  if (days <= 0) return 0;
+  return Math.round((perDiemTotalPence(household) * proRateDay(month, today)) / days);
+}
+
+/**
+ * The per diem used to be one line among several "cash in reserve" rows, and a
+ * name was all that said which side it was spent on. It is its own figure now,
+ * so the only thing this decides is which of those old rows becomes the per
+ * diem when a stored household is read: the daily envelope did ride on a card,
+ * and a cleaner or a set of nails never did.
+ */
 export function looksLikeDailyEnvelope(name) {
   return /\ba day\b|daily|thousand|envelope|float/i.test(String(name || ""));
-}
-
-export function reserveIsOnCard(reserve) {
-  if (reserve?.paidFrom === "cash") return false;
-  if (reserve?.paidFrom === "card") return true;
-  // Nothing recorded: the daily envelope is card spending and a cleaner or a
-  // set of nails is not, which is exactly how the source sheet pro-rates only
-  // its "£30 a day" row into the card allowance. Saving the line makes it
-  // explicit, and both the list and the breakdown show which side it landed on.
-  return looksLikeDailyEnvelope(reserve?.name);
-}
-
-export function cardReservesOf(household) {
-  return (household?.reserves || []).filter(reserveIsOnCard);
-}
-
-export function cashReservesOf(household) {
-  return (household?.reserves || []).filter((item) => !reserveIsOnCard(item));
 }
 
 export function paidInMonth(item, month) {
@@ -682,7 +687,7 @@ export function spentSoFarForMonth(household, month, today = new Date()) {
     (item) => item.estimatePence,
   );
   const days = daysInMonthKey(month);
-  const reserveTotalPence = sumPence(cardReservesOf(household), (item) => item.amountPence);
+  const reserveTotalPence = perDiemTotalPence(household);
   const reserveSpentPence = days > 0 ? Math.round((reserveTotalPence * dayOfMonth) / days) : 0;
   return {
     dayOfMonth,
@@ -717,7 +722,7 @@ export function monthStatementRows(household, month, today = new Date()) {
     { id: "income", label: "Income", flowPence: flow.incomePence },
     // The annual saving is a standing cash line on the sheet, not its own row.
     { id: "cash", label: "Cash out", flowPence: -(flow.billsPence + flow.annualReservePence) },
-    { id: "reserve", label: "Cash in reserve", flowPence: -flow.reservePence, allowedPence: flow.reserveSpentPence },
+    { id: "perdiem", label: "Per diem", flowPence: -flow.cardReservePence, allowedPence: flow.reserveSpentPence },
     { id: "cardout", label: "Credit card out", flowPence: -flow.cardOutPence, allowedPence: flow.dueCardMonthliesPence },
     { id: "weekly", label: "Weekly expenses", flowPence: -flow.envelopesMonthlyPence, allowedPence: flow.tickedWeeklyPence },
     { id: "planned", label: "Monthly expenses", flowPence: -flow.oneOffsPence, allowedPence: flow.purchasedOneOffsPence },
@@ -754,7 +759,6 @@ export function outBreakdownForMonth(household, month, today = new Date()) {
   const cash = [
     ...flow.cashMonthlies.map((item) => ({ name: item.name, amountPence: item.amountPence, detail: monthlyDueLabel(item, month) })),
     ...(flow.annualReservePence ? [{ name: "Annual bills, saved monthly", amountPence: flow.annualReservePence, detail: "Annual total ÷ 12" }] : []),
-    ...cashReservesOf(household).map((item) => ({ name: item.name || "Cash in reserve", amountPence: item.amountPence, detail: "Paid in cash" })),
   ];
   const card = [
     ...flow.cardMonthlies.map((item) => ({ name: item.name, amountPence: item.amountPence, detail: monthlyDueLabel(item, month) })),
@@ -767,7 +771,11 @@ export function outBreakdownForMonth(household, month, today = new Date()) {
       eachPence: rule.eachPence,
     })),
     ...flow.oneOffs.map((item) => ({ name: item.name, amountPence: item.estimatePence, detail: "Planned" })),
-    ...cardReservesOf(household).map((item) => ({ name: item.name || "Cash in reserve", amountPence: item.amountPence, detail: "Spent on the cards" })),
+    // dailyPence rather than a formatted string: money is formatted in one
+    // place, and that place is the view.
+    ...(perDiemTotalPence(household)
+      ? [{ name: "Per diem", amountPence: perDiemTotalPence(household), dailyPence: perDiemDailyPence(household, month) }]
+      : []),
   ];
   return {
     cash,
@@ -794,21 +802,20 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const incomePence = incomeFromPayslipsPence(household, month);
   const billsPence = sumPence(cashMonthlies, (item) => item.amountPence);
   const cardOutPence = sumPence(cardMonthlies, (item) => item.amountPence);
-  const reservePence = sumPence(household?.reserves, (item) => item.amountPence);
-  const cardReservePence = sumPence(cardReservesOf(household), (item) => item.amountPence);
-  const cashReservePence = reservePence - cardReservePence;
+  // The per diem is the month's spending money, and it is spent on the cards.
+  const cardReservePence = perDiemTotalPence(household);
+  const reservePence = cardReservePence;
   const annualReserve = annualReservePence(annualBills);
   const oneOffsPence = sumPence(oneOffs, (item) => item.estimatePence);
   const envelopesMonthlyPence = sumPence(weeklySlots, (item) => item.amountPence);
-  // Out splits the way the money actually leaves. The reserve — the £30 a day —
-  // is spent on the cards, not in cash, so it belongs on the card side: it was
-  // on the cash side while pro-rating into the card allowance, which is the same
-  // £1,000 counted as bank money in the plan and card money in the check.
-  // Cash is what leaves the bank: standing cash monthlies and the annual saving.
-  const cashOutPence = billsPence + annualReserve + cashReservePence;
+  // Out splits the way the money actually leaves. Cash is what leaves the bank:
+  // standing cash monthlies and the annual saving. The per diem is spent on the
+  // cards, so it sits on the card side — counting it as bank money in the plan
+  // and card money in the check would be the same £1,000 counted twice.
+  const cashOutPence = billsPence + annualReserve;
   // Card commitments are the ones that are going to be paid: card monthlies,
-  // this month's planned, and every weekly slot. The reserve rides on top and is
-  // the part that is chosen day by day, so it is tracked apart from them.
+  // this month's planned, and every weekly slot. The per diem rides on top and
+  // is the part that is chosen day by day, so it is tracked apart from them.
   const cardCommitmentsPence = cardOutPence + oneOffsPence + envelopesMonthlyPence;
   const cardPlanPence = cardCommitmentsPence + cardReservePence;
   const outPence = cashOutPence + cardPlanPence;
@@ -897,7 +904,7 @@ export function cashflowForMonth(household, month, today = new Date()) {
     cardPlanPence,
     reservePence,
     cardReservePence,
-    cashReservePence,
+    perDiemDailyPence: perDiemDailyPence(household, month),
     reserveTotalPence: live.reserveTotalPence,
     monthlies,
     cashMonthlies,
@@ -1213,7 +1220,9 @@ export function payslipNetReadings(slip) {
           netPence: payslipNetPence(shape),
           current: Boolean(slip?.grossBeforeSacrifice) === grossBeforeSacrifice
             && Boolean(slip?.grossExcludesBonus) === grossExcludesBonus
-            && Boolean(slip?.benefitsPaid) === benefitsPaid,
+            // With no benefit on the slip there is no question to be current
+            // about, so a benefit-free slip must not fail to mark its reading.
+            && (benefits <= 0 || benefitsArePaid(slip) === benefitsPaid),
         });
       }
     }
@@ -1247,13 +1256,19 @@ export function resolvedPayslipReading(slip) {
  */
 export function payslipAsRead(slip) {
   const resolved = resolvedPayslipReading(slip);
-  if (!resolved) return slip;
-  return {
-    ...slip,
-    grossBeforeSacrifice: resolved.grossBeforeSacrifice,
-    grossExcludesBonus: resolved.grossExcludesBonus,
-    benefitsPaid: resolved.benefitsPaid,
-  };
+  if (resolved) {
+    return {
+      ...slip,
+      grossBeforeSacrifice: resolved.grossBeforeSacrifice,
+      grossExcludesBonus: resolved.grossExcludesBonus,
+      benefitsPaid: resolved.benefitsPaid,
+    };
+  }
+  // No net typed, but salary ÷ 12 still settles the sacrifice on its own.
+  if (!slip?.grossBeforeSacrifice && (slip?.salarySacrificePensionPence || 0) > 0 && grossIsSalaryOverTwelve(slip)) {
+    return { ...slip, grossBeforeSacrifice: true };
+  }
+  return slip;
 }
 
 /** Net as the payslip itself says it, when the payslip says it. */
@@ -1319,8 +1334,26 @@ export function payslipAdditionsPence(slip) {
  * slip: a car allowance is paid, private medical is not. benefitsPaid says
  * which, and the net printed on the payslip is what settles it.
  */
+export function benefitsArePaid(slip) {
+  return slip?.benefitsPaid !== false;
+}
+
 export function payslipBenefitsInNetPence(slip) {
-  return slip?.benefitsPaid ? (slip.benefitsPence || 0) : 0;
+  return benefitsArePaid(slip) ? (slip?.benefitsPence || 0) : 0;
+}
+
+/**
+ * Gross typed as salary ÷ 12 is the contractual monthly figure, and contractual
+ * pay is by definition before any salary sacrifice. That is a fact about the
+ * number, not a guess about the slip, so it is applied rather than only warned
+ * about — otherwise a slip with no net typed reads a whole sacrifice too high
+ * every month.
+ */
+export function grossIsSalaryOverTwelve(slip) {
+  const salary = slip?.salaryPence || 0;
+  const gross = slip?.grossPence || 0;
+  if (salary <= 0 || gross <= 0) return false;
+  return Math.abs(gross - Math.round(salary / 12)) <= 1;
 }
 
 export function payslipNetPence(slip) {
@@ -1381,8 +1414,8 @@ export function payslipGrossReadingWarning(slip) {
   const salary = slip?.salaryPence || 0;
   const gross = slip?.grossPence || 0;
   if (sacrifice <= 0 || salary <= 0 || gross <= 0 || slip?.grossBeforeSacrifice) return "";
-  if (Math.abs(gross - Math.round(salary / 12)) > 1) return "";
-  return "Gross here is salary ÷ 12, which is the figure before the salary sacrifice comes off. Either tick “Gross is before salary sacrifice”, or type the Total gross pay the payslip itself shows.";
+  if (!grossIsSalaryOverTwelve(slip)) return "";
+  return "Gross here is salary ÷ 12, so the salary sacrifice is being taken off it. Type the Total gross pay the payslip itself shows if that is not what this figure is.";
 }
 
 export function payslipNetHints(slip) {

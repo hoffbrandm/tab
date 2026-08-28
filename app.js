@@ -30,11 +30,15 @@ import {
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
-  reserveIsOnCard,
   resolvedPayslipReading,
   payslipReadingSummary,
   outBreakdownForMonth,
   monthStatementRows,
+  daysInMonthKey,
+  perDiemTotalPence,
+  perDiemDailyPence,
+  perDiemSoFarPence,
+  proRateDay,
   plannedMonthTotals,
   payslipAmountForCategory,
   masterPayslipCategories,
@@ -475,7 +479,7 @@ function overUnderAmount(flow) {
  * What is still to come is two kinds of money, and one row called "left to
  * spend" made them look like one. Weeklies and monthlies are expected to be
  * paid, so counting them as spending room says the month has more slack in it
- * than it has; the reserve is the half that is actually chosen day by day.
+ * than it has; the per diem is the half that is actually chosen day by day.
  */
 function committedLabel(flow) {
   if (flow.committedToComePence < 0) return "Paid beyond the plan";
@@ -487,14 +491,14 @@ function committedAmount(flow) {
 }
 
 function reserveLeftLabel(flow) {
-  return flow.reserveLeftPence < 0 ? "Day money overspent" : "Day money left";
+  return flow.reserveLeftPence < 0 ? "Per diem overspent" : "Per diem left";
 }
 
 function reserveLeftAmount(flow) {
   return formatMoney(Math.abs(flow.reserveLeftPence));
 }
 
-/** A household with no reserve set has no day money to talk about. */
+/** A household with no per diem set has no spending money to talk about. */
 function hasDayMoney(flow) {
   return flow.reserveTotalPence > 0;
 }
@@ -604,9 +608,9 @@ function stillToComeSentence(flow) {
     ? ` (about ${formatMoney(flow.perDayReserveLeftPence)} a day)`
     : "";
   const day = flow.reserveLeftPence > 0
-    ? `the ${formatMoney(flow.reserveLeftPence)} of day money left${perDay} is the part you choose`
+    ? `the ${formatMoney(flow.reserveLeftPence)} of per diem left${perDay} is the part you choose`
     : flow.reserveLeftPence < 0
-      ? `the day money is ${formatMoney(-flow.reserveLeftPence)} overspent already`
+      ? `the per diem is ${formatMoney(-flow.reserveLeftPence)} overspent already`
       : `the day money for the month is gone`;
   if (!committed) return `Everything planned has been paid, and ${day}.`;
   return `${committed[0].toUpperCase()}${committed.slice(1)}; ${day}.`;
@@ -623,7 +627,7 @@ function statementNote(flow) {
   }
   const parts = [];
   if (flow.reserveSpentPence) {
-    parts.push(`${formatMoney(flow.reserveSpentPence)} of the ${formatMoney(flow.reserveTotalPence)} reserve (${flow.dayOfMonth}/${flow.daysInMonth} of the way through)`);
+    parts.push(`${formatMoney(flow.reserveSpentPence)} of the ${formatMoney(flow.reserveTotalPence)} per diem (${flow.dayOfMonth}/${flow.daysInMonth} of the way through)`);
   }
   if (flow.exceptionsPence) parts.push(`${formatMoney(flow.exceptionsPence)} of exceptions`);
   const made = parts.length ? `The allowance includes ${parts.join(" and ")}.` : "";
@@ -711,7 +715,9 @@ function refreshStatement() {
  * be checked against the rows rather than taken on trust.
  */
 function breakdownRow(item) {
-  const detail = item.count ? `${item.count} × ${formatMoney(item.eachPence)}` : item.detail;
+  const detail = item.count
+    ? `${item.count} × ${formatMoney(item.eachPence)}`
+    : item.dailyPence ? `${formatMoney(item.dailyPence)} a day` : item.detail;
   return `<p><span>${esc(item.name)}${detail ? ` <small>${esc(detail)}</small>` : ""}</span><strong>${formatMoney(item.amountPence)}</strong></p>`;
 }
 
@@ -727,7 +733,7 @@ function breakdownSection(flow, breakdown) {
   return `<div class="breakdown">
     <p class="helper">In ${formatMoney(flow.incomePence)} less everything below is the planned saving of ${formatMoney(flow.savingsPence)}. Every line the month expects to pay is here, once.</p>
     ${breakdownHalf("Out of the bank", breakdown.cash, breakdown.cashTotalPence, "Cash monthlies and the monthly share of the annual bills. None of this touches the cards.")}
-    ${breakdownHalf("On to the cards", breakdown.card, breakdown.cardTotalPence, "Card monthlies on their due date, every weekly slot, this month's planned, and the reserve — all of it expected on a card by month end.")}
+    ${breakdownHalf("On to the cards", breakdown.card, breakdown.cardTotalPence, "Card monthlies on their due date, every weekly slot, this month's planned, and the per diem — all of it expected on a card by month end.")}
   </div>`;
 }
 
@@ -905,11 +911,12 @@ function weekliesScreen() {
 function monthliesScreen() {
   const hh = household();
   const items = monthliesOf(hh);
-  const reserves = hh.reserves || [];
+  const perDiemPence = perDiemTotalPence(hh);
+  const dailyPence = perDiemDailyPence(hh, viewMonth);
   return shell({
     eyebrow: "Monthlies",
     title: "Standing outs.",
-    lede: "Name, amount, and due day, on the calendar day or rolled to the next working day. These are config — they are not ticked. Cash lines, card lines, and reserve lines count in Out for the whole month on screen. Cash lines do not move the card allowance. Card lines do, on the due date, with no tick.",
+    lede: "Name, amount, and due day, on the calendar day or rolled to the next working day. These are config — they are not ticked. Cash lines and card lines both count in Out for the whole month on screen. Cash lines do not move the card allowance. Card lines do, on the due date, with no tick.",
     month: true,
     body: `
       <section class="block">
@@ -925,17 +932,15 @@ function monthliesScreen() {
         })).join("") : emptyLines("Phone on the 21st. Mortgage on the 1st. Due date only — no ticks.", "add-monthly", "Add a monthly")}
       </section>
       <section class="block">
-        ${sectionHead("Cash in reserve", "add-reserve", "Add")}
-        <p class="helper">Daily envelope / monthly thousand — one standing line, not two features. Type the amount. Cleaner and nails can sit beside it.</p>
-        ${reserves.length ? reserves.map((item) => lineRow({
-          edit: "edit-reserve",
-          id: item.id,
-          title: item.name,
-          detail: reserveLineDetail(item),
-          amount: formatMoney(item.amountPence),
-          removeAction: "remove-reserve",
-          removeLabel: "Delete",
-        })).join("") : emptyLines("Add the daily envelope here. The monthly amount lives in your household, not in this app.", "add-reserve", "Add the daily envelope")}
+        ${sectionHead("Per diem", "edit-per-diem", perDiemPence ? "Change" : "Set")}
+        <p class="helper">The month's spending money as one figure. It is divided by the ${daysInMonthKey(viewMonth)} days in ${esc(monthName(viewMonth))} to give a daily rate, and the days gone by decide how much of it the cards are allowed to carry so far.</p>
+        ${perDiemPence ? lineRow({
+          edit: "edit-per-diem",
+          id: "per-diem",
+          title: `${formatMoney(perDiemPence)} a month`,
+          detail: `${formatMoney(dailyPence)} a day · ${formatMoney(perDiemSoFarPence(hh, viewMonth))} allowed by day ${proRateDay(viewMonth)}`,
+          amount: formatMoney(perDiemPence),
+        }) : emptyLines("No per diem set. Put the whole month's spending money in and the app spreads it over the days.", "edit-per-diem", "Set the per diem")}
       </section>
     `,
   });
@@ -1375,7 +1380,7 @@ function modalMarkup() {
     card: cardForm,
     sub: subForm,
     pending: pendingForm,
-    reserve: reserveForm,
+    "per-diem": perDiemForm,
     "payslip-category": payslipCategoryForm,
     oneoff: oneOffForm,
     exception: exceptionForm,
@@ -1556,32 +1561,16 @@ function pendingForm() {
   </form>`;
 }
 
-function reserveLineDetail(item) {
-  // Where it is spent decides whether it enters the card allowance, so the list
-  // says which side each line is on rather than leaving it to the edit screen.
-  const where = reserveIsOnCard(item) ? "On a card" : "Cash";
-  const name = String(item?.name || "").toLowerCase();
-  if (/\ba day\b|daily|thousand|envelope|float/.test(name)) {
-    return `Daily envelope / monthly thousand · ${where}`;
-  }
-  return `Standing monthly out · ${where}`;
-}
-
-function reserveForm() {
-  const item = modal.item || {};
-  const adding = !item.id;
-  return `<form id="reserve-form">${modalHead(adding ? "Cash in reserve" : "Reserve", adding ? "Daily envelope / monthly thousand" : "Edit reserve")}
-    <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="£30 a day" /></label>
-    ${moneyLabel("Monthly amount", "amount", item.amountPence)}
-    <label>Spent on<select name="paidFrom">
-      <option value=""${item.paidFrom ? "" : " selected"}>Work it out from the name</option>
-      <option value="card"${item.paidFrom === "card" ? " selected" : ""}>A card</option>
-      <option value="cash"${item.paidFrom === "cash" ? " selected" : ""}>Cash</option>
-    </select></label>
-    <p class="helper">This is the daily envelope and the monthly thousand — the same line. Type the amount; it is not stored in the app. Cleaner and nails are siblings — set those to cash, because only what is spent on a card belongs in the card allowance. Insurance saving stays on Annual as year ÷ 12.</p>
+function perDiemForm() {
+  const hh = household();
+  const pence = perDiemTotalPence(hh);
+  const days = daysInMonthKey(viewMonth);
+  return `<form id="per-diem-form">${modalHead("Per diem", pence ? "Change the per diem" : "Set the per diem")}
+    ${moneyLabel("Whole month", "amount", pence, { required: true })}
+    <p class="helper">One figure for the month, not a daily one. Over ${days} days in ${esc(monthName(viewMonth))} that is <strong data-per-diem-rate>${formatMoney(days ? Math.round(pence / days) : 0)}</strong> a day, and the cards are allowed that much for every day gone by — so on the 10th of a 30-day month, a third of it.</p>
+    <p class="helper">It is spent on the cards, so it sits on the card side of Out. Standing costs that leave the bank — a cleaner, nails — belong in Monthlies as cash lines.</p>
     <p class="form-error" id="form-error"></p>
-    <button class="primary wide" type="submit">${item.id ? "Save reserve" : "Add reserve"}</button>
-    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-reserve">Delete reserve</button>' : ""}
+    <button class="primary wide" type="submit">Save per diem</button>
   </form>`;
 }
 
@@ -2036,8 +2025,7 @@ document.addEventListener("click", async (event) => {
   if (action === "edit-card") openItem("card", "cards", id);
   if (action === "add-pending") openItem("pending");
   if (action === "edit-pending") openItem("pending", "pendings", id);
-  if (action === "add-reserve") openItem("reserve");
-  if (action === "edit-reserve") openItem("reserve", "reserves", id);
+  if (action === "edit-per-diem") openItem("per-diem");
   if (action === "add-payslip-category-master") openItem("payslip-category");
   if (action === "edit-payslip-category") openItem("payslip-category", "payslipCategories", id);
   if (action === "add-sub") openItem("sub");
@@ -2097,11 +2085,6 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     removeListedItem("weeklyExtras", id, "weekly extra");
-  }
-  if (action === "remove-reserve") {
-    event.preventDefault();
-    event.stopPropagation();
-    removeListedItem("reserves", id, "reserve");
   }
   if (action === "remove-annual") {
     event.preventDefault();
@@ -2171,7 +2154,6 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-delete-weekly-extra") askDelete("weekly-extra", modal.item.id, "this extra");
   if (action === "confirm-delete-card") askDelete("card", modal.item.id, "this card");
   if (action === "confirm-delete-pending") askDelete("pending", modal.item.id, "this pending amount");
-  if (action === "confirm-delete-reserve") askDelete("reserve", modal.item.id, "this reserve line");
   if (action === "confirm-delete-payslip-category") askDelete("payslip-category", modal.item.id, "this category");
   if (action === "confirm-delete-sub") askDelete("sub", modal.item.id, "this subscription");
   if (action === "confirm-delete-oneoff") askDelete("oneoff", modal.item.id, "this one-off");
@@ -2222,7 +2204,6 @@ document.addEventListener("click", async (event) => {
         hh.cardSubs = hh.cardSubs.map((item) => (item.cardId === targetModal.id ? { ...item, cardId: undefined } : item));
       }
       if (targetModal.target === "pending") hh.pendings = hh.pendings.filter((item) => item.id !== targetModal.id);
-      if (targetModal.target === "reserve") hh.reserves = (hh.reserves || []).filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "payslip-category") {
         hh.payslipCategories = masterPayslipCategories(hh).filter((item) => item.id !== targetModal.id);
       }
@@ -2298,7 +2279,7 @@ document.addEventListener("submit", (event) => {
     "card-form": saveCard,
     "sub-form": saveSub,
     "pending-form": savePending,
-    "reserve-form": saveReserve,
+    "per-diem-form": savePerDiem,
     "payslip-category-form": savePayslipCategory,
     "home-card-form": saveHomeCard,
     "oneoff-form": saveOneOff,
@@ -2316,6 +2297,7 @@ document.addEventListener("submit", (event) => {
 document.addEventListener("input", (event) => {
   if (event.target.closest("#transaction-form")) updateLiveSplit();
   if (event.target.closest("#payslip-form")) updatePayslipNet();
+  if (event.target.closest("#per-diem-form")) updatePerDiemRate();
   const field = event.target.dataset.action;
   if (field === "pending-amount" || field === "pending-note") updatePendingField(event.target);
   if (field === "card-balance") updateCardBalance(event.target);
@@ -2669,19 +2651,26 @@ async function savePending(event) {
   });
 }
 
-async function saveReserve(event) {
-  return saveNamedMoney(event, {
-    list: "reserves",
-    toastAdd: "Reserve added",
-    toastEdit: "Reserve updated",
-    build: (data) => ({
-      name: requireName(data.get("name"), "name"),
-      amountPence: requireMoney(data.get("amount"), "amount"),
-      ...(data.get("paidFrom") === "cash" || data.get("paidFrom") === "card"
-        ? { paidFrom: data.get("paidFrom") }
-        : {}),
-    }),
+async function savePerDiem(event) {
+  event.preventDefault();
+  const data = new FormData(event.target);
+  let amountPence;
+  try {
+    amountPence = requireMoney(data.get("amount"), "amount");
+  } catch (error) {
+    return showFormError(error.message);
+  }
+  setBusy(event.target, true);
+  const saved = await withStoreUpdate(() => {
+    household().perDiem = { amountPence };
   });
+  if (!saved) {
+    showFormError(sync.message || "Could not save.");
+    setBusy(event.target, false);
+    return;
+  }
+  closeModal();
+  showToast("Per diem saved");
 }
 
 async function savePayslipCategory(event) {
@@ -2949,6 +2938,16 @@ function snapshotPayslipForm() {
     taxCode: String(data.get("taxCode") || "").trim(),
     forecast: data.get("forecast") === "on",
   };
+}
+
+/** The daily rate as the figure is typed, so the month's amount can be aimed. */
+function updatePerDiemRate() {
+  const target = document.querySelector("[data-per-diem-rate]");
+  if (!target) return;
+  const form = document.querySelector("#per-diem-form");
+  const days = daysInMonthKey(viewMonth);
+  const pence = parseMoneyAllowZero(form?.elements?.amount?.value);
+  target.textContent = formatMoney(pence && days ? Math.round(pence / days) : 0);
 }
 
 function updatePayslipNet() {

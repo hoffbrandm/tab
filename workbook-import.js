@@ -2,6 +2,7 @@ import {
   emptyHousehold,
   isoDate,
   isParentalPayLabel,
+  looksLikeDailyEnvelope,
   monthKey,
   rememberPayslipCategories,
   ukTaxYearFromDate,
@@ -313,12 +314,21 @@ function importMainTable(grid, household, report) {
       continue;
     }
     if (bucket.includes("cash in reserve")) {
-      household.reserves.push({
-        id: uid(),
-        name,
-        amountPence: Math.abs(pence),
-      });
-      report.reserves += 1;
+      // The sheet keeps two different things under one heading: the day money,
+      // which is the per diem, and standing cash costs beside it. Each lands
+      // where it belongs rather than in a list that mixed them.
+      if (looksLikeDailyEnvelope(name)) {
+        household.perDiem = { amountPence: Math.abs(pence) };
+        report.perDiem += 1;
+      } else {
+        household.bills.push({
+          id: uid(),
+          name,
+          amountPence: Math.abs(pence),
+          dueDay: dueDay || 1,
+        });
+        report.bills += 1;
+      }
       continue;
     }
     if (bucket.includes("monthly") && expectedNames.has(name.toLowerCase())) {
@@ -569,7 +579,7 @@ export function emptyImportReport() {
     pensions: 0,
     payslips: 0,
     donations: 0,
-    reserves: 0,
+    perDiem: 0,
     skipped: 0,
     skippedWhy: [],
     sheets: [],
@@ -635,7 +645,7 @@ export function importHasData(report) {
     || report.pensions
     || report.payslips
     || report.donations
-    || report.reserves,
+    || report.perDiem,
   );
 }
 
@@ -653,7 +663,7 @@ export function reportLines(report) {
     ["Pensions", report.pensions],
     ["Payslips", report.payslips],
     ["Giving", report.donations],
-    ["Reserve", report.reserves],
+    ["Per diem", report.perDiem],
   ].filter((item) => item[1] > 0);
   return {
     landed,
