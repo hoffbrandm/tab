@@ -32,17 +32,22 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check the app
+        run: npm test
+
+      # The published file list is walked from index.html's entry module, not
+      # written out here: a hand-written list went stale every time a module was
+      # added, and the deployed app.js was left importing three files that were
+      # never copied. stage-site.mjs fails the build if a module is missing, if
+      # a published module imports something that was not published, or if a
+      # test-only or server-only file reaches _site.
       - name: Stage public static files
-        run: |
-          mkdir -p _site
-          cp index.html styles.css favicon.svg manifest.webmanifest _site/
-          cp app.js calculations.js household.js store.js session.js gist-store.js _site/
-          test -f _site/index.html
-          test -f _site/app.js
-          test ! -e _site/test
-          test ! -e _site/server.mjs
-          test ! -e _site/node_modules
-          test ! -e _site/.git
+        run: npm run stage
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

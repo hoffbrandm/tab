@@ -618,8 +618,45 @@ legend { padding: 0; margin-bottom: 7px; }
 .cash-hero h1 { font-size: clamp(2.4rem, 9vw, 3.3rem); }
 .statement {
   display: grid;
-  gap: 10px;
+  gap: 18px;
   padding: 20px 2px 8px;
+}
+.statement-hero {
+  display: grid;
+  gap: 4px;
+}
+.statement-eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.78rem;
+}
+.statement-hero strong {
+  font-size: clamp(2.4rem, 10vw, 3.4rem);
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+}
+.statement-summary {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.statement-block {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.statement-block h2 {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
 }
 .statement-row {
   display: flex;
@@ -644,7 +681,12 @@ legend { padding: 0; margin-bottom: 7px; }
   font-size: clamp(1.15rem, 4.5vw, 1.45rem);
   letter-spacing: -0.03em;
 }
-.statement-row.savings {
+.statement-row.line strong {
+  font-size: clamp(1.05rem, 4.2vw, 1.3rem);
+  letter-spacing: -0.03em;
+}
+.statement-row.savings,
+.statement-row.check {
   padding-top: 6px;
   border-top: 1px solid var(--line);
 }
@@ -718,22 +760,6 @@ legend { padding: 0; margin-bottom: 7px; }
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.35;
-}
-.statement-row.left {
-  padding-top: 6px;
-  border-top: 1px solid var(--line);
-  align-items: flex-end;
-}
-.statement-row.left span {
-  font-size: 0.82rem;
-  color: var(--ink);
-  white-space: nowrap;
-}
-.statement-row.left strong {
-  font-size: clamp(1.9rem, 7.6vw, 2.9rem);
-  letter-spacing: -0.055em;
-  line-height: 0.95;
-  white-space: nowrap;
 }
 .card-balance-row {
   display: flex;

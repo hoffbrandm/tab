@@ -22,6 +22,7 @@ import {
   jumpToCurrentMonthLabel,
   monthKey,
   monthLabel,
+  monthName,
   monthlyDueLabel,
   monthliesOf,
   normalizeDueRoll,
@@ -439,11 +440,24 @@ function moneyClass(pence) {
   return pence < 0 ? "negative" : "neutral";
 }
 
+/** Ahead is worth seeing as good news and behind as bad, so these two colour. */
+function trackClass(pence, known = true) {
+  if (!known) return "neutral";
+  if (pence < 0) return "negative";
+  if (pence > 0) return "positive";
+  return "neutral";
+}
+
+/**
+ * Ahead / behind, not underspend / overspend: the row sits under "Where you
+ * are", and the question it answers is whether today is in front of the plan or
+ * behind it, not whether a single spend was too big.
+ */
 function overUnderLabel(flow) {
-  if (!flow.cardCheckKnown) return "Under / overspend";
-  if (flow.overUnderPence < 0) return "Overspend";
-  if (flow.overUnderPence > 0) return "Underspend";
-  return "On budget";
+  if (!flow.cardCheckKnown) return "Ahead / behind plan";
+  if (flow.overUnderPence < 0) return "Behind plan";
+  if (flow.overUnderPence > 0) return "Ahead of plan";
+  return "Exactly on plan";
 }
 
 function overUnderAmount(flow) {
@@ -451,51 +465,163 @@ function overUnderAmount(flow) {
   return formatMoney(Math.abs(flow.overUnderPence));
 }
 
+function remainingLabel(flow) {
+  return flow.remainingPlanPence < 0 ? "Over the month's plan" : "Left to spend";
+}
+
+function remainingAmount(flow) {
+  return formatMoney(Math.abs(flow.remainingPlanPence));
+}
+
+function todayHeading(flow) {
+  if (flow.monthPhase === "past") return "How it went";
+  return `Where you are · day ${flow.dayOfMonth} of ${flow.daysInMonth}`;
+}
+
+function allowedLabel(flow) {
+  return flow.monthPhase === "past" ? "The plan allowed" : "Plan allows by today";
+}
+
+function cardsNowLabel(flow) {
+  return flow.monthPhase === "past" ? "Ended up on the cards" : "On the cards now";
+}
+
 /**
- * The check is two numbers and people need to see both to trust it: what the
- * card is allowed to carry by today, against what it really carries.
+ * The headline is the answer to the question the month is actually asking, so
+ * it says which question in words rather than leaving a bare total to read.
+ */
+function forecastEyebrow(flow) {
+  const label = monthName(flow.month);
+  if (flow.forecastSavingPence < 0) {
+    if (flow.monthPhase === "past") return `${label} came up short by`;
+    return `${label} is heading for a shortfall of`;
+  }
+  if (flow.monthPhase === "past") return `${label} saved`;
+  if (flow.monthPhase === "future") return `${label} plans to save`;
+  return `${label} is on track to save`;
+}
+
+function forecastAmount(flow) {
+  return formatMoney(Math.abs(flow.forecastSavingPence));
+}
+
+function daysLeftPhrase(flow) {
+  if (flow.daysLeft <= 0) return "on the last day of the month";
+  if (flow.daysLeft === 1) return "with 1 day to go";
+  return `with ${flow.daysLeft} days to go`;
+}
+
+/**
+ * The one sentence Home exists for: how today stands against the plan, how much
+ * of the plan is still there to spend, and what the month ends up saving if the
+ * rest of it goes to plan.
+ */
+function positionSummary(flow) {
+  const label = monthName(flow.month);
+  const forecast = formatMoney(flow.forecastSavingPence);
+  const planned = formatMoney(flow.savingsPence);
+  // A month that has not started has no balance yet by definition, so it is
+  // answered as "not started" rather than as a card waiting to be filled in.
+  if (flow.monthPhase === "future") {
+    return `${label} has not started. On the plan it saves ${planned}.`;
+  }
+  if (!flow.cardCheckKnown) {
+    const names = flow.cardsMissingSnapshot.map((card) => card.name).join(", ");
+    return `No ${label} balance on ${names}, so there is nothing to measure today against yet. On the plan alone ${label} saves ${planned}.`;
+  }
+  if (flow.monthPhase === "past") {
+    if (flow.overUnderPence < 0) return `${label} finished ${formatMoney(-flow.overUnderPence)} over plan and saved ${forecast} against a planned ${planned}.`;
+    if (flow.overUnderPence > 0) return `${label} finished ${formatMoney(flow.overUnderPence)} under plan and saved ${forecast} against a planned ${planned}.`;
+    return `${label} finished exactly on plan and saved ${forecast}.`;
+  }
+  const standing = flow.overUnderPence < 0
+    ? `The cards are ${formatMoney(-flow.overUnderPence)} above what the plan allows by today`
+    : flow.overUnderPence > 0
+      ? `The cards are ${formatMoney(flow.overUnderPence)} below what the plan allows by today`
+      : `The cards are exactly where the plan allows by today`;
+  if (flow.remainingPlanPence <= 0) {
+    return `${standing}, ${daysLeftPhrase(flow)}. The month's plan is already spent, so every pound from here comes straight off the ${forecast} that ${label} ends up saving.`;
+  }
+  const perDay = flow.daysLeft > 0 ? ` (about ${formatMoney(flow.perDayLeftPence)} a day)` : "";
+  const room = `Keep the rest under ${formatMoney(flow.remainingPlanPence)}${perDay}`;
+  const close = flow.overUnderPence < 0
+    ? `${room} and ${label} still saves ${forecast} — ${formatMoney(-flow.overUnderPence)} less than planned. Spend under that to pull it back.`
+    : `${room} and ${label} saves ${forecast}${flow.overUnderPence > 0 ? `, ${formatMoney(flow.overUnderPence)} more than planned` : ""}.`;
+  return `${standing}, ${daysLeftPhrase(flow)}. ${close}`;
+}
+
+/**
+ * What makes up "the plan allows by today", so both sides of the check can be
+ * trusted, and where the cards land if the rest of the month goes to plan.
  */
 function statementNote(flow) {
   if (!flow.cardCheckKnown) {
     const names = flow.cardsMissingSnapshot.map((card) => card.name).join(", ");
-    return `No balance for ${monthLabel(flow.month)} on ${names}. Total savings is In − Out until one is in.`;
+    return `Add a card balance for ${monthName(flow.month)} on ${names} to turn the check on.`;
   }
-  const parts = [`Allowed so far ${formatMoney(flow.allowanceSoFarPence)}`];
+  const parts = [];
   if (flow.reserveSpentPence) {
-    parts.push(`incl. ${formatMoney(flow.reserveSpentPence)} of the ${formatMoney(flow.reserveTotalPence)} reserve, ${flow.dayOfMonth}/${flow.daysInMonth} of the way through`);
+    parts.push(`${formatMoney(flow.reserveSpentPence)} of the ${formatMoney(flow.reserveTotalPence)} reserve (${flow.dayOfMonth}/${flow.daysInMonth} of the way through)`);
   }
-  if (flow.exceptionsPence) parts.push(`incl. ${formatMoney(flow.exceptionsPence)} of exceptions`);
-  return parts.join(" · ");
+  if (flow.exceptionsPence) parts.push(`${formatMoney(flow.exceptionsPence)} of exceptions`);
+  const made = parts.length ? `The allowance includes ${parts.join(" and ")}.` : "";
+  if (flow.monthPhase !== "current" || flow.remainingPlanPence <= 0) return made;
+  const lands = `Spend the rest of the plan and the cards finish ${monthName(flow.month)} at ${formatMoney(flow.forecastCardsPence)}.`;
+  return made ? `${made} ${lands}` : lands;
 }
 
+/**
+ * Three blocks, three questions: what was planned, where today sits against it,
+ * and what the month ends up saving. The plan and the live position used to sit
+ * in one column, which left "on to the card" (a plan figure) reading next to
+ * "card balance now" (a live one) as if they were the same kind of number.
+ */
 function statementSection(flow) {
   return `<section class="statement" aria-label="Month statement" data-statement>
-        <div class="statement-row in">
-          <span>In</span>
-          <strong data-statement-in>${formatMoney(flow.incomePence)}</strong>
+        <div class="statement-hero">
+          <p class="statement-eyebrow" data-statement-eyebrow>${esc(forecastEyebrow(flow))}</p>
+          <strong class="${trackClass(flow.forecastSavingPence)}" data-statement-forecast>${forecastAmount(flow)}</strong>
+          <p class="statement-summary" data-statement-summary>${esc(positionSummary(flow))}</p>
         </div>
-        <div class="statement-row out">
-          <span>Out</span>
-          <strong data-statement-out>${formatMoney(flow.outPence)}</strong>
+        <div class="statement-block">
+          <h2>The plan for ${esc(monthLabel(flow.month))}</h2>
+          <div class="statement-row in">
+            <span>In</span>
+            <strong data-statement-in>${formatMoney(flow.incomePence)}</strong>
+          </div>
+          <div class="statement-row out">
+            <span>Out</span>
+            <strong data-statement-out>${formatMoney(flow.outPence)}</strong>
+          </div>
+          <div class="statement-split">
+            <p><span>Cash and direct debits</span><strong data-statement-cash-out>${formatMoney(flow.cashOutPence)}</strong></p>
+            <p><span>Planned on to the cards</span><strong data-statement-card-out>${formatMoney(flow.cardPlanPence)}</strong></p>
+          </div>
+          <div class="statement-row savings">
+            <span>Planned saving</span>
+            <strong class="${moneyClass(flow.savingsPence)}" data-statement-savings>${formatMoney(flow.savingsPence)}</strong>
+          </div>
         </div>
-        <div class="statement-split">
-          <p><span>Cash out</span><strong data-statement-cash-out>${formatMoney(flow.cashOutPence)}</strong></p>
-          <p><span>On to the card</span><strong data-statement-card-out>${formatMoney(flow.cardPlanPence)}</strong></p>
-          <p><span>Card balance now</span><strong data-statement-card-balance>${formatMoney(flow.actualOnCardsPence)}</strong></p>
-        </div>
-        <div class="statement-row savings">
-          <span>Savings</span>
-          <strong class="${moneyClass(flow.savingsPence)}" data-statement-savings>${formatMoney(flow.savingsPence)}</strong>
-        </div>
-        <div class="statement-row check">
-          <span data-statement-check-label>${overUnderLabel(flow)}</span>
-          <strong class="${moneyClass(flow.overUnderPence)}" data-statement-check>${overUnderAmount(flow)}</strong>
-        </div>
-        <p class="statement-note" data-statement-note>${esc(statementNote(flow))}</p>
-        <div class="statement-row left">
-          <span>Total savings</span>
-          <strong class="${moneyClass(flow.totalSavingsPence)}" data-statement-total>${formatMoney(flow.totalSavingsPence)}</strong>
-        </div>
+        ${flow.monthPhase === "future" ? "" : `<div class="statement-block">
+          <h2 data-statement-today-head>${esc(todayHeading(flow))}</h2>
+          <div class="statement-row line">
+            <span data-statement-allowed-label>${esc(allowedLabel(flow))}</span>
+            <strong data-statement-allowed>${formatMoney(flow.allowanceSoFarPence)}</strong>
+          </div>
+          <div class="statement-row line">
+            <span data-statement-card-label>${esc(cardsNowLabel(flow))}</span>
+            <strong data-statement-card-balance>${formatMoney(flow.actualOnCardsPence)}</strong>
+          </div>
+          <div class="statement-row check">
+            <span data-statement-check-label>${overUnderLabel(flow)}</span>
+            <strong class="${trackClass(flow.overUnderPence, flow.cardCheckKnown)}" data-statement-check>${overUnderAmount(flow)}</strong>
+          </div>
+          ${flow.monthPhase === "past" ? "" : `<div class="statement-row line">
+            <span data-statement-left-label>${esc(remainingLabel(flow))}</span>
+            <strong data-statement-left>${remainingAmount(flow)}</strong>
+          </div>`}
+          <p class="statement-note" data-statement-note>${esc(statementNote(flow))}</p>
+        </div>`}
       </section>`;
 }
 
@@ -508,22 +634,30 @@ function refreshStatement() {
   const section = document.querySelector("[data-statement]");
   if (!section) return;
   const flow = cashflowForMonth(household(), viewMonth, new Date());
-  const set = (selector, text, pence) => {
+  const set = (selector, text, className) => {
     const node = section.querySelector(selector);
     if (!node) return;
     node.textContent = text;
-    if (pence != null) node.className = moneyClass(pence);
+    if (className != null) node.className = className;
   };
+  set("[data-statement-eyebrow]", forecastEyebrow(flow));
+  set("[data-statement-forecast]", forecastAmount(flow), trackClass(flow.forecastSavingPence));
+  set("[data-statement-summary]", positionSummary(flow));
   set("[data-statement-in]", formatMoney(flow.incomePence));
   set("[data-statement-out]", formatMoney(flow.outPence));
   set("[data-statement-cash-out]", formatMoney(flow.cashOutPence));
   set("[data-statement-card-out]", formatMoney(flow.cardPlanPence));
+  set("[data-statement-savings]", formatMoney(flow.savingsPence), moneyClass(flow.savingsPence));
+  set("[data-statement-today-head]", todayHeading(flow));
+  set("[data-statement-allowed-label]", allowedLabel(flow));
+  set("[data-statement-allowed]", formatMoney(flow.allowanceSoFarPence));
+  set("[data-statement-card-label]", cardsNowLabel(flow));
   set("[data-statement-card-balance]", formatMoney(flow.actualOnCardsPence));
-  set("[data-statement-savings]", formatMoney(flow.savingsPence), flow.savingsPence);
   set("[data-statement-check-label]", overUnderLabel(flow));
-  set("[data-statement-check]", overUnderAmount(flow), flow.overUnderPence);
+  set("[data-statement-check]", overUnderAmount(flow), trackClass(flow.overUnderPence, flow.cardCheckKnown));
+  set("[data-statement-left-label]", remainingLabel(flow));
+  set("[data-statement-left]", remainingAmount(flow));
   set("[data-statement-note]", statementNote(flow));
-  set("[data-statement-total]", formatMoney(flow.totalSavingsPence), flow.totalSavingsPence);
 }
 
 function cashflowScreen() {

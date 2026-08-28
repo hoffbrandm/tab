@@ -222,6 +222,19 @@ export function isCurrentMonth(month, today = new Date()) {
   return month === monthKey(today);
 }
 
+/**
+ * Home answers three questions: what the plan says, where today sits against
+ * it, and where the month lands. Only a month in progress can answer the second
+ * — a month that has not started has no "so far", and a finished one has no
+ * "still to come" — so the phase decides which parts of the statement are real.
+ */
+export function monthPhase(month, today = new Date()) {
+  const current = monthKey(today);
+  if (month < current) return "past";
+  if (month > current) return "future";
+  return "current";
+}
+
 export function viewPeriodLabel(month) {
   return monthLabel(month);
 }
@@ -708,9 +721,31 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const totalSavingsPence = savingsPence + overUnderPence;
   const overspendPence = overUnderPence < 0 ? -overUnderPence : 0;
   const underspendPence = overUnderPence > 0 ? overUnderPence : 0;
+  // The end-of-month view. allowanceSoFar is the card-side plan pro-rated to
+  // today; the same total on the last day is the whole card plan plus the whole
+  // reserve plus exceptions. The gap between them is what the month still has
+  // left to spend, which is the number that answers "can we still pull it back".
+  const phase = monthPhase(month, today);
+  const daysLeft = Math.max(0, days - dayOfMonth);
+  const fullMonthAllowancePence = cardPlanPence + reservePence + exceptionsPence;
+  const remainingPlanPence = fullMonthAllowancePence - allowanceSoFarPence;
+  const perDayLeftPence = daysLeft > 0 && remainingPlanPence > 0 ? Math.round(remainingPlanPence / daysLeft) : 0;
+  // Where the month lands: the plan's saving carried forward with however far
+  // ahead or behind today already is. Same number as Total savings — named for
+  // the question it answers rather than for the sheet row it came from.
+  const forecastSavingPence = totalSavingsPence;
+  // Spend the rest of the plan exactly and the cards finish here.
+  const forecastCardsPence = actualOnCardsPence + remainingPlanPence;
 
   return {
     month,
+    monthPhase: phase,
+    daysLeft,
+    fullMonthAllowancePence,
+    remainingPlanPence,
+    perDayLeftPence,
+    forecastSavingPence,
+    forecastCardsPence,
     daysInMonth: days,
     dayOfMonth,
     people,
@@ -823,7 +858,18 @@ export function cardsForMonth(household, month, today = new Date()) {
         missingSnapshot: false,
       };
     }
-    if (live) return { ...card, snapshots, missingSnapshot: false };
+    // The live month falls back to the card's own running balance. A card
+    // carrying neither would total to NaN and print "£NaN" on the statement,
+    // so an absent figure reads as nothing on the card, as a past month does.
+    if (live) {
+      return {
+        ...card,
+        snapshots,
+        balancePence: Number.isInteger(card.balancePence) ? card.balancePence : 0,
+        pendingPence: Number.isInteger(card.pendingPence) ? card.pendingPence : 0,
+        missingSnapshot: false,
+      };
+    }
     return { ...card, snapshots, balancePence: 0, pendingPence: 0, missingSnapshot: true };
   });
 }

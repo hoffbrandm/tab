@@ -1397,6 +1397,75 @@ test("Out splits into the cash side and the card side", () => {
   assert.equal(flow.cashOutPence + flow.cardPlanPence, flow.outPence);
 });
 
+test("the month knows what is left to spend and where it lands", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const flow = cashflowForMonth(household, "2026-08", today);
+
+  // The allowance on the last day is the whole card plan, the whole reserve,
+  // and exceptions. Today's allowance is that same total pro-rated, so the gap
+  // between them is what the month still has left to spend.
+  assert.equal(flow.fullMonthAllowancePence, flow.cardPlanPence + flow.reservePence + flow.exceptionsPence);
+  assert.equal(flow.remainingPlanPence, flow.fullMonthAllowancePence - flow.allowanceSoFarPence);
+  assert.equal(flow.monthPhase, "current");
+  assert.equal(flow.daysLeft, 21);
+  assert.equal(flow.perDayLeftPence, Math.round(flow.remainingPlanPence / 21));
+
+  // Spend exactly the rest of the plan and the cards finish here; the gap
+  // against the whole month's allowance is the ahead/behind figure, unchanged.
+  assert.equal(flow.forecastCardsPence, flow.actualOnCardsPence + flow.remainingPlanPence);
+  assert.equal(flow.fullMonthAllowancePence - flow.forecastCardsPence, flow.overUnderPence);
+
+  // The headline is the plan's saving carried forward with how today stands.
+  assert.equal(flow.forecastSavingPence, flow.savingsPence + flow.overUnderPence);
+  assert.equal(flow.forecastSavingPence, flow.totalSavingsPence);
+});
+
+test("a card carrying no figure at all reads as nothing, never as NaN", () => {
+  const hh = { ...emptyHousehold(), cards: [{ id: "c-1", name: "Card one" }] };
+  const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-10T12:00:00Z"));
+  assert.equal(flow.cardBalancesPence, 0);
+  assert.equal(flow.actualOnCardsPence, 0);
+  assert.equal(formatMoney(flow.totalSavingsPence), "£0.00");
+});
+
+test("a month gone has nothing left to spend; one ahead has all of it", () => {
+  const today = new Date("2026-08-10T12:00:00Z");
+  const gone = cashflowForMonth(household, "2026-07", today);
+  assert.equal(gone.monthPhase, "past");
+  assert.equal(gone.daysLeft, 0);
+  assert.equal(gone.perDayLeftPence, 0);
+
+  const ahead = cashflowForMonth(household, "2026-09", today);
+  assert.equal(ahead.monthPhase, "future");
+  assert.equal(ahead.daysLeft, 30);
+  // Nothing has happened yet, so the whole month's allowance is still to come.
+  assert.equal(ahead.allowanceSoFarPence, 0);
+  assert.equal(ahead.remainingPlanPence, ahead.fullMonthAllowancePence);
+});
+
+test("ticking a weekly takes it off what is left to spend, pound for pound", () => {
+  const hh = {
+    ...emptyHousehold(),
+    weeklyRules: [{
+      id: "food",
+      name: "Food shop",
+      amountPence: 7000,
+      cadence: "times",
+      timesPerMonth: 4,
+      tickedKeys: [],
+    }],
+  };
+  const today = new Date("2026-08-10T12:00:00Z");
+  const before = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(before.remainingPlanPence, 28000);
+
+  toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
+  const after = cashflowForMonth(hh, "2026-08", today);
+  assert.equal(after.remainingPlanPence, 21000);
+  // The plan itself has not moved — only how much of it is still ahead.
+  assert.equal(after.fullMonthAllowancePence, before.fullMonthAllowancePence);
+});
+
 test("first working day is day 1 rolled forward, not a rule of its own", () => {
   assert.deepEqual(DUE_ROLLS, ["calendar", "nextWorking"]);
   // 2026-08-01 is a Saturday, so both spellings land on Monday the 3rd.
