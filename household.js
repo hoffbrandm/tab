@@ -729,7 +729,15 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const daysLeft = Math.max(0, days - dayOfMonth);
   const fullMonthAllowancePence = cardPlanPence + reservePence + exceptionsPence;
   const remainingPlanPence = fullMonthAllowancePence - allowanceSoFarPence;
-  const perDayLeftPence = daysLeft > 0 && remainingPlanPence > 0 ? Math.round(remainingPlanPence / daysLeft) : 0;
+  // What is still to come splits in two, and the halves are not the same kind
+  // of money. Weeklies, card monthlies and planned one-offs are expected to be
+  // paid — they are not a lever, and treating them as spending money left says
+  // there is more room in the month than there is. The reserve is the part that
+  // is genuinely chosen day to day, so it is the only half worth a per-day
+  // figure. The two add back to the whole remaining plan.
+  const committedToComePence = cardPlanPence - (tickedWeeklyPence + dueCardMonthliesPence + purchasedOneOffsPence);
+  const reserveLeftPence = reservePence - reserveSpentPence;
+  const perDayReserveLeftPence = daysLeft > 0 && reserveLeftPence > 0 ? Math.round(reserveLeftPence / daysLeft) : 0;
   // Where the month lands: the plan's saving carried forward with however far
   // ahead or behind today already is. Same number as Total savings — named for
   // the question it answers rather than for the sheet row it came from.
@@ -743,7 +751,9 @@ export function cashflowForMonth(household, month, today = new Date()) {
     daysLeft,
     fullMonthAllowancePence,
     remainingPlanPence,
-    perDayLeftPence,
+    committedToComePence,
+    reserveLeftPence,
+    perDayReserveLeftPence,
     forecastSavingPence,
     forecastCardsPence,
     daysInMonth: days,

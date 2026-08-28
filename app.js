@@ -465,12 +465,32 @@ function overUnderAmount(flow) {
   return formatMoney(Math.abs(flow.overUnderPence));
 }
 
-function remainingLabel(flow) {
-  return flow.remainingPlanPence < 0 ? "Over the month's plan" : "Left to spend";
+/**
+ * What is still to come is two kinds of money, and one row called "left to
+ * spend" made them look like one. Weeklies and monthlies are expected to be
+ * paid, so counting them as spending room says the month has more slack in it
+ * than it has; the reserve is the half that is actually chosen day by day.
+ */
+function committedLabel(flow) {
+  if (flow.committedToComePence < 0) return "Paid beyond the plan";
+  return flow.monthPhase === "past" ? "Never came out" : "Still to be paid";
 }
 
-function remainingAmount(flow) {
-  return formatMoney(Math.abs(flow.remainingPlanPence));
+function committedAmount(flow) {
+  return formatMoney(Math.abs(flow.committedToComePence));
+}
+
+function reserveLeftLabel(flow) {
+  return flow.reserveLeftPence < 0 ? "Day money overspent" : "Day money left";
+}
+
+function reserveLeftAmount(flow) {
+  return formatMoney(Math.abs(flow.reserveLeftPence));
+}
+
+/** A household with no reserve set has no day money to talk about. */
+function hasDayMoney(flow) {
+  return flow.reserveTotalPence > 0;
 }
 
 function todayHeading(flow) {
@@ -539,15 +559,51 @@ function positionSummary(flow) {
     : flow.overUnderPence > 0
       ? `The cards are ${formatMoney(flow.overUnderPence)} below what the plan allows by today`
       : `The cards are exactly where the plan allows by today`;
-  if (flow.remainingPlanPence <= 0) {
-    return `${standing}, ${daysLeftPhrase(flow)}. The month's plan is already spent, so every pound from here comes straight off the ${forecast} that ${label} ends up saving.`;
+  const versus = flow.overUnderPence < 0
+    ? ` — ${formatMoney(-flow.overUnderPence)} less than planned`
+    : flow.overUnderPence > 0
+      ? `, ${formatMoney(flow.overUnderPence)} more than planned`
+      : "";
+  // The close only tells you to hold to something when there is something to
+  // hold to. With no day money left the rest of the month is not a choice, so
+  // it says what lands rather than handing over an instruction to nobody.
+  const lever = hasDayMoney(flow) && flow.reserveLeftPence > 0;
+  const close = nothingLeftToCome(flow)
+    ? `Nothing more is due, so ${label} lands on ${forecast}${versus}.`
+    : lever
+      ? `Hold that and ${label} saves ${forecast}${versus}.`
+      : `If that is all that lands, ${label} saves ${forecast}${versus}.`;
+  const nudge = flow.overUnderPence < 0 && lever ? " Spend under it to pull some back." : "";
+  return `${standing}, ${daysLeftPhrase(flow)}. ${stillToComeSentence(flow)} ${close}${nudge}`;
+}
+
+function nothingLeftToCome(flow) {
+  return flow.committedToComePence <= 0 && (!hasDayMoney(flow) || flow.reserveLeftPence <= 0);
+}
+
+/**
+ * The middle sentence, and the point of the whole screen: the weeklies and
+ * monthlies still to come are going to be paid whatever happens, so the only
+ * figure worth acting on is the day money left. Saying "keep the rest under
+ * £496.77" put the two together and made a committed bill look like room.
+ */
+function stillToComeSentence(flow) {
+  const committed = flow.committedToComePence > 0
+    ? `${formatMoney(flow.committedToComePence)} of weeklies and monthlies is still expected to be paid`
+    : "";
+  if (!hasDayMoney(flow)) {
+    return committed ? `${committed[0].toUpperCase()}${committed.slice(1)}.` : "Everything planned has been paid.";
   }
-  const perDay = flow.daysLeft > 0 ? ` (about ${formatMoney(flow.perDayLeftPence)} a day)` : "";
-  const room = `Keep the rest under ${formatMoney(flow.remainingPlanPence)}${perDay}`;
-  const close = flow.overUnderPence < 0
-    ? `${room} and ${label} still saves ${forecast} — ${formatMoney(-flow.overUnderPence)} less than planned. Spend under that to pull it back.`
-    : `${room} and ${label} saves ${forecast}${flow.overUnderPence > 0 ? `, ${formatMoney(flow.overUnderPence)} more than planned` : ""}.`;
-  return `${standing}, ${daysLeftPhrase(flow)}. ${close}`;
+  const perDay = flow.daysLeft > 0 && flow.perDayReserveLeftPence > 0
+    ? ` (about ${formatMoney(flow.perDayReserveLeftPence)} a day)`
+    : "";
+  const day = flow.reserveLeftPence > 0
+    ? `the ${formatMoney(flow.reserveLeftPence)} of day money left${perDay} is the part you choose`
+    : flow.reserveLeftPence < 0
+      ? `the day money is ${formatMoney(-flow.reserveLeftPence)} overspent already`
+      : `the day money for the month is gone`;
+  if (!committed) return `Everything planned has been paid, and ${day}.`;
+  return `${committed[0].toUpperCase()}${committed.slice(1)}; ${day}.`;
 }
 
 /**
@@ -617,8 +673,12 @@ function statementSection(flow) {
             <strong class="${trackClass(flow.overUnderPence, flow.cardCheckKnown)}" data-statement-check>${overUnderAmount(flow)}</strong>
           </div>
           ${flow.monthPhase === "past" ? "" : `<div class="statement-row line">
-            <span data-statement-left-label>${esc(remainingLabel(flow))}</span>
-            <strong data-statement-left>${remainingAmount(flow)}</strong>
+            <span data-statement-committed-label>${esc(committedLabel(flow))}</span>
+            <strong data-statement-committed>${committedAmount(flow)}</strong>
+          </div>`}
+          ${flow.monthPhase === "past" || !hasDayMoney(flow) ? "" : `<div class="statement-row line">
+            <span data-statement-day-label>${esc(reserveLeftLabel(flow))}</span>
+            <strong class="${trackClass(flow.reserveLeftPence)}" data-statement-day>${reserveLeftAmount(flow)}</strong>
           </div>`}
           <p class="statement-note" data-statement-note>${esc(statementNote(flow))}</p>
         </div>`}
@@ -655,8 +715,10 @@ function refreshStatement() {
   set("[data-statement-card-balance]", formatMoney(flow.actualOnCardsPence));
   set("[data-statement-check-label]", overUnderLabel(flow));
   set("[data-statement-check]", overUnderAmount(flow), trackClass(flow.overUnderPence, flow.cardCheckKnown));
-  set("[data-statement-left-label]", remainingLabel(flow));
-  set("[data-statement-left]", remainingAmount(flow));
+  set("[data-statement-committed-label]", committedLabel(flow));
+  set("[data-statement-committed]", committedAmount(flow));
+  set("[data-statement-day-label]", reserveLeftLabel(flow));
+  set("[data-statement-day]", reserveLeftAmount(flow), trackClass(flow.reserveLeftPence));
   set("[data-statement-note]", statementNote(flow));
 }
 

@@ -1408,7 +1408,17 @@ test("the month knows what is left to spend and where it lands", () => {
   assert.equal(flow.remainingPlanPence, flow.fullMonthAllowancePence - flow.allowanceSoFarPence);
   assert.equal(flow.monthPhase, "current");
   assert.equal(flow.daysLeft, 21);
-  assert.equal(flow.perDayLeftPence, Math.round(flow.remainingPlanPence / 21));
+
+  // What is still to come splits into money that is going to be paid whatever
+  // happens and money that is actually chosen, and the halves add back exactly.
+  assert.equal(
+    flow.committedToComePence,
+    flow.cardPlanPence - (flow.tickedWeeklyPence + flow.dueCardMonthliesPence + flow.purchasedOneOffsPence),
+  );
+  assert.equal(flow.reserveLeftPence, flow.reservePence - flow.reserveSpentPence);
+  assert.equal(flow.committedToComePence + flow.reserveLeftPence, flow.remainingPlanPence);
+  // Only the chosen half gets a per-day figure; a committed bill is not a rate.
+  assert.equal(flow.perDayReserveLeftPence, flow.reserveLeftPence > 0 ? Math.round(flow.reserveLeftPence / 21) : 0);
 
   // Spend exactly the rest of the plan and the cards finish here; the gap
   // against the whole month's allowance is the ahead/behind figure, unchanged.
@@ -1418,6 +1428,24 @@ test("the month knows what is left to spend and where it lands", () => {
   // The headline is the plan's saving carried forward with how today stands.
   assert.equal(flow.forecastSavingPence, flow.savingsPence + flow.overUnderPence);
   assert.equal(flow.forecastSavingPence, flow.totalSavingsPence);
+});
+
+test("a weekly not yet ticked is money owed, not room to spend", () => {
+  const hh = {
+    ...emptyHousehold(),
+    weeklyRules: [{ id: "food", name: "Food shop", amountPence: 40000, cadence: "times", timesPerMonth: 4, tickedKeys: ["2026-08:1"] }],
+    monthlies: [{ id: "m-1", name: "Subs", amountPence: 10000, dueDay: 25, paidFrom: "card" }],
+    reserves: [{ id: "r-1", name: "£30 a day", amountPence: 93000 }],
+  };
+  const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-10T12:00:00Z"));
+  // Three unticked shops and a monthly not yet due: all of it is going to be
+  // paid, so none of it is spending room.
+  assert.equal(flow.committedToComePence, 130000);
+  // The reserve is the half that is actually chosen: 21 of 31 days still to go.
+  assert.equal(flow.reserveSpentPence, 30000);
+  assert.equal(flow.reserveLeftPence, 63000);
+  assert.equal(flow.perDayReserveLeftPence, 3000);
+  assert.equal(flow.committedToComePence + flow.reserveLeftPence, flow.remainingPlanPence);
 });
 
 test("a card carrying no figure at all reads as nothing, never as NaN", () => {
@@ -1433,7 +1461,9 @@ test("a month gone has nothing left to spend; one ahead has all of it", () => {
   const gone = cashflowForMonth(household, "2026-07", today);
   assert.equal(gone.monthPhase, "past");
   assert.equal(gone.daysLeft, 0);
-  assert.equal(gone.perDayLeftPence, 0);
+  assert.equal(gone.perDayReserveLeftPence, 0);
+  // A month gone has had its whole reserve allowed, so none of it is left.
+  assert.equal(gone.reserveLeftPence, 0);
 
   const ahead = cashflowForMonth(household, "2026-09", today);
   assert.equal(ahead.monthPhase, "future");
