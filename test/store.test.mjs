@@ -22,6 +22,24 @@ const expense = {
   myShareAdjustmentPence: 0,
 };
 
+test("a reserve keeps where it is spent across a gist round-trip", () => {
+  const store = parseStore({
+    version: 1, friends: [], transactions: [],
+    household: { reserves: [
+      { id: "daily", name: "£30 a day", amountPence: 100000, paidFrom: "card" },
+      { id: "cleaner", name: "Cleaner", amountPence: 20000, paidFrom: "cash" },
+      { id: "legacy", name: "Nails", amountPence: 3500 },
+    ] },
+  });
+  assert.equal(store.household.reserves[0].paidFrom, "card");
+  assert.equal(store.household.reserves[1].paidFrom, "cash");
+  // An older gist has no field; card keeps the daily envelope in the allowance.
+  assert.equal(store.household.reserves[2].paidFrom, "card");
+  // And it survives being written back out and read again.
+  assert.deepEqual(parseStore(JSON.parse(JSON.stringify(store))).household.reserves, store.household.reserves);
+});
+
+
 test("empty store is the current document shape", () => {
   assert.deepEqual(emptyStore(), { version: 1, friends: [], transactions: [], household: emptyHousehold() });
 });

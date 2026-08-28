@@ -30,6 +30,7 @@ import {
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
+  reserveIsOnCard,
   outBreakdownForMonth,
   plannedMonthTotals,
   payslipAmountForCategory,
@@ -1573,11 +1574,14 @@ function pendingForm() {
 }
 
 function reserveLineDetail(item) {
+  // Where it is spent decides whether it enters the card allowance, so the list
+  // says which side each line is on rather than leaving it to the edit screen.
+  const where = reserveIsOnCard(item) ? "On a card" : "Cash";
   const name = String(item?.name || "").toLowerCase();
   if (/\ba day\b|daily|thousand|envelope|float/.test(name)) {
-    return "Daily envelope / monthly thousand · no tick";
+    return `Daily envelope / monthly thousand · ${where}`;
   }
-  return "Standing monthly out · no tick";
+  return `Standing monthly out · ${where}`;
 }
 
 function reserveForm() {
@@ -1586,7 +1590,11 @@ function reserveForm() {
   return `<form id="reserve-form">${modalHead(adding ? "Cash in reserve" : "Reserve", adding ? "Daily envelope / monthly thousand" : "Edit reserve")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="£30 a day" /></label>
     ${moneyLabel("Monthly amount", "amount", item.amountPence)}
-    <p class="helper">This is the daily envelope and the monthly thousand — the same line. Type the amount; it is not stored in the app. Cleaner and nails are siblings. Insurance saving stays on Annual as year ÷ 12.</p>
+    <label>Spent on<select name="paidFrom">
+      <option value="card"${reserveIsOnCard(item) ? " selected" : ""}>A card</option>
+      <option value="cash"${reserveIsOnCard(item) ? "" : " selected"}>Cash</option>
+    </select></label>
+    <p class="helper">This is the daily envelope and the monthly thousand — the same line. Type the amount; it is not stored in the app. Cleaner and nails are siblings — set those to cash, because only what is spent on a card belongs in the card allowance. Insurance saving stays on Annual as year ÷ 12.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save reserve" : "Add reserve"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-reserve">Delete reserve</button>' : ""}
@@ -2677,6 +2685,7 @@ async function saveReserve(event) {
     build: (data) => ({
       name: requireName(data.get("name"), "name"),
       amountPence: requireMoney(data.get("amount"), "amount"),
+      paidFrom: data.get("paidFrom") === "cash" ? "cash" : "card",
     }),
   });
 }

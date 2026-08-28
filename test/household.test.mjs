@@ -4,6 +4,7 @@ import { formatMoney } from "../calculations.js";
 import {
   ANI_LIMIT_PENCE,
   outBreakdownForMonth,
+  reserveIsOnCard,
   aniFromHousehold,
   aniProjection,
   annualReservePence,
@@ -1480,6 +1481,51 @@ test("the Out breakdown names every line and ties to the totals", () => {
   assert.equal(food.count, 4);
   assert.equal(food.eachPence, 40000);
   assert.equal(food.amountPence, 160000);
+});
+
+test("only a reserve spent on a card enters the card allowance", () => {
+  // The sheet pro-rates its "£30 a day" row into Allowed Expenses and leaves
+  // cleaner and nails out of it, because those are not card spending. Pro-rating
+  // all three put the card allowance ~£197 over the sheet's on day 26 of 31.
+  const hh = {
+    ...emptyHousehold(),
+    reserves: [
+      { id: "cleaner", name: "Cleaner", amountPence: 20000, paidFrom: "cash" },
+      { id: "nails", name: "Nails", amountPence: 3500, paidFrom: "cash" },
+      { id: "daily", name: "£30 a day", amountPence: 100000, paidFrom: "card" },
+    ],
+  };
+  const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
+
+  // All three still leave the household, so Out and the saving carry all three.
+  assert.equal(flow.reservePence, 123500);
+  assert.equal(flow.outPence, 123500);
+  assert.equal(flow.savingsPence, -123500);
+  // But only the daily envelope is card money, and only it pro-rates.
+  assert.equal(flow.cardReservePence, 100000);
+  assert.equal(flow.cashReservePence, 23500);
+  assert.equal(flow.cashOutPence, 23500);
+  assert.equal(flow.cardPlanPence, 100000);
+  assert.equal(flow.reserveSpentPence, Math.round((100000 * 26) / 31));
+  assert.equal(flow.allowanceSoFarPence, 83871);
+
+  // Absent means card, so an older gist keeps the daily envelope working.
+  assert.equal(reserveIsOnCard({ name: "£30 a day" }), true);
+  assert.equal(reserveIsOnCard({ name: "Cleaner", paidFrom: "cash" }), false);
+  const legacy = cashflowForMonth(
+    { ...emptyHousehold(), reserves: [{ id: "d", name: "£30 a day", amountPence: 100000 }] },
+    "2026-08",
+    new Date("2026-08-26T12:00:00Z"),
+  );
+  assert.equal(legacy.cardReservePence, 100000);
+  assert.equal(legacy.reserveSpentPence, 83871);
+
+  // The breakdown puts each on the side it is actually spent from.
+  const out = outBreakdownForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
+  assert.deepEqual(out.cash.map((r) => r.name), ["Cleaner", "Nails"]);
+  assert.deepEqual(out.card.map((r) => r.name), ["£30 a day"]);
+  assert.equal(out.cashTotalPence, flow.cashOutPence);
+  assert.equal(out.cardTotalPence, flow.cardPlanPence);
 });
 
 test("a weekly not yet ticked is money owed, not room to spend", () => {
