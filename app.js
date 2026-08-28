@@ -1279,7 +1279,8 @@ function moreScreen() {
 function payslipKindLabel(kind) {
   return {
     bonus: "Extra",
-    benefits: "Extra",
+    benefits: "Taxed, never paid",
+    allowance: "Cash, and taxed",
     extra: "Extra",
     sacrifice: "Deduction",
     tax: "Deduction",
@@ -1591,8 +1592,9 @@ function reserveForm() {
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="£30 a day" /></label>
     ${moneyLabel("Monthly amount", "amount", item.amountPence)}
     <label>Spent on<select name="paidFrom">
-      <option value="card"${reserveIsOnCard(item) ? " selected" : ""}>A card</option>
-      <option value="cash"${reserveIsOnCard(item) ? "" : " selected"}>Cash</option>
+      <option value=""${item.paidFrom ? "" : " selected"}>Work it out from the name</option>
+      <option value="card"${item.paidFrom === "card" ? " selected" : ""}>A card</option>
+      <option value="cash"${item.paidFrom === "cash" ? " selected" : ""}>Cash</option>
     </select></label>
     <p class="helper">This is the daily envelope and the monthly thousand — the same line. Type the amount; it is not stored in the app. Cleaner and nails are siblings — set those to cash, because only what is spent on a card belongs in the card allowance. Insurance saving stays on Annual as year ÷ 12.</p>
     <p class="form-error" id="form-error"></p>
@@ -1607,7 +1609,7 @@ function payslipCategoryForm() {
   return `<form id="payslip-category-form">${modalHead(item.id ? "Category" : "New category", item.id ? "Edit category" : "Add a category")}
     <label>Name<input required maxlength="80" name="label" value="${esc(item.label)}" placeholder="Bonus, tax, gym…" /></label>
     <label>On the slip<select name="kind">
-      <option value="extra" ${kind === "extra" || kind === "bonus" || kind === "benefits" ? "selected" : ""}>Extra — adds to net</option>
+      <option value="extra" ${kind === "extra" || kind === "bonus" || kind === "benefits" || kind === "allowance" ? "selected" : ""}>Extra — adds to net</option>
       <option value="deduction" ${kind === "deduction" || kind === "sacrifice" || kind === "tax" || kind === "ni" ? "selected" : ""}>Deduction — leaves net</option>
       <option value="parental" ${kind === "parental" ? "selected" : ""}>On the slip — not in net</option>
     </select></label>
@@ -1814,6 +1816,7 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
     ...slip,
     bonusPence: 0,
     benefitsPence: 0,
+    allowancePence: 0,
     salarySacrificePensionPence: 0,
     reliefAtSourcePensionPence: 0,
     grossBeforeSacrifice: Boolean(slip?.grossBeforeSacrifice),
@@ -1827,6 +1830,7 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
     const amount = raw == null ? payslipAmountForCategory(slip, category) : (parseMoneyAllowZero(raw) || 0);
     if (category.kind === "bonus") next.bonusPence = amount;
     else if (category.kind === "benefits") next.benefitsPence = amount;
+    else if (category.kind === "allowance") next.allowancePence = amount;
     else if (category.kind === "sacrifice") next.salarySacrificePensionPence = amount;
     else if (category.kind === "pension") next.reliefAtSourcePensionPence = amount;
     else if (category.kind === "tax") next.taxPence = amount;
@@ -2579,7 +2583,9 @@ async function saveMonthly(event) {
         amountPence: requireMoney(data.get("amount"), "amount"),
         dueDay: dueRoll === "firstWorking" ? (Number(data.get("dueDay")) || 1) : requireDueDay(data.get("dueDay")),
         dueRoll,
-        paidFrom: data.get("paidFrom") === "cash" ? "cash" : "card",
+        ...(data.get("paidFrom") === "cash" || data.get("paidFrom") === "card"
+        ? { paidFrom: data.get("paidFrom") }
+        : {}),
       };
     },
   });
@@ -2685,7 +2691,9 @@ async function saveReserve(event) {
     build: (data) => ({
       name: requireName(data.get("name"), "name"),
       amountPence: requireMoney(data.get("amount"), "amount"),
-      paidFrom: data.get("paidFrom") === "cash" ? "cash" : "card",
+      ...(data.get("paidFrom") === "cash" || data.get("paidFrom") === "card"
+        ? { paidFrom: data.get("paidFrom") }
+        : {}),
     }),
   });
 }
@@ -2700,7 +2708,7 @@ async function savePayslipCategory(event) {
     return showFormError(error.message);
   }
   const existing = modal.item || {};
-  const special = ["bonus", "benefits", "sacrifice", "tax", "ni"].includes(existing.kind);
+  const special = ["bonus", "benefits", "allowance", "sacrifice", "tax", "ni"].includes(existing.kind);
   const kind = special ? existing.kind : (
     data.get("kind") === "extra" ? "extra" : data.get("kind") === "parental" ? "parental" : "deduction"
   );
@@ -2884,6 +2892,7 @@ async function savePayslip(event) {
     grossPence,
     bonusPence: amounts.bonusPence,
     benefitsPence: amounts.benefitsPence,
+    allowancePence: amounts.allowancePence,
     salarySacrificePensionPence: amounts.salarySacrificePensionPence,
     reliefAtSourcePensionPence: amounts.reliefAtSourcePensionPence,
     otherDeductions: amounts.otherDeductions,

@@ -5,6 +5,8 @@ import {
   ANI_LIMIT_PENCE,
   outBreakdownForMonth,
   reserveIsOnCard,
+  looksLikeDailyEnvelope,
+  payslipGrossReadingWarning,
   aniFromHousehold,
   aniProjection,
   annualReservePence,
@@ -1481,6 +1483,60 @@ test("the Out breakdown names every line and ties to the totals", () => {
   assert.equal(food.count, 4);
   assert.equal(food.eachPence, 40000);
   assert.equal(food.amountPence, 160000);
+});
+
+test("a cash allowance is paid and taxed; a benefit in kind is only taxed", () => {
+  // One "Benefits" column cannot mean both. A car allowance reaches the bank
+  // and is taxable; a benefit in kind is taxed but never paid.
+  const base = { salaryPence: 11657300, grossPence: 971442, taxPence: 302445, niPence: 37290 };
+  const allowance = { ...base, allowancePence: 60953 };
+  const benefit = { ...base, benefitsPence: 60953 };
+
+  // The allowance is in net; the benefit is not.
+  assert.equal(payslipNetPence(allowance) - payslipNetPence(benefit), 60953);
+  assert.equal(payslipNetPence(allowance), 971442 + 60953 - 302445 - 37290);
+  // Both are taxable, so both count for the £100k line, by the same amount.
+  assert.equal(payslipAniPence(allowance), payslipAniPence(benefit));
+  assert.equal(payslipAniPence(allowance), 971442 + 60953);
+});
+
+test("gross typed as salary ÷ 12 with an untaken sacrifice is called out", () => {
+  // Nothing catches this unless a net is typed, and left alone it overstates
+  // net by the whole sacrifice every month.
+  const slip = { salaryPence: 12000000, grossPence: 1000000, salarySacrificePensionPence: 151700, taxPence: 234806, niPence: 33716 };
+  assert.match(payslipGrossReadingWarning(slip), /salary ÷ 12/);
+  assert.equal(payslipNetPence(slip), 731478);
+  // Either fix silences it, and both land on the same net.
+  assert.equal(payslipGrossReadingWarning({ ...slip, grossBeforeSacrifice: true }), "");
+  assert.equal(payslipNetPence({ ...slip, grossBeforeSacrifice: true }), 579778);
+  assert.equal(payslipGrossReadingWarning({ ...slip, grossPence: 848300 }), "");
+  assert.equal(payslipNetPence({ ...slip, grossPence: 848300 }), 579778);
+  // No sacrifice, or no salary to compare against, means nothing to warn about.
+  assert.equal(payslipGrossReadingWarning({ ...slip, salarySacrificePensionPence: 0 }), "");
+  assert.equal(payslipGrossReadingWarning({ ...slip, salaryPence: 0 }), "");
+});
+
+test("a reserve with no side recorded reads as the daily envelope or as cash", () => {
+  assert.equal(looksLikeDailyEnvelope("£30 a day"), true);
+  assert.equal(looksLikeDailyEnvelope("Cleaner"), false);
+  // The sheet pro-rates only its daily row, so an unmarked cleaner is cash.
+  assert.equal(reserveIsOnCard({ name: "£30 a day" }), true);
+  assert.equal(reserveIsOnCard({ name: "Cleaner" }), false);
+  assert.equal(reserveIsOnCard({ name: "Nails" }), false);
+  // An explicit choice always wins over the guess, in both directions.
+  assert.equal(reserveIsOnCard({ name: "£30 a day", paidFrom: "cash" }), false);
+  assert.equal(reserveIsOnCard({ name: "Cleaner", paidFrom: "card" }), true);
+
+  // End to end: the sheet's three lines, with nothing marked, split correctly.
+  const hh = { ...emptyHousehold(), reserves: [
+    { id: "c", name: "Cleaner", amountPence: 20000 },
+    { id: "n", name: "Nails", amountPence: 3500 },
+    { id: "d", name: "£30 a day", amountPence: 100000 },
+  ] };
+  const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z"));
+  assert.equal(flow.cardReservePence, 100000);
+  assert.equal(flow.cashReservePence, 23500);
+  assert.equal(flow.allowanceSoFarPence, 83871);
 });
 
 test("only a reserve spent on a card enters the card allowance", () => {

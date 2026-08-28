@@ -33,8 +33,8 @@ test("a reserve keeps where it is spent across a gist round-trip", () => {
   });
   assert.equal(store.household.reserves[0].paidFrom, "card");
   assert.equal(store.household.reserves[1].paidFrom, "cash");
-  // An older gist has no field; card keeps the daily envelope in the allowance.
-  assert.equal(store.household.reserves[2].paidFrom, "card");
+  // An older gist has no field, and absent stays absent so the name decides.
+  assert.equal("paidFrom" in store.household.reserves[2], false);
   // And it survives being written back out and read again.
   assert.deepEqual(parseStore(JSON.parse(JSON.stringify(store))).household.reserves, store.household.reserves);
 });
