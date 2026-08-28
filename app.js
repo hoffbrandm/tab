@@ -30,6 +30,7 @@ import {
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
+  outBreakdownForMonth,
   plannedMonthTotals,
   payslipAmountForCategory,
   masterPayslipCategories,
@@ -722,6 +723,32 @@ function refreshStatement() {
   set("[data-statement-note]", statementNote(flow));
 }
 
+/**
+ * The statement's two Out halves, itemised. Every figure on Home should be
+ * walkable back to the lines that make it, so a total that looks too good can
+ * be checked against the rows rather than taken on trust.
+ */
+function breakdownRow(item) {
+  const detail = item.count ? `${item.count} × ${formatMoney(item.eachPence)}` : item.detail;
+  return `<p><span>${esc(item.name)}${detail ? ` <small>${esc(detail)}</small>` : ""}</span><strong>${formatMoney(item.amountPence)}</strong></p>`;
+}
+
+function breakdownHalf(title, rows, totalPence, note) {
+  return `<div class="breakdown-half">
+    <h3>${esc(title)}<strong>${formatMoney(totalPence)}</strong></h3>
+    ${rows.length ? rows.map(breakdownRow).join("") : `<p class="helper">Nothing here yet.</p>`}
+    ${note ? `<p class="helper">${esc(note)}</p>` : ""}
+  </div>`;
+}
+
+function breakdownSection(flow, breakdown) {
+  return `<div class="breakdown">
+    <p class="helper">In ${formatMoney(flow.incomePence)} less everything below is the planned saving of ${formatMoney(flow.savingsPence)}. Every line the month expects to pay is here, once.</p>
+    ${breakdownHalf("Out of the bank", breakdown.cash, breakdown.cashTotalPence, "Cash monthlies and the monthly share of the annual bills. None of this touches the cards.")}
+    ${breakdownHalf("On to the cards", breakdown.card, breakdown.cardTotalPence, "Card monthlies on their due date, every weekly slot, this month's planned, and the reserve — all of it expected on a card by month end.")}
+  </div>`;
+}
+
 function cashflowScreen() {
   const hh = household();
   const now = new Date();
@@ -742,6 +769,7 @@ function cashflowScreen() {
     month: true,
     extra: statementSection(flow),
     body: `
+      ${homeAccordion("breakdown", "How this adds up", breakdownSection(flow, outBreakdownForMonth(hh, viewMonth, now)))}
       ${homeAccordion("income", "Income", `
         ${incomeLines.length ? incomeLines.map((line) => lineRow({
           edit: "edit-payslip",

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { formatMoney } from "../calculations.js";
 import {
   ANI_LIMIT_PENCE,
+  outBreakdownForMonth,
   aniFromHousehold,
   aniProjection,
   annualReservePence,
@@ -1387,14 +1388,30 @@ test("cash in reserve is allowed a day at a time, not all at once", () => {
   assert.equal(spentSoFarForMonth(hh, "2026-09", today).reserveSpentPence, 0);
 });
 
-test("Out splits into the cash side and the card side", () => {
+test("Out splits by where the money leaves, and the reserve leaves by card", () => {
   const today = new Date("2026-08-10T12:00:00Z");
-  const flow = cashflowForMonth(household, "2026-08", today);
-  // Cash: standing cash monthlies + the annual reserve + cash in reserve.
-  assert.equal(flow.cashOutPence, flow.billsPence + flow.annualReservePence + flow.reservePence);
-  // Card: card monthlies + this month's planned + every weekly slot.
-  assert.equal(flow.cardPlanPence, flow.cardOutPence + flow.oneOffsPence + flow.envelopesMonthlyPence);
+  // The fixture has no reserve, so give it one: the £30 a day is spent on the
+  // cards, and it used to sit on the cash side while pro-rating into the card
+  // allowance — the same £1,000 counted as bank money and as card money.
+  const withReserve = { ...household, reserves: [{ id: "r-1", name: "£30 a day", amountPence: 100000 }] };
+  const flow = cashflowForMonth(withReserve, "2026-08", today);
+  assert.equal(flow.reservePence, 100000);
+
+  // Cash is only what leaves the bank: standing cash monthlies + annual saving.
+  assert.equal(flow.cashOutPence, flow.billsPence + flow.annualReservePence);
+  // Card commitments are what is going to be paid; the reserve rides on top.
+  assert.equal(flow.cardCommitmentsPence, flow.cardOutPence + flow.oneOffsPence + flow.envelopesMonthlyPence);
+  assert.equal(flow.cardPlanPence, flow.cardCommitmentsPence + flow.reservePence);
   assert.equal(flow.cashOutPence + flow.cardPlanPence, flow.outPence);
+
+  // Moving it changes the split, never the totals: Out and the saving hold.
+  const before = cashflowForMonth(household, "2026-08", today);
+  assert.equal(flow.outPence, before.outPence + 100000);
+  assert.equal(flow.savingsPence, before.savingsPence - 100000);
+
+  // The plan's card side and the check's card side are now the same money: the
+  // whole month's allowance is the card plan plus exceptions, nothing re-added.
+  assert.equal(flow.fullMonthAllowancePence, flow.cardPlanPence + flow.exceptionsPence);
 });
 
 test("the month knows what is left to spend and where it lands", () => {
@@ -1404,7 +1421,7 @@ test("the month knows what is left to spend and where it lands", () => {
   // The allowance on the last day is the whole card plan, the whole reserve,
   // and exceptions. Today's allowance is that same total pro-rated, so the gap
   // between them is what the month still has left to spend.
-  assert.equal(flow.fullMonthAllowancePence, flow.cardPlanPence + flow.reservePence + flow.exceptionsPence);
+  assert.equal(flow.fullMonthAllowancePence, flow.cardPlanPence + flow.exceptionsPence);
   assert.equal(flow.remainingPlanPence, flow.fullMonthAllowancePence - flow.allowanceSoFarPence);
   assert.equal(flow.monthPhase, "current");
   assert.equal(flow.daysLeft, 21);
@@ -1413,7 +1430,7 @@ test("the month knows what is left to spend and where it lands", () => {
   // happens and money that is actually chosen, and the halves add back exactly.
   assert.equal(
     flow.committedToComePence,
-    flow.cardPlanPence - (flow.tickedWeeklyPence + flow.dueCardMonthliesPence + flow.purchasedOneOffsPence),
+    flow.cardCommitmentsPence - (flow.tickedWeeklyPence + flow.dueCardMonthliesPence + flow.purchasedOneOffsPence),
   );
   assert.equal(flow.reserveLeftPence, flow.reservePence - flow.reserveSpentPence);
   assert.equal(flow.committedToComePence + flow.reserveLeftPence, flow.remainingPlanPence);
@@ -1428,6 +1445,41 @@ test("the month knows what is left to spend and where it lands", () => {
   // The headline is the plan's saving carried forward with how today stands.
   assert.equal(flow.forecastSavingPence, flow.savingsPence + flow.overUnderPence);
   assert.equal(flow.forecastSavingPence, flow.totalSavingsPence);
+});
+
+test("the Out breakdown names every line and ties to the totals", () => {
+  const hh = {
+    ...emptyHousehold(),
+    monthlies: [
+      { id: "m1", name: "Mortgage", amountPence: 120000, dueDay: 1, paidFrom: "cash" },
+      { id: "m2", name: "Netflix", amountPence: 1500, dueDay: 6, paidFrom: "card" },
+    ],
+    weeklyRules: [{ id: "w", name: "Food shop", amountPence: 40000, cadence: "times", timesPerMonth: 4, tickedKeys: [] }],
+    oneOffs: [{ id: "o", name: "MOT", month: "2026-08", estimatePence: 20000 }],
+    reserves: [{ id: "r", name: "£30 a day", amountPence: 93000 }],
+    annualBills: [{ id: "a", name: "Insurance", amountPence: 120000, month: 3 }],
+  };
+  const today = new Date("2026-08-10T12:00:00Z");
+  const flow = cashflowForMonth(hh, "2026-08", today);
+  const out = outBreakdownForMonth(hh, "2026-08", today);
+
+  // The whole point: the rows add up to the figures on the statement, so a
+  // total that looks wrong can be checked against its lines instead of trusted.
+  assert.equal(out.cashTotalPence, flow.cashOutPence);
+  assert.equal(out.cardTotalPence, flow.cardPlanPence);
+  assert.equal(out.cashTotalPence + out.cardTotalPence, flow.outPence);
+
+  // Cash is the bank side only: the mortgage and the annual saving.
+  assert.deepEqual(out.cash.map((row) => row.name), ["Mortgage", "Annual bills, saved monthly"]);
+  // The card side carries the reserve, because that is where it is spent.
+  assert.deepEqual(out.card.map((row) => row.name), ["Netflix", "Food shop", "MOT", "£30 a day"]);
+  assert.equal(out.card.at(-1).amountPence, 93000);
+
+  // Four identical slots collapse to one row that still shows the working.
+  const food = out.card.find((row) => row.name === "Food shop");
+  assert.equal(food.count, 4);
+  assert.equal(food.eachPence, 40000);
+  assert.equal(food.amountPence, 160000);
 });
 
 test("a weekly not yet ticked is money owed, not room to spend", () => {

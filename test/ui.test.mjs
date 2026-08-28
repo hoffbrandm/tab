@@ -131,6 +131,18 @@ test("regularly cleared lists swipe left to delete; setup entities do not", () =
   assert.doesNotMatch(income, /removeAction/);
 });
 
+test("Home can be walked back to the lines that make each total", () => {
+  assert.match(app, /homeAccordion\("breakdown", "How this adds up"/);
+  assert.match(app, /function breakdownSection/);
+  assert.match(app, /function breakdownHalf/);
+  assert.match(app, /outBreakdownForMonth\(hh, viewMonth, now\)/);
+  assert.match(app, /breakdownHalf\("Out of the bank"/);
+  assert.match(app, /breakdownHalf\("On to the cards"/);
+  // A weekly rule shows its working rather than four identical rows.
+  assert.match(app, /item\.count \? `\$\{item\.count\} × \$\{formatMoney\(item\.eachPence\)\}`/);
+  assert.match(css, /\.breakdown-half/);
+});
+
 test("Home leads with what the month ends up saving, not with a bare total", () => {
   assert.match(app, /data-statement-eyebrow/);
   assert.match(app, /data-statement-forecast/);
