@@ -34,7 +34,7 @@ select:focus-visible {
 .shell {
   width: min(100%, 680px);
   margin: 0 auto;
-  padding: max(22px, env(safe-area-inset-top)) 20px calc(220px + env(safe-area-inset-bottom));
+  padding: max(22px, env(safe-area-inset-top)) 20px calc(96px + env(safe-area-inset-bottom));
   min-height: 100dvh;
 }
 
@@ -211,9 +211,11 @@ select:focus-visible {
   font-size: 1.6rem;
 }
 
-.friend-hero { padding: 36px 2px 20px; }
-.friend-hero h1 { font-size: clamp(2.4rem, 9vw, 3.3rem); }
-.balance-label { margin: 28px 0 4px; color: var(--muted); font-size: 0.84rem; }
+/* Sized like a room title, so a friend's tab and a room read as one app. */
+.friend-hero { padding: 14px 2px 12px; }
+.friend-hero h1 { font-size: clamp(1.6rem, 6.5vw, 2.1rem); }
+.friend-hero .lede { margin: 6px 0 0; font-size: 0.95rem; }
+.balance-label { margin: 18px 0 4px; color: var(--muted); font-size: 0.84rem; }
 .balance-value { font-size: 1.22rem; margin: 0; }
 
 .quick-actions {
@@ -286,17 +288,14 @@ select:focus-visible {
   font-weight: 750;
 }
 .status-chip.saving { color: var(--ink); }
+.status-chip.quiet { background: transparent; padding: 0; min-height: 0; font-weight: 700; }
 .status-chip.error {
   background: var(--red-soft);
   color: var(--red);
 }
 
 .gate { padding-bottom: 40px; }
-.sync-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 10px;
-}
+.topbar-end { display: inline-flex; align-items: center; gap: 10px; }
 .gate-card,
 .account-card {
   border: 1px solid var(--line);
@@ -352,13 +351,13 @@ select:focus-visible {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  align-items: start;
-  margin-bottom: 24px;
+  align-items: center;
+  margin-bottom: 20px;
 }
 .modal-head h2 {
   margin: 0;
-  font-size: 1.7rem;
-  letter-spacing: -0.045em;
+  font-size: 1.45rem;
+  letter-spacing: -0.03em;
 }
 .close {
   border: 0;
@@ -372,12 +371,28 @@ select:focus-visible {
 }
 .modal form { display: grid; gap: 17px; }
 
+/* Block, not grid. As a grid every child became its own row, so the inline
+   "optional" marker dropped onto a line of its own and every optional field
+   stood 23px taller than it needed to, reading as a field in its own right. */
 label, fieldset {
-  display: grid;
-  gap: 7px;
+  display: block;
   font-weight: 740;
   font-size: 0.87rem;
 }
+label > input,
+label > select,
+label > textarea,
+label > .money-input,
+fieldset > input,
+fieldset > select {
+  /* Block so a narrow control — a day, a month — still starts its own line
+     instead of sitting beside its label. */
+  display: block;
+  margin-top: 7px;
+}
+/* The segmented control lays itself out; it needs the spacing, not the box. */
+fieldset > .segmented { margin-top: 7px; }
+.check-row > input { display: inline-block; margin-top: 0; }
 
 /* A month or a day holds a handful of characters. Stretching it the width of
    the sheet made it read as a text field and left the value adrift. */
@@ -435,6 +450,10 @@ select { appearance: auto; }
   font-size: 1.22rem;
   font-weight: 750;
 }
+/* An empty amount was set in the same bold as a typed one, so a placeholder
+   0.00 read as a figure someone had entered. */
+input::placeholder { color: #9a9a93; font-weight: 500; }
+.money-input input::placeholder { font-weight: 600; }
 
 fieldset { padding: 0; border: 0; }
 legend { padding: 0; margin-bottom: 7px; }
@@ -615,6 +634,7 @@ legend { padding: 0; margin-bottom: 7px; }
 .room-help > summary::-webkit-details-marker { display: none; }
 .room-help > summary::after { content: " ›"; }
 .room-help[open] > summary::after { content: " ⌄"; }
+.form-help { margin: 4px 0 2px; }
 .room-help p {
   margin: 8px 0 0;
   color: var(--muted);

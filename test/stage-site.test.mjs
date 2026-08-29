@@ -3,10 +3,25 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { entryModuleOf, moduleGraphFrom, relativeImportsOf, NEVER_PUBLISH, STATIC_ASSETS } from "../stage-site.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFileSync(join(root, name), "utf8");
+
+test("every published module parses", () => {
+  // The rest of the suite reads app.js as text, so a module that does not parse
+  // passes every test and fails in the browser. Nothing else catches it: only
+  // the browser ever executes these files.
+  const modules = moduleGraphFrom(entryModuleOf(read("index.html")), read);
+  assert.ok(modules.includes("app.js"));
+  for (const name of modules) {
+    assert.doesNotThrow(
+      () => execFileSync(process.execPath, ["--check", join(root, name)], { stdio: "pipe" }),
+      `${name} does not parse`,
+    );
+  }
+});
 
 test("the entry module is read off index.html, not assumed", () => {
   assert.equal(entryModuleOf(read("index.html")), "app.js");

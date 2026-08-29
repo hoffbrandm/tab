@@ -139,6 +139,64 @@ test("a weekly says which day of the month allows it", () => {
   assert.match(app, /not yet allowed/);
 });
 
+test("a sheet opens with one title, and its rules fold away like a room's", () => {
+  // Every modal led with an eyebrow saying what the title said underneath —
+  // "NEW MONTHLY" over "Add a monthly" — and stacked its explanation above the
+  // submit button, where it is re-read every time the sheet opens.
+  assert.match(app, /function modalHead\(title\) \{/);
+  assert.doesNotMatch(app, /modalHead\([^)]*,[^)]*\)/);
+  assert.match(app, /function formHelp\(html\)/);
+  assert.match(app, /details class="room-help form-help"/);
+  assert.match(css, /\.form-help/);
+  // The eyebrow survives only on the front door, where it is the product's name
+  // rather than a repeat of the heading below it.
+  assert.equal((app.match(/class="eyebrow"/g) || []).length, 1);
+});
+
+test("an optional field is one line, and an empty amount looks empty", () => {
+  // label was a grid, so its inline "optional" marker became a row of its own:
+  // every optional field stood 23px taller and the marker read as a field.
+  assert.match(rule("label, fieldset"), /display:\s*block/);
+  assert.doesNotMatch(rule("label, fieldset"), /display:\s*grid/);
+  assert.match(css, /label > \.money-input,/);
+  assert.match(css, /\.check-row > input \{ display: inline-block/);
+  // Two controls lay themselves out and must not be given a box: a checkbox
+  // sits beside its words, and a segmented control is a row of choices.
+  assert.match(css, /fieldset > \.segmented \{ margin-top: 7px; \}/);
+  assert.match(css, /\n\.segmented \{[^}]*grid-template-columns:\s*1fr 1fr/);
+  // And a placeholder 0.00 was set in the same bold as a typed figure.
+  assert.match(rule("input::placeholder"), /font-weight:\s*500/);
+});
+
+test("sync status sits in the top bar and only speaks when it has something to say", () => {
+  // "Saved to a private gist" took a row of its own on every screen to report
+  // that nothing had happened.
+  assert.doesNotMatch(app, /class="sync-row"/);
+  assert.doesNotMatch(css, /\.sync-row/);
+  assert.match(app, /class="status-chip quiet" data-sync-chip/);
+  assert.match(app, /class="topbar-end"/);
+  assert.match(css, /\.topbar-end/);
+  // The chip is still one element, so the in-place refresh still finds it.
+  assert.match(app, /document\.querySelector\("\[data-sync-chip\]"\)/);
+});
+
+test("an empty household is asked for what a month needs, not shown a table of dashes", () => {
+  assert.match(app, /if \(!householdHasData\(hh\)\) \{/);
+  const start = app.slice(app.indexOf("if (!householdHasData(hh))"), app.indexOf('extra: statementSection(flow)'));
+  assert.match(start, /sectionHead\("Start here"\)/);
+  for (const action of ["add-payslip", "add-monthly", "edit-per-diem"]) {
+    assert.match(start, new RegExp(`edit: "${action}"`), `${action} should be offered on a fresh household`);
+  }
+});
+
+test("a friend's running balance is a total, not the row's own sentence again", () => {
+  // "Ben owes you £42.00" sat beside "Ben owes £42.00" — the same fact twice.
+  assert.match(app, /function runningBalanceLabel/);
+  assert.match(app, /runs to \$\{formatMoney\(Math\.abs\(balancePence\)\)\}/);
+  const row = app.slice(app.indexOf("function transactionRow"), app.indexOf("function renderModal"));
+  assert.doesNotMatch(row, /balanceText\(friend\.name, balancePence\)/);
+});
+
 test("regularly cleared lists swipe left to delete; setup entities do not", () => {
   assert.match(app, /removeAction: "remove-oneoff"/);
   assert.match(app, /removeAction: "remove-monthly"/);

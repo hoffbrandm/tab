@@ -17,6 +17,7 @@ import {
   emptyHousehold,
   exceptionsForMonth,
   exceptionsOutsideMonth,
+  householdHasData,
   setAsidesForMonth,
   setAsidesOutsideMonth,
   giftAidGrossPence,
@@ -327,19 +328,24 @@ function isLocalHost() {
   return location.hostname === "127.0.0.1" || location.hostname === "localhost";
 }
 
+/**
+ * Status, not reassurance. "Saved to a private gist" took a row of its own on
+ * every screen to say that nothing had happened; at rest the chip is a quiet
+ * word in the top bar, and it only grows when there is something to say.
+ */
 function syncChip() {
-  if (localSession) return `<span class="status-chip" data-sync-chip>This session only — not a gist</span>`;
   if (sync.name === "saving") return `<span class="status-chip saving" data-sync-chip>Saving…</span>`;
   if (sync.name === "error") {
     return `<button class="status-chip error" data-sync-chip data-action="retry-sync" type="button">${esc(sync.message || "Could not save")}</button>`;
   }
-  return `<span class="status-chip" data-sync-chip>Saved to a private gist</span>`;
+  if (localSession) return `<span class="status-chip quiet" data-sync-chip title="This session only. Nothing is written to a gist.">Local</span>`;
+  return `<span class="status-chip quiet" data-sync-chip title="Saved to your private gist.">Saved</span>`;
 }
 
 function errorScreen(message, actionLabel, action) {
   return `<section class="shell gate">
     <header class="topbar"><span class="wordmark">TAB</span></header>
-    <div class="intro"><p class="eyebrow">Tab</p><h1>Couldn’t open the household.</h1><p class="lede">${esc(message)}</p></div>
+    <div class="intro"><h1>Couldn’t open the household.</h1><p class="lede">${esc(message)}</p></div>
     <button class="primary wide" data-action="${action}">${esc(actionLabel)}</button>
   </section>`;
 }
@@ -382,9 +388,8 @@ function shell({ title, lede, help = "", extra = "", body, month = false, back =
     <header class="topbar">
       ${back ? `<button class="back" data-action="go" data-screen="${back}" aria-label="Back">‹</button>` : `<a class="wordmark" href="#/home" data-action="go" data-screen="home">TAB</a>`}
       ${back ? `<a class="wordmark" href="#/home" data-action="go" data-screen="home">TAB</a>` : `<span></span>`}
-      <span></span>
+      ${syncChip()}
     </header>
-    <div class="sync-row">${syncChip()}</div>
     ${month ? monthSwitcher() : ""}
     ${title ? `<div class="intro compact">
       <h1>${esc(title)}</h1>
@@ -822,6 +827,26 @@ function cashflowScreen() {
   const otherSetAsideCount = setAsidesOutsideMonth(hh, viewMonth).length;
   const otherPlannedCount = oneOffsOutsideMonth(hh, viewMonth).length;
   const incomeLines = flow.incomeLines || [];
+
+  // A household with nothing in it produced a full statement of em-dashes under
+  // "on track to save £0.00", which is a confident answer to a question nobody
+  // has asked yet. Say what the month needs instead.
+  if (!householdHasData(hh)) {
+    return shell({
+      title: "Home.",
+      lede: "Nothing in the household yet.",
+      month: true,
+      body: `
+        <section class="block">
+          ${sectionHead("Start here")}
+          <p class="helper">Three things make a month. Add them in any order and Home fills itself in.</p>
+          ${lineRow({ edit: "add-payslip", id: "start-payslip", title: "A payslip", detail: "Net pay that lands this month is the month's income", amount: `<span class="line-chevron" aria-hidden="true">›</span>` })}
+          ${lineRow({ edit: "add-monthly", id: "start-monthly", title: "Your standing bills", detail: "Mortgage, council tax, subscriptions — cash or card", amount: `<span class="line-chevron" aria-hidden="true">›</span>` })}
+          ${lineRow({ edit: "edit-per-diem", id: "start-perdiem", title: "The per diem", detail: "The month's spending money, as one figure", amount: `<span class="line-chevron" aria-hidden="true">›</span>` })}
+        </section>
+      `,
+    });
+  }
 
   return shell({
     title: "",
@@ -1380,9 +1405,8 @@ function payslipKindLabel(kind) {
 function tabsScreen() {
   const friends = [...store.friends].sort((a, b) => a.name.localeCompare(b.name));
   return `<section class="shell app-shell">
-    <header class="topbar"><a class="wordmark" href="#/home" data-action="go" data-screen="home">TAB</a><button class="text-button" data-action="add-friend">Add friend</button></header>
-    <div class="sync-row">${syncChip()}</div>
-    <div class="intro"><p class="eyebrow">Friend tabs</p><h1>Keep it simple.</h1><p>Shared costs, without the maths.</p></div>
+    <header class="topbar"><a class="wordmark" href="#/home" data-action="go" data-screen="home">TAB</a><span></span><span class="topbar-end">${syncChip()}<button class="text-button" data-action="add-friend">Add friend</button></span></header>
+    <div class="intro compact"><h1>Tabs.</h1><p class="lede">Shared costs with friends, without the maths.</p></div>
     <div class="friend-list">${friends.length ? friends.map(friendCard).join("") : emptyHome()}</div>
     ${friends.length ? `<button class="primary floating" data-action="add-expense">Add expense</button>` : ""}
     ${dock()}
@@ -1413,12 +1437,11 @@ function friendScreen(friend) {
     <header class="topbar">
       <button class="back" data-action="go" data-screen="tabs" aria-label="Back to your tabs">‹</button>
       <a class="wordmark" href="#/home" data-action="go" data-screen="home">TAB</a>
-      <button class="text-button" data-action="edit-friend" data-id="${friend.id}">Edit</button>
+      <span class="topbar-end">${syncChip()}<button class="text-button" data-action="edit-friend" data-id="${friend.id}">Edit</button></span>
     </header>
-    <div class="sync-row">${syncChip()}</div>
     <section class="friend-hero">
-      <p class="eyebrow">${friend.email ? esc(friend.email) : "Shared tab"}</p>
       <h1>${esc(friend.name)}</h1>
+      ${friend.email ? `<p class="lede">${esc(friend.email)}</p>` : ""}
       <p class="balance-label">Current balance</p>
       <p class="balance-value ${signedBalanceClass(balance)}">${esc(balanceText(friend.name, balance))}</p>
     </section>
@@ -1432,6 +1455,16 @@ function friendScreen(friend) {
     </section>
     ${dock()}
   </section>`;
+}
+
+/**
+ * The running total after this entry. It used to repeat the row's own sentence
+ * word for word — "Ben owes you £42.00" beside "Ben owes £42.00" — so the two
+ * read as the same fact twice rather than as an entry and where it left things.
+ */
+function runningBalanceLabel(balancePence) {
+  if (!balancePence) return "square";
+  return `runs to ${formatMoney(Math.abs(balancePence))}`;
 }
 
 function transactionRow({ transaction, balancePence }, friend) {
@@ -1450,7 +1483,7 @@ function transactionRow({ transaction, balancePence }, friend) {
   }
   return `<article class="transaction"><button class="transaction-button" data-action="edit-transaction" data-id="${transaction.id}">
     <div><p class="transaction-title">${esc(headline)}</p><p class="transaction-detail">${esc(detail)}</p><p class="transaction-date">${dateLabel(transaction.date)}</p></div>
-    <div class="transaction-side"><strong>${formatMoney(transaction.amountPence)}</strong><small class="${signedBalanceClass(balancePence)}">${esc(balanceText(friend.name, balancePence))}</small></div>
+    <div class="transaction-side"><strong>${formatMoney(transaction.amountPence)}</strong><small class="${signedBalanceClass(balancePence)}">${esc(runningBalanceLabel(balancePence))}</small></div>
   </button></article>`;
 }
 
@@ -1494,8 +1527,23 @@ function modalMarkup() {
   return kinds[modal.kind] ? kinds[modal.kind]() : "";
 }
 
-function modalHead(eyebrow, title) {
-  return `<div class="modal-head"><div><p class="eyebrow">${esc(eyebrow)}</p><h2 id="modal-title">${esc(title)}</h2></div><button type="button" class="close" data-action="close-modal" aria-label="Close">×</button></div>`;
+/**
+ * One title, the way a room has one. Every sheet led with an eyebrow that said
+ * the same thing as the title underneath it — "NEW MONTHLY" over "Add a
+ * monthly" — which is a line of furniture per modal saying nothing.
+ */
+function modalHead(title) {
+  return `<div class="modal-head"><h2 id="modal-title">${esc(title)}</h2><button type="button" class="close" data-action="close-modal" aria-label="Close">×</button></div>`;
+}
+
+/**
+ * The rules behind a field, folded away. A form's explanation is read once and
+ * then re-read every time the sheet opens; the rooms already fold theirs, so
+ * the sheets do it the same way rather than stacking paragraphs above the
+ * submit button.
+ */
+function formHelp(html) {
+  return `<details class="room-help form-help"><summary>How this works</summary><p>${html}</p></details>`;
 }
 
 function moneyLabel(label, name, pence, { required = false, placeholder = "0.00" } = {}) {
@@ -1504,7 +1552,7 @@ function moneyLabel(label, name, pence, { required = false, placeholder = "0.00"
 
 function friendForm() {
   const friend = modal.friend || {};
-  return `<form id="friend-form">${modalHead(friend.id ? "Friend details" : "New friend", friend.id ? "Edit friend" : "Add a friend")}
+  return `<form id="friend-form">${modalHead(friend.id ? "Edit friend" : "Add a friend")}
     <label>Name<input required maxlength="60" name="name" value="${esc(friend.name)}" placeholder="e.g. Ben" autocomplete="name" /></label>
     <label>Email <span class="optional">optional</span><input type="email" maxlength="120" name="email" value="${esc(friend.email)}" placeholder="ben@example.com" autocomplete="email" /></label>
     <p class="form-error" id="form-error"></p>
@@ -1520,7 +1568,7 @@ function transactionForm() {
   const friend = byId(friendId);
   const amount = transaction.amountPence ? (transaction.amountPence / 100).toFixed(2).replace(/\.00$/, "") : "";
   const adjustment = transaction.myShareAdjustmentPence ? (transaction.myShareAdjustmentPence / 100).toFixed(2).replace(/\.00$/, "") : "";
-  return `<form id="transaction-form">${modalHead(transaction.id ? "Edit entry" : isExpense ? "New expense" : "Direct transfer", isExpense ? "Add expense" : "Record transfer")}
+  return `<form id="transaction-form">${modalHead(isExpense ? "Add expense" : "Record transfer")}
     <label>With<select name="friendId" required ${modal.friendId ? "disabled" : ""}>${store.friends.map((item) => `<option value="${item.id}" ${item.id === friendId ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label>
     <label>Amount${moneyControl({ name: "amount", value: amount, required: true })}</label>
     <fieldset><legend>Who paid?</legend><div class="segmented">
@@ -1539,13 +1587,13 @@ function transactionForm() {
 
 function deleteForm() {
   const clearingPending = modal.target === "pending-all";
-  return `<div class="delete-confirm">${modalHead("Please check", `${clearingPending ? "Clear" : "Delete"} ${modal.label || (modal.target === "friend" ? "friend and history" : "this entry")}?`)}
+  return `<div class="delete-confirm">${modalHead(`${clearingPending ? "Clear" : "Delete"} ${modal.label || (modal.target === "friend" ? "friend and history" : "this entry")}?`)}
     <p>${esc(modal.copy || (modal.target === "friend" ? "This will permanently remove this friend and every transaction in their tab." : "This cannot be undone."))}</p>
     <div class="confirm-actions"><button class="secondary" data-action="close-modal">Keep it</button><button class="danger" data-action="delete-confirmed">${clearingPending ? "Clear" : "Delete"}</button></div></div>`;
 }
 
 function importForm() {
-  return `<div class="delete-confirm">${modalHead("This browser", "Import the old local tab?")}
+  return `<div class="delete-confirm">${modalHead("Import the old local tab?")}
     <p>This browser still has friends and expenses from before Tab saved to a private gist. Import them once, then they leave this device.</p>
     <div class="confirm-actions">
       <button class="secondary" data-action="discard-local">Leave them</button>
@@ -1555,7 +1603,7 @@ function importForm() {
 
 function personForm() {
   const person = modal.person || {};
-  return `<form id="person-form">${modalHead(person.id ? "Household" : "New person", person.id ? "Edit name" : "Add a person")}
+  return `<form id="person-form">${modalHead(person.id ? "Edit name" : "Add a person")}
     <label>Name<input required maxlength="80" name="name" value="${esc(person.name)}" placeholder="e.g. Alex" /></label>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${person.id ? "Save name" : "Add person"}</button>
@@ -1570,7 +1618,7 @@ function billForm() {
 function monthlyForm() {
   const item = modal.item || {};
   const dueRoll = normalizeDueRoll(item.dueRoll);
-  return `<form id="monthly-form">${modalHead(item.id ? "Monthly" : "New monthly", item.id ? "Edit monthly" : "Add a monthly")}
+  return `<form id="monthly-form">${modalHead(item.id ? "Edit monthly" : "Add a monthly")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Phone, mortgage…" /></label>
     ${moneyLabel("Expected amount", "amount", item.amountPence)}
     <label>Due<select name="dueRoll">
@@ -1578,12 +1626,12 @@ function monthlyForm() {
       <option value="nextWorking" ${dueRoll === "nextWorking" ? "selected" : ""}>This day, or the next working day if it is a weekend</option>
     </select></label>
     <label data-due-day>Day of month<input type="number" name="dueDay" min="1" max="31" value="${dueDayOf(item) || 1}" /></label>
-    <p class="helper">For the first working day of the month, pick day 1 with the next-working-day rule — that is the same thing.</p>
+
     <label>Paid from<select name="paidFrom">
       <option value="card" ${item.paidFrom !== "cash" ? "selected" : ""}>Card — due date only, not ticked</option>
       <option value="cash" ${item.paidFrom === "cash" ? "selected" : ""}>Cash — standing out for the whole month</option>
     </select></label>
-    <p class="helper">UK weekdays are Monday to Friday. Cash and card lines count in Out for the whole viewed month. There is nothing to tick.</p>
+    ${formHelp("For the first working day of the month, pick day 1 with the next-working-day rule — that is the same thing. UK weekdays are Monday to Friday. Cash and card lines count in Out for the whole viewed month, and there is nothing to tick.")}
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save monthly" : "Add monthly"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-monthly">Delete monthly</button>' : ""}
@@ -1597,7 +1645,7 @@ function envelopeForm() {
 function weeklyRuleForm() {
   const item = modal.item || {};
   const cadence = normalizeWeeklyCadence(item);
-  return `<form id="weekly-rule-form">${modalHead(item.id ? "Weekly rule" : "New weekly rule", item.id ? "Edit rule" : "Add a rule")}
+  return `<form id="weekly-rule-form">${modalHead(item.id ? "Edit rule" : "Add a rule")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Food shop, Amazon, cat litter…" /></label>
     ${moneyLabel("Typical amount", "amount", item.amountPence, { required: true })}
     <label>Cadence<select name="cadence" data-action="weekly-cadence">
@@ -1605,7 +1653,7 @@ function weeklyRuleForm() {
     </select></label>
     <label data-weekly-field="weekday" class="${cadence.cadence === "weekday" ? "" : "hidden"}">Weekday<select name="weekday">${WEEKDAYS.map((day) => `<option value="${day.value}" ${Number(item.weekday || 2) === day.value ? "selected" : ""}>${day.label}</option>`).join("")}</select></label>
     <label data-weekly-field="times" class="${cadence.cadence === "times" ? "" : "hidden"}">Times a month<input type="number" name="timesPerMonth" min="1" max="12" value="${cadence.timesPerMonth || 1}" /></label>
-    <p class="helper">N times a month with N=1 is once a month. Every week on a chosen weekday makes one slot for each of that day in the month on screen. Ticks stay on that month. A new month starts unticked.</p>
+    ${formHelp("N times a month with N=1 is once a month, and its slots are spread evenly across the month. Every week on a chosen weekday makes one slot for each of that day in the month on screen. Each slot is allowed on the cards from its own date. Ticks stay on that month; a new month starts unticked.")}
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save rule" : "Add rule"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-weekly-rule">Delete rule</button>' : ""}
@@ -1614,7 +1662,7 @@ function weeklyRuleForm() {
 
 function weeklyExtraForm() {
   const item = modal.item || {};
-  return `<form id="weekly-extra-form">${modalHead(item.id ? "Extra weekly" : "Extra this month", item.id ? "Edit extra" : "Add an extra")}
+  return `<form id="weekly-extra-form">${modalHead(item.id ? "Edit extra" : "Add an extra")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Extra food shop…" /></label>
     ${moneyLabel("Amount", "amount", item.amountPence)}
     <p class="helper">This is only for ${monthLabel(item.month || viewMonth)}. It does not change the rule.</p>
@@ -1626,7 +1674,7 @@ function weeklyExtraForm() {
 
 function cardForm() {
   const item = modal.item || {};
-  return `<form id="card-form">${modalHead(item.id ? "Card" : "New card", item.id ? "Update card" : "Add a card")}
+  return `<form id="card-form">${modalHead(item.id ? "Update card" : "Add a card")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name || "Card one")}" placeholder="Card one" /></label>
     ${moneyLabel("Balance", "amount", item.balancePence)}
     ${moneyLabel("Pending", "pending", item.pendingPence)}
@@ -1639,7 +1687,7 @@ function cardForm() {
 
 function subForm() {
   const item = modal.item || {};
-  return `<form id="sub-form">${modalHead(item.id ? "Card subscription" : "New subscription", item.id ? "Edit subscription" : "Add a subscription")}
+  return `<form id="sub-form">${modalHead(item.id ? "Edit subscription" : "Add a subscription")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Phone, streaming…" /></label>
     ${moneyLabel("Amount", "amount", item.amountPence)}
     <label>Due day<input required type="number" name="dueDay" min="1" max="31" value="${item.dueDay || 1}" /></label>
@@ -1652,7 +1700,7 @@ function subForm() {
 
 function pendingForm() {
   const item = modal.item || {};
-  return `<form id="pending-form">${modalHead(item.id ? "Pending" : "New pending", item.id ? "Edit pending" : "Add pending")}
+  return `<form id="pending-form">${modalHead(item.id ? "Edit pending" : "Add pending")}
     <label>Amount${moneyControl({ name: "amount", value: signedFieldValue(item.amountPence), placeholder: "0.00 or -0.00" })}</label>
     <p class="helper">A refund or a credit on the statement goes in as a minus, so it comes off the card side.</p>
     <label>Note <span class="optional">optional</span><input maxlength="80" name="note" value="${esc(item.note || item.name || "")}" placeholder="Optional" /></label>
@@ -1666,10 +1714,10 @@ function perDiemForm() {
   const hh = household();
   const pence = perDiemTotalPence(hh);
   const days = daysInMonthKey(viewMonth);
-  return `<form id="per-diem-form">${modalHead("Per diem", pence ? "Change the per diem" : "Set the per diem")}
+  return `<form id="per-diem-form">${modalHead(pence ? "Change the per diem" : "Set the per diem")}
     ${moneyLabel("Whole month", "amount", pence, { required: true })}
-    <p class="helper">One figure for the month, not a daily one. Over ${days} days in ${esc(monthName(viewMonth))} that is <strong data-per-diem-rate>${formatMoney(days ? Math.round(pence / days) : 0)}</strong> a day, and the cards are allowed that much for every day gone by — so on the 10th of a 30-day month, a third of it.</p>
-    <p class="helper">It is spent on the cards, so it sits on the card side of Out. Standing costs that leave the bank — a cleaner, nails — belong in Monthlies as cash lines.</p>
+    <p class="helper">Over ${days} days in ${esc(monthName(viewMonth))} that is <strong data-per-diem-rate>${formatMoney(days ? Math.round(pence / days) : 0)}</strong> a day.</p>
+    ${formHelp("The cards are allowed a day of it for every day gone by — on the 10th of a 30-day month, a third. It is spent on the cards, so it sits on the card side of Out. Standing costs that leave the bank — a cleaner, nails — belong in Monthlies as cash lines.")}
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">Save per diem</button>
   </form>`;
@@ -1678,7 +1726,7 @@ function perDiemForm() {
 function payslipCategoryForm() {
   const item = modal.item || {};
   const kind = item.kind || "deduction";
-  return `<form id="payslip-category-form">${modalHead(item.id ? "Category" : "New category", item.id ? "Edit category" : "Add a category")}
+  return `<form id="payslip-category-form">${modalHead(item.id ? "Edit category" : "Add a category")}
     <label>Name<input required maxlength="80" name="label" value="${esc(item.label)}" placeholder="Bonus, tax, gym…" /></label>
     <label>On the slip<select name="kind">
       <option value="extra" ${kind === "extra" || kind === "bonus" || kind === "benefits" ? "selected" : ""}>Extra — adds to net</option>
@@ -1694,7 +1742,7 @@ function payslipCategoryForm() {
 
 function oneOffForm() {
   const item = modal.item || {};
-  return `<form id="oneoff-form">${modalHead(item.id ? "One-off" : "New one-off", item.id ? "Edit one-off" : "Add a one-off")}
+  return `<form id="oneoff-form">${modalHead(item.id ? "Edit one-off" : "Add a one-off")}
     <label>Item<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="MOT, sofa, flight…" /></label>
     <label>Month<input required type="month" name="month" value="${item.month || viewMonth}" /></label>
     ${moneyLabel("Estimate", "amount", item.estimatePence)}
@@ -1707,11 +1755,11 @@ function oneOffForm() {
 
 function exceptionForm() {
   const item = modal.item || {};
-  return `<form id="exception-form">${modalHead(item.id ? "Exception" : "New exception", item.id ? "Edit exception" : "Add an exception")}
+  return `<form id="exception-form">${modalHead(item.id ? "Edit exception" : "Add an exception")}
     <label>What<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Travel insurance, school trip…" /></label>
     <label>Month<input required type="month" name="month" value="${item.month || viewMonth}" /></label>
     ${moneyLabel("Amount", "amount", item.amountPence, { required: true })}
-    <p class="helper">This came from another pot, so the card is allowed to be this much higher without it reading as overspend.</p>
+    ${formHelp("This came from another pot, so the card is allowed to be this much higher without it reading as overspend. It never moves Savings.")}
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save exception" : "Add exception"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-exception">Delete exception</button>' : ""}
@@ -1720,11 +1768,11 @@ function exceptionForm() {
 
 function setAsideForm() {
   const item = modal.item || {};
-  return `<form id="setaside-form">${modalHead(item.id ? "Don't spend this" : "Hold something back", item.id ? "Edit what is held back" : "Don't spend this")}
+  return `<form id="setaside-form">${modalHead(item.id ? "Edit what is held back" : "Don't spend this")}
     <label>What for<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Car service, last month was dear…" /></label>
     <label>Month<input required type="month" name="month" value="${item.month || viewMonth}" /></label>
     ${moneyLabel("Amount", "amount", item.amountPence, { required: true })}
-    <p class="helper">The cards are allowed to carry this much less for the month. Nothing is spent and the plan does not move — hold it and the month comes in under, which is the saving.</p>
+    ${formHelp("The cards are allowed to carry this much less for the month. Nothing is spent and the plan does not move — hold it and the month comes in under, which is the saving.")}
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save" : "Hold it back"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-setaside">Delete</button>' : ""}
@@ -1733,7 +1781,7 @@ function setAsideForm() {
 
 function annualForm() {
   const item = modal.item || {};
-  return `<form id="annual-form">${modalHead(item.id ? "Annual bill" : "New annual bill", item.id ? "Edit annual bill" : "Add an annual bill")}
+  return `<form id="annual-form">${modalHead(item.id ? "Edit annual bill" : "Add an annual bill")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Car insurance, MOT…" /></label>
     ${moneyLabel("Yearly amount", "amount", item.amountPence)}
     <label>Usual month <span class="optional">optional</span>
@@ -1751,7 +1799,7 @@ function annualForm() {
 
 function potForm() {
   const item = modal.item || {};
-  return `<form id="pot-form">${modalHead(item.id ? "Pot" : "New pot", item.id ? "Update pot" : "Add a pot")}
+  return `<form id="pot-form">${modalHead(item.id ? "Update pot" : "Add a pot")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Emergency, bills…" /></label>
     ${moneyLabel("Amount", "amount", item.amountPence)}
     <p class="helper">Saving sets the snapshot date to today.</p>
@@ -1763,7 +1811,7 @@ function potForm() {
 
 function pensionForm() {
   const item = modal.item || {};
-  return `<form id="pension-form">${modalHead(item.id ? "Pension" : "Pension name", item.id ? "Edit pension" : "Add a pension name")}
+  return `<form id="pension-form">${modalHead(item.id ? "Edit pension" : "Add a pension name")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Workplace pension" /></label>
     <label>Status<select name="status">${PENSION_STATUSES.map((status) => `<option value="${status}" ${status === (item.status || "active") ? "selected" : ""}>${pensionLabel(status)}</option>`).join("")}</select></label>
     <label>Note <span class="optional">optional</span><input maxlength="120" name="note" value="${esc(item.note)}" placeholder="Active membership, nothing else" /></label>
@@ -1780,27 +1828,27 @@ function payslipForm() {
   const categories = payslipFormCategories(item, personId);
   const available = unusedMasterPayslipCategories(categories, masterPayslipCategories(household()));
   const live = livePayslipFromForm(item, categories);
-  return `<form id="payslip-form">${modalHead(item.id ? "Payslip" : "New payslip", item.id ? "Edit payslip" : "Add a payslip")}
+  return `<form id="payslip-form">${modalHead(item.id ? "Edit payslip" : "Add a payslip")}
     <label>Person<select name="personId" required data-action="payslip-person">${household().people.map((person) => `<option value="${person.id}" ${person.id === personId ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select></label>
     <label>Tax year<select name="taxYear">${taxYearOptionsFor(item.taxYear).map((year) => `<option value="${year}" ${year === (item.taxYear || currentUkTaxYear()) ? "selected" : ""}>${year}</option>`).join("")}</select></label>
     <label>Pay period<input required type="month" name="periodMonth" value="${item.periodMonth || viewMonth}" /></label>
     <label>Month the money lands<input required type="month" name="moneyLandsMonth" value="${item.moneyLandsMonth || item.periodMonth || viewMonth}" /></label>
     ${moneyLabel("Salary", "salary", item.salaryPence)}
     ${moneyLabel("Gross", "gross", item.grossPence)}
-    <p class="helper">Gross is the Payments total on the slip — basic, bonus, and any parental pay — after any salary sacrifice has come off. Tax and NI go in Categories below. If your slip writes it another way, say so under Net.</p>
+    ${formHelp("Gross is the Payments total on the slip — basic, bonus, and any parental pay — after any salary sacrifice has come off. Tax and NI go in Categories below. If your slip writes it another way, type the net it prints under Net and the app works out how to read it.")}
     <input type="hidden" name="grossBeforeSacrifice" value="${item.grossBeforeSacrifice ? "on" : ""}" />
     <input type="hidden" name="grossExcludesBonus" value="${item.grossExcludesBonus ? "on" : ""}" />
     <input type="hidden" name="benefitsPaid" value="${item.benefitsPaid ? "on" : ""}" />
     <section class="payslip-cats">
       <h3>Categories</h3>
-      <p class="helper">Pick a category and enter the amount. Names live in Account. Net is calculated.</p>
+      <p class="helper">Pick a category and enter the amount. Net is calculated. Category names live under More.</p>
       ${categories.length ? categories.map((category) => payslipCategoryField(category, item)).join("") : `<p class="helper">No categories on this slip yet.</p>`}
       ${available.length ? `<label>Add a category
         <select data-action="add-payslip-category">
           <option value="">Choose…</option>
           ${available.map((category) => `<option value="${esc(category.id)}">${esc(category.label)}</option>`).join("")}
         </select>
-      </label>` : `<p class="helper">Every category from Account is already on this slip.</p>`}
+      </label>` : `<p class="helper">Every category is already on this slip.</p>`}
     </section>
     ${payslipNetBlock(live)}
     ${moneyLabel("Net on the payslip", "statedNet", item.statedNetPence)}
@@ -1940,7 +1988,7 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
 
 function donationForm() {
   const item = modal.item || {};
-  return `<form id="donation-form">${modalHead(item.id ? "Donation" : "New donation", item.id ? "Edit donation" : "Add a donation")}
+  return `<form id="donation-form">${modalHead(item.id ? "Edit donation" : "Add a donation")}
     <label>Who<input required maxlength="80" name="who" value="${esc(item.who || household().people[0]?.name || "")}" /></label>
     <label>Charity<input required maxlength="80" name="charity" value="${esc(item.charity)}" /></label>
     <label>Date<input required type="date" name="date" value="${item.date || today()}" /></label>
