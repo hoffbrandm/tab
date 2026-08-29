@@ -216,6 +216,28 @@ test("money can be drawn in from savings, and the exceptions come with it", () =
   assert.ok(home.indexOf('homeAccordion("fromsavings"') < home.indexOf('homeAccordion("setasides"'));
 });
 
+test("a payslip opens on the month the money lands and can borrow last month's", () => {
+  // The months come from the person's own last slip rather than a fixed rule,
+  // and the lands month leads because that is the month you are adding it in.
+  assert.match(app, /payslipMonthsForNewSlip\(household\(\), personId, viewMonth\)/);
+  const form = app.slice(app.indexOf("function payslipForm()"), app.indexOf("function payslipNetBlock"));
+  assert.ok(form.indexOf("Month the money lands") < form.indexOf("Pay period"), "the lands month leads");
+  // One deliberate tap borrows last month's figures, and says so before it does.
+  assert.match(form, /data-action="fill-payslip-from-last"/);
+  assert.match(form, /Only empty boxes are filled/);
+  // It is a button, so its handler has to be on click — on change it never ran.
+  const clicks = app.slice(app.indexOf('document.addEventListener("click"'), app.indexOf('document.addEventListener("change"', app.indexOf('document.addEventListener("click"')));
+  assert.match(clicks, /if \(action === "fill-payslip-from-last"\)/);
+  assert.match(clicks, /payslipFillFromPrevious\(current, last, merged\)/);
+  assert.match(clicks, /payslipWithFills\(current, fills\)/);
+  // A slip with only a net says so where its gross would be.
+  assert.match(app, /net only, no detail yet/);
+  assert.match(app, /only a net typed, so/);
+  // And the form snapshot keeps the typed net, or a re-render threw it away.
+  const snapshot = app.slice(app.indexOf("function snapshotPayslipForm"), app.indexOf("function updatePerDiemRate"));
+  assert.match(snapshot, /statedNetPence: readMoney\("statedNet"\)/);
+});
+
 test("regularly cleared lists swipe left to delete; setup entities do not", () => {
   assert.match(app, /removeAction: "remove-oneoff"/);
   assert.match(app, /removeAction: "remove-monthly"/);
