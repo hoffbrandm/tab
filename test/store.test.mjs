@@ -86,6 +86,60 @@ test("a planned one-off keeps which side it is paid from, and a usable day", () 
   assert.deepEqual(parseStore(JSON.parse(JSON.stringify(store))).household.oneOffs, store.household.oneOffs);
 });
 
+test("a repeated deduction id is repaired, not thrown at the whole household", () => {
+  // Within a slip a deduction is found by its label — that is how its amount is
+  // read back — so the id is incidental bookkeeping. Throwing refused the whole
+  // store, which is every save the app makes: one duplicate id left a household
+  // readable but impossible to write to, with no way out but editing the gist.
+  const parse = (otherDeductions) => parseStore({
+    version: 1, friends: [], transactions: [],
+    household: {
+      people: [{ id: "p", name: "S" }],
+      payslips: [{
+        id: "s1", personId: "p", taxYear: "2026-27", periodMonth: "2026-07",
+        moneyLandsMonth: "2026-08", grossPence: 550000, otherDeductions,
+      }],
+    },
+  }).household.payslips[0].otherDeductions;
+
+  const repaired = parse([
+    { id: "dental", label: "Gym flex", amountPence: 4000 },
+    { id: "dental", label: "Dental", amountPence: 1800 },
+  ]);
+  assert.deepEqual(repaired.map((row) => row.id), ["dental", "dental-2"]);
+  // Nothing is lost: both rows keep their label and their amount.
+  assert.deepEqual(repaired.map((row) => [row.label, row.amountPence]), [["Gym flex", 4000], ["Dental", 1800]]);
+
+  // A repeated label is one row either way — two would take two amounts for the
+  // one figure, and the amount read back is the first of them regardless.
+  const oneLabel = parse([
+    { id: "a", label: "Dental", amountPence: 1800 },
+    { id: "b", label: "dental ", amountPence: 9999 },
+  ]);
+  assert.equal(oneLabel.length, 1);
+  assert.equal(oneLabel[0].amountPence, 1800);
+
+  // And the repair is stable, so a saved household does not keep changing.
+  const store = parseStore({
+    version: 1, friends: [], transactions: [],
+    household: {
+      people: [{ id: "p", name: "S" }],
+      payslips: [{
+        id: "s1", personId: "p", taxYear: "2026-27", periodMonth: "2026-07",
+        moneyLandsMonth: "2026-08", grossPence: 550000,
+        otherDeductions: [
+          { id: "dental", label: "Gym flex", amountPence: 4000 },
+          { id: "dental", label: "Dental", amountPence: 1800 },
+        ],
+      }],
+    },
+  });
+  assert.deepEqual(
+    parseStore(JSON.parse(JSON.stringify(store))).household.payslips[0].otherDeductions,
+    store.household.payslips[0].otherDeductions,
+  );
+});
+
 test("money drawn in from savings is one month's line, like an exception", () => {
   const store = parseStore({
     version: 1, friends: [], transactions: [],

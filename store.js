@@ -679,10 +679,9 @@ function parsePayslip(slip, personIds) {
   if (!isMonthKey(moneyLandsMonth)) throw new StoreError("Payslip landing month must be YYYY-MM.");
   const note = String(slip.note || "").trim();
   if (note.length > 200) throw new StoreError("Payslip note is too long.");
-  const otherDeductions = list(slip.otherDeductions)
-    .map(parseDeduction)
-    .filter((item) => item.label || item.amountPence);
-  uniqueIds(otherDeductions, "Payslip deduction");
+  const otherDeductions = repairDeductionIds(
+    list(slip.otherDeductions).map(parseDeduction).filter((item) => item.label || item.amountPence),
+  );
   return {
     id: requiredId(slip.id, "Payslip"),
     personId,
@@ -709,6 +708,35 @@ function parsePayslip(slip, personIds) {
     forecast: Boolean(slip.forecast),
     taxCode: optionalTaxCode(slip.taxCode),
   };
+}
+
+/**
+ * Within a slip a deduction is identified by its label — that is how its amount
+ * is read back out — and the id is incidental bookkeeping. So two rows sharing
+ * an id is a bookkeeping slip, not a broken household, and it is repaired here
+ * rather than thrown.
+ *
+ * Throwing refused the whole store, which is every save the app makes: one
+ * duplicate id left the household readable but impossible to write to, with no
+ * way out short of editing the gist by hand. Nothing is lost by repairing —
+ * a repeated label is one row either way, and a repeated id is re-keyed.
+ */
+function repairDeductionIds(rows) {
+  const seenLabels = new Set();
+  const seenIds = new Set();
+  const kept = [];
+  for (const row of rows) {
+    const label = row.label.trim().toLowerCase();
+    // One row per label: two would take two amounts for the one figure, and
+    // the amount read back would be whichever came first anyway.
+    if (label && seenLabels.has(label)) continue;
+    if (label) seenLabels.add(label);
+    let id = row.id;
+    for (let n = 2; seenIds.has(id); n += 1) id = `${row.id}-${n}`;
+    seenIds.add(id);
+    kept.push(id === row.id ? row : { ...row, id });
+  }
+  return kept;
 }
 
 function optionalTaxCode(value) {
