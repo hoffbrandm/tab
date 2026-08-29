@@ -36,6 +36,8 @@ import {
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
+  oneOffPaidFrom,
+  oneOffDueLabel,
   resolvedPayslipReading,
   payslipReadingSummary,
   outBreakdownForMonth,
@@ -974,7 +976,7 @@ function cashflowScreen() {
           edit: "edit-oneoff",
           id: item.id,
           title: item.name,
-          detail: item.purchased ? "Purchased" : "Planned",
+          detail: `${oneOffPaidFrom(item) === "cash" ? "Cash" : oneOffDueLabel(item).replace("Planned", "Card")} · ${item.purchased ? "Bought" : "not bought yet"}`,
           amount: formatMoney(item.estimatePence),
           tickAction: "toggle-oneoff",
           ticked: item.purchased,
@@ -1150,9 +1152,9 @@ function oneOffRow(item) {
     edit: "edit-oneoff",
     id: item.id,
     title: item.name,
-    // The section heading is already the month, so the row says the one thing
-    // the heading cannot: whether it has been bought yet.
-    detail: item.purchased ? "Bought" : "Not bought yet",
+    // The section heading is already the month, so the row says the things the
+    // heading cannot: which side it comes out of, and whether it has landed.
+    detail: `${oneOffPaidFrom(item) === "cash" ? "Cash" : oneOffDueLabel(item).replace("Planned", "Card")} · ${item.purchased ? "Bought" : "not bought yet"}`,
     amount: formatMoney(item.estimatePence),
     tickAction: "toggle-oneoff",
     ticked: item.purchased,
@@ -1778,11 +1780,18 @@ function payslipCategoryForm() {
 
 function oneOffForm() {
   const item = modal.item || {};
+  const paidFrom = oneOffPaidFrom(item);
   return `<form id="oneoff-form">${modalHead(item.id ? "Edit one-off" : "Add a one-off")}
     <label>Item<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="MOT, sofa, flight…" /></label>
     <label>Month<input required type="month" name="month" value="${item.month || viewMonth}" /></label>
     ${moneyLabel("Estimate", "amount", item.estimatePence)}
-    <label class="check-row"><input type="checkbox" name="purchased" ${item.purchased ? "checked" : ""} /><span>Purchased</span></label>
+    <label>Paid from<select name="paidFrom" data-action="oneoff-paid-from">
+      <option value="card" ${paidFrom === "card" ? "selected" : ""}>A card</option>
+      <option value="cash" ${paidFrom === "cash" ? "selected" : ""}>Cash — straight out of the bank</option>
+    </select></label>
+    <label data-oneoff-field="dueDay" class="${paidFrom === "card" ? "" : "hidden"}">Due day <span class="optional">optional</span><input type="number" name="dueDay" min="1" max="31" value="${item.dueDay || ""}" placeholder="Any day" /></label>
+    <label class="check-row"><input type="checkbox" name="purchased" ${item.purchased ? "checked" : ""} /><span>Bought</span></label>
+    ${formHelp("A cash one leaves the bank with the rest of the cash out and never touches what the cards are allowed to carry. A card one does, and a due day says from when — leave it blank and the whole month is when it may be bought.")}
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save one-off" : "Add one-off"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-oneoff">Delete one-off</button>' : ""}
@@ -2508,6 +2517,10 @@ document.addEventListener("change", async (event) => {
   if (action === "payslip-year") { payslipTaxYear = event.target.value; render(); }
   if (action === "ani-person") { aniPersonId = event.target.value; render(); }
   if (action === "ani-year") { aniTaxYear = event.target.value; render(); }
+  if (action === "oneoff-paid-from") {
+    // A due day only has anywhere to be used on a card line.
+    document.querySelector("[data-oneoff-field=dueDay]")?.classList.toggle("hidden", event.target.value !== "card");
+  }
   if (action === "weekly-cadence") {
     const cadence = event.target.value;
     document.querySelector("[data-weekly-field=weekday]")?.classList.toggle("hidden", cadence !== "weekday");
@@ -3027,6 +3040,11 @@ async function saveSub(event) {
   });
 }
 
+function oneOffDueDay(value) {
+  const day = Number(String(value || "").trim());
+  return Number.isInteger(day) && day >= 1 && day <= 31 ? day : undefined;
+}
+
 async function saveOneOff(event) {
   return saveNamedMoney(event, {
     list: "oneOffs",
@@ -3037,6 +3055,10 @@ async function saveOneOff(event) {
       month: coerceMonthKey(data.get("month")) || viewMonth,
       estimatePence: requireMoney(data.get("amount"), "estimate"),
       purchased: data.get("purchased") === "on",
+      paidFrom: data.get("paidFrom") === "cash" ? "cash" : "card",
+      // A day is kept only where it can do something, so switching a line to
+      // cash does not leave a date behind that nothing reads.
+      dueDay: data.get("paidFrom") === "cash" ? undefined : oneOffDueDay(data.get("dueDay")),
     }),
   });
 }
