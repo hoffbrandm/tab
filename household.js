@@ -841,7 +841,14 @@ export function monthStatementRows(household, month, today = new Date()) {
       }]
       : []),
     // The annual saving is a standing cash line on the sheet, not its own row.
-    { id: "cash", label: "Cash out", flowPence: minus(flow.cashOutPence) },
+    { id: "cash", label: "Cash out", flowPence: minus(flow.billsPence + flow.annualReservePence) },
+    // Planned cash gets its own line rather than disappearing into Cash out:
+    // it is a thing you decided on for this month, not a standing cost, and the
+    // month is easier to read when the two are not added together. It still
+    // sits above the card rows, because that is when it leaves.
+    ...(flow.cashOneOffsPence
+      ? [{ id: "cashplanned", label: "Planned in cash", flowPence: minus(flow.cashOneOffsPence) }]
+      : []),
     // Allowed is what the calendar permits by today; on cards is what has
     // actually been recorded. For the per diem and card monthlies those are the
     // same fact — there is nothing to tick — so both columns carry it.
