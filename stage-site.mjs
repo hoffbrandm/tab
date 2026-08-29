@@ -12,13 +12,16 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Assets index.html names directly. Everything else is reached by import. */
-export const STATIC_ASSETS = ["index.html", "styles.css", "favicon.svg", "manifest.webmanifest"];
+/** The one file everything else is reached from. */
+export const ENTRY_HTML = "index.html";
 
 /** Never publish these, whatever the graph says: they are not the app. */
 export const NEVER_PUBLISH = ["test", "server.mjs", "stage-site.mjs", "node_modules", ".git"];
 
 const MODULE_SRC = /<script[^>]*\btype=["']module["'][^>]*\bsrc=["']([^"']+)["']/i;
+// A stylesheet, an icon, the manifest — anything the page names by href or src.
+// Skips absolute URLs, data: URIs and in-page anchors, which are not ours.
+const HTML_ASSET = /\b(?:href|src)=["'](?!https?:|data:|mailto:|#|\/\/)([^"']+)["']/gi;
 // Covers `from "./x.js"`, a bare `import "./x.js"`, and `import("./x.js")`.
 const RELATIVE_IMPORT = /(?:\bfrom\s+|\bimport\s*\(?\s*)["'](\.\/[^"']+)["']/g;
 
@@ -26,6 +29,43 @@ export function entryModuleOf(html) {
   const found = String(html).match(MODULE_SRC);
   if (!found) throw new Error("index.html has no <script type=\"module\" src=…>");
   return found[1].replace(/^\.\//, "");
+}
+
+/**
+ * Every local file the page names. The published list used to be written by
+ * hand, which is how three modules went missing and the site stopped booting;
+ * the modules are walked now, and so are the assets, for the same reason —
+ * adding an icon should not mean remembering to add it to a list as well.
+ */
+export function assetsReferencedBy(html) {
+  const names = new Set();
+  for (const [, path] of String(html).matchAll(HTML_ASSET)) names.add(path.replace(/^\.\//, ""));
+  return [...names];
+}
+
+/** The icons a web app manifest names, which the page never mentions itself. */
+export function manifestIcons(source) {
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new Error("manifest.webmanifest is not valid JSON");
+  }
+  return (parsed.icons || [])
+    .map((icon) => String(icon?.src || "").replace(/^\.\//, ""))
+    .filter(Boolean);
+}
+
+/** Everything to publish that is not reached by an import: the entry included. */
+export function staticAssetsFrom(read) {
+  const found = new Set([ENTRY_HTML]);
+  for (const name of assetsReferencedBy(read(ENTRY_HTML))) found.add(name);
+  for (const name of [...found]) {
+    if (name.endsWith(".webmanifest") || name.endsWith("manifest.json")) {
+      for (const icon of manifestIcons(read(name))) found.add(icon);
+    }
+  }
+  return [...found].sort();
 }
 
 export function relativeImportsOf(source) {
@@ -60,9 +100,9 @@ function main() {
     return readFileSync(path, "utf8");
   };
 
-  const entry = entryModuleOf(read("index.html"));
+  const entry = entryModuleOf(read(ENTRY_HTML));
   const modules = moduleGraphFrom(entry, read);
-  const published = [...STATIC_ASSETS, ...modules];
+  const published = [...new Set([...staticAssetsFrom(read), ...modules])].sort();
 
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });

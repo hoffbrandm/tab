@@ -8,6 +8,10 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="description" content="A private UK household workbook: cashflow, pots, payslips, giving, and friend tabs." />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <!-- iOS ignores both the manifest's icons and an SVG here, so the
+         home-screen icon has to be its own PNG or it grabs a screenshot. -->
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="Tab" />
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="stylesheet" href="styles.css" />
     <title>Tab</title>

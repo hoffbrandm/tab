@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="16" fill="#18201e"/>
-  <text x="32" y="41" text-anchor="middle" font-size="22" font-family="ui-rounded, system-ui, sans-serif" font-weight="800" fill="#f6f5f2">TAB</text>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="114" fill="#16715c"/>
+    <rect x="120" y="120" width="272" height="64" rx="16" fill="#f6f5f2"/>
+    <rect x="224" y="120" width="64" height="264" rx="16" fill="#f6f5f2"/>
+    <rect x="146" y="428" width="220" height="22" rx="11" fill="#f6f5f2" opacity="0.6"/></svg>
