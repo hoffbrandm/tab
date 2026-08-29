@@ -2036,14 +2036,25 @@ test("a cash planned expense leaves the bank and never reaches the cards", () =>
   }, "2026-08", today);
   assert.equal(bought.purchasedOneOffsPence, 0);
   assert.equal(bought.onCardsSoFarPence, 0);
-  // The statement's Cash out row carries it, and the column still totals.
+  // It gets its own statement row rather than disappearing into Cash out —
+  // it is a thing decided on for this month, not a standing cost — and it sits
+  // above the card rows, because that is when it leaves. The column still adds.
   const table = monthStatementRows({
     ...base,
     oneOffs: [{ id: "o", name: "Dentist", month: "2026-08", estimatePence: 60000, paidFrom: "cash" }],
   }, "2026-08", today);
-  assert.equal(table.rows.find((row) => row.id === "cash").flowPence, -60000);
-  assert.equal(table.rows.find((row) => row.id === "planned").flowPence, 0);
+  const ids = table.rows.map((row) => row.id);
+  assert.equal(table.rows.find((row) => row.id === "cashplanned").flowPence, -60000);
+  assert.equal(table.rows.find((row) => row.id === "cash").flowPence, 0, "standing cash is its own row");
+  assert.equal(table.rows.find((row) => row.id === "planned").flowPence, 0, "and the card planned row is empty");
+  assert.ok(ids.indexOf("cashplanned") > ids.indexOf("cash"));
+  assert.ok(ids.indexOf("cashplanned") < ids.indexOf("cardout"));
   assert.equal(table.rows.reduce((total, row) => total + (row.flowPence || 0), 0), table.savingsPence);
+  // With nothing planned in cash the row is not there at all.
+  assert.equal(
+    monthStatementRows(base, "2026-08", today).rows.some((row) => row.id === "cashplanned"),
+    false,
+  );
 });
 
 test("a card one-off with a day is not allowed until the month reaches it", () => {
