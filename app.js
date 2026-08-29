@@ -20,6 +20,9 @@ import {
   householdHasData,
   setAsidesForMonth,
   setAsidesOutsideMonth,
+  fromSavingsForMonth,
+  fromSavingsOutsideMonth,
+  exceptionsTotalPence,
   giftAidGrossPence,
   isCurrentMonth,
   jumpToCurrentMonthLabel,
@@ -413,37 +416,37 @@ function monthSwitcher() {
 }
 
 /**
- * Five destinations, one row. There were eleven across three rows, which took a
- * third of a phone screen and pushed every page down behind 240px of padding to
- * clear it. The four rooms the month actually runs on stay in the bar; the rest
- * are places you visit now and then, so they live one tap away under More.
+ * Four destinations, one row. There were eleven across three rows, then five;
+ * of those five, Weeklies and Monthlies are config that barely changes once it
+ * is right, so they are places you visit now and then rather than places the
+ * month runs through. Home, what is coming, and who owes what.
  */
 const DOCK = [
   ["home", "Home"],
-  ["weeklies", "Weeklies"],
-  ["monthlies", "Monthlies"],
   ["planned", "Planned"],
+  ["tabs", "Tabs"],
 ];
 
 /** The rooms More lists, with a line each saying what they are for. */
 const MORE_ROOMS = [
+  ["weeklies", "Weeklies", "The rules that make the slots you tick on Home"],
+  ["monthlies", "Monthlies", "Standing bills, and the month's per diem"],
   ["annual", "Annual", "Renewals and once-a-year bills, saved monthly"],
   ["pots", "Pots", "What you hold, and pension names"],
   ["payslips", "Payslips", "Net pay per person, per month"],
   ["ani", "£100k", "Adjusted net income against the childcare cliff"],
   ["giving", "Giving", "Donations and Gift Aid"],
-  ["tabs", "Tabs", "Shared costs with friends"],
 ];
 
 function dockIsMore(name) {
-  return MORE_ROOMS.some(([route]) => route === name) || name === "more" || name === "friend";
+  return MORE_ROOMS.some(([route]) => route === name) || name === "more";
 }
 
 function dock() {
   const item = (name, label, active) =>
     `<a class="dock-item${active ? " active" : ""}" href="#/${name}" data-action="go" data-screen="${name}">${label}</a>`;
   return `<nav class="dock" aria-label="App">
-    ${DOCK.map(([name, label]) => item(name, label, screen.name === name)).join("")}
+    ${DOCK.map(([name, label]) => item(name, label, screen.name === name || (name === "tabs" && screen.name === "friend"))).join("")}
     ${item("more", "More", dockIsMore(screen.name))}
   </nav>`;
 }
@@ -697,7 +700,12 @@ function statementNote(flow) {
   const made = [parts.length ? `The allowance includes ${listed}.` : "", held].filter(Boolean).join(" ");
   if (flow.monthPhase !== "current" || flow.remainingPlanPence <= 0) return made;
   const lands = `Spend the rest of the plan and the cards finish ${monthName(flow.month)} at ${formatMoney(flow.forecastCardsPence)}.`;
-  return made ? `${made} ${lands}` : lands;
+  // Money moved in from savings is not money earned, so a total that leans on
+  // one says so rather than reading as a month that simply went well.
+  const drawn = flow.extraFromSavingsPence
+    ? ` ${formatMoney(flow.extraFromSavingsPence)} of the total came in from savings.`
+    : "";
+  return `${made ? `${made} ` : ""}${lands}${drawn}`;
 }
 
 /**
@@ -723,12 +731,15 @@ function statementCell(pence, extra = "") {
 
 function statementSection(flow) {
   const table = monthStatementRows(household(), viewMonth, new Date());
+  // The check belongs in the month column, signed, because it is a term in the
+  // sum rather than a note beside it: the column runs Income to Total savings
+  // and adds up on the way down.
   const check = table.cardCheckKnown
     ? `<div class="statement-line check">
         <span class="statement-cell name">${esc(table.overUnderPence < 0 ? "Overspend" : table.overUnderPence > 0 ? "Underspend" : "On budget")}</span>
+        <span class="statement-cell ${trackClass(table.overUnderPence)}">${formatMoney(table.overUnderPence)}</span>
         <span class="statement-cell empty">—</span>
         <span class="statement-cell empty">—</span>
-        <span class="statement-cell ${trackClass(table.overUnderPence)}">${formatMoney(Math.abs(table.overUnderPence))}</span>
       </div>`
     : "";
   return `<section class="statement" aria-label="Month statement" data-statement>
@@ -744,13 +755,13 @@ function statementSection(flow) {
         <div class="statement-table" data-statement-table>
           <div class="statement-line head">
             <span class="statement-cell name">${esc(table.monthPhase === "future" ? "Not started" : `Day ${table.dayOfMonth} of ${table.daysInMonth}`)}</span>
-            <span class="statement-cell">In and out</span>
+            <span class="statement-cell">The month</span>
             <span class="statement-cell">Allowed</span>
             <span class="statement-cell">On cards</span>
           </div>
           ${table.rows.map(statementRow).join("")}
           <div class="statement-line total">
-            <span class="statement-cell name">Savings</span>
+            <span class="statement-cell name">The plan saves</span>
             <span class="statement-cell ${moneyClass(table.savingsPence)}">${formatMoney(table.savingsPence)}</span>
             <span class="statement-cell">${formatMoney(table.allowedPence)}</span>
             <span class="statement-cell">${formatMoney(table.onCardsPence)}</span>
@@ -761,7 +772,7 @@ function statementSection(flow) {
           ${table.actualRows.map(statementRow).join("")}
           ${check}
           <div class="statement-line grand">
-            <span class="statement-cell name">Total savings</span>
+            <span class="statement-cell name">Ends up saving</span>
             <span class="statement-cell ${trackClass(table.totalSavingsPence)}">${formatMoney(table.totalSavingsPence)}</span>
             <span class="statement-cell empty">—</span>
             <span class="statement-cell empty">—</span>
@@ -825,6 +836,8 @@ function cashflowScreen() {
   const otherExceptionCount = exceptionsOutsideMonth(hh, viewMonth).length;
   const setAsides = setAsidesForMonth(hh, viewMonth);
   const otherSetAsideCount = setAsidesOutsideMonth(hh, viewMonth).length;
+  const fromSavings = fromSavingsForMonth(hh, viewMonth);
+  const otherFromSavingsCount = fromSavingsOutsideMonth(hh, viewMonth).length;
   const otherPlannedCount = oneOffsOutsideMonth(hh, viewMonth).length;
   const incomeLines = flow.incomeLines || [];
 
@@ -901,6 +914,20 @@ function cashflowScreen() {
         })).join("") : `<p class="helper">No exceptions in ${esc(period)}.</p>`}
         ${otherExceptionCount ? `<p class="helper">${otherExceptionCount} exception${otherExceptionCount === 1 ? "" : "s"} in other months.</p>` : ""}
         <button class="text-button" type="button" data-action="add-exception">Add an exception</button>
+      `)}
+      ${homeAccordion("fromsavings", `From savings · ${period}`, `
+        <p class="helper">Money drawn in from savings to cover the month. Every exception is already money out of another pot, so ${exceptions.length ? `the ${formatMoney(exceptionsTotalPence(hh, viewMonth))} of exceptions is` : "any exception is"} carried here on its own. Add to it when the month needs more than the pay covers.</p>
+        ${fromSavings.length ? fromSavings.map((item) => lineRow({
+          edit: "edit-fromsavings",
+          id: item.id,
+          title: item.name,
+          detail: "Drawn in on top of the exceptions",
+          amount: formatMoney(item.amountPence),
+          removeAction: "remove-fromsavings",
+          removeLabel: "Delete",
+        })).join("") : `<p class="helper">Nothing extra drawn in for ${esc(period)}.</p>`}
+        ${otherFromSavingsCount ? `<p class="helper">${otherFromSavingsCount} in other months.</p>` : ""}
+        <button class="text-button" type="button" data-action="add-fromsavings">Draw in from savings</button>
       `)}
       ${homeAccordion("setasides", `Don't spend this · ${period}`, `
         <p class="helper">Money you have decided not to spend. The cards are allowed to carry this much less, so holding it is what turns it into a saving. It does not change the plan or what you are owed.</p>
@@ -1518,6 +1545,7 @@ function modalMarkup() {
     oneoff: oneOffForm,
     exception: exceptionForm,
     setaside: setAsideForm,
+    fromsavings: fromSavingsForm,
     annual: annualForm,
     pot: potForm,
     pension: pensionForm,
@@ -1763,6 +1791,19 @@ function exceptionForm() {
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save exception" : "Add exception"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-exception">Delete exception</button>' : ""}
+  </form>`;
+}
+
+function fromSavingsForm() {
+  const item = modal.item || {};
+  return `<form id="fromsavings-form">${modalHead(item.id ? "Edit what is drawn in" : "Draw in from savings")}
+    <label>What for<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Cover the shortfall, new boiler…" /></label>
+    <label>Month<input required type="month" name="month" value="${item.month || viewMonth}" /></label>
+    ${moneyLabel("Amount", "amount", item.amountPence, { required: true })}
+    ${formHelp("This is on top of the month's exceptions, which are money out of another pot already and are carried in for you. Drawing in from savings raises what the month ends up with — it does not raise what the cards are allowed to carry.")}
+    <p class="form-error" id="form-error"></p>
+    <button class="primary wide" type="submit">${item.id ? "Save" : "Draw it in"}</button>
+    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-fromsavings">Delete</button>' : ""}
   </form>`;
 }
 
@@ -2214,6 +2255,8 @@ document.addEventListener("click", async (event) => {
   if (action === "edit-exception") openItem("exception", "exceptions", id);
   if (action === "add-setaside") openItem("setaside");
   if (action === "edit-setaside") openItem("setaside", "setAsides", id);
+  if (action === "add-fromsavings") openItem("fromsavings");
+  if (action === "edit-fromsavings") openItem("fromsavings", "fromSavings", id);
   if (action === "add-annual") openItem("annual");
   if (action === "edit-annual") openItem("annual", "annualBills", id);
   if (action === "add-pot") openItem("pot");
@@ -2246,6 +2289,11 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     removeListedItem("setAsides", id, "held-back amount");
+  }
+  if (action === "remove-fromsavings") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("fromSavings", id, "transfer in");
   }
   if (action === "remove-monthly") {
     event.preventDefault();
@@ -2335,6 +2383,7 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-delete-oneoff") askDelete("oneoff", modal.item.id, "this one-off");
   if (action === "confirm-delete-exception") askDelete("exception", modal.item.id, "this exception");
   if (action === "confirm-delete-setaside") askDelete("setaside", modal.item.id, "this held-back amount");
+  if (action === "confirm-delete-fromsavings") askDelete("fromsavings", modal.item.id, "this transfer in");
   if (action === "confirm-delete-annual") askDelete("annual", modal.item.id, "this annual bill");
   if (action === "confirm-delete-pot") askDelete("pot", modal.item.id, "this pot");
   if (action === "confirm-delete-pension") askDelete("pension", modal.item.id, "this pension name");
@@ -2388,6 +2437,7 @@ document.addEventListener("click", async (event) => {
       if (targetModal.target === "oneoff") hh.oneOffs = hh.oneOffs.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "exception") hh.exceptions = (hh.exceptions || []).filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "setaside") hh.setAsides = (hh.setAsides || []).filter((item) => item.id !== targetModal.id);
+      if (targetModal.target === "fromsavings") hh.fromSavings = (hh.fromSavings || []).filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "annual") hh.annualBills = hh.annualBills.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "pot") hh.pots = hh.pots.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "pension") hh.pensions = hh.pensions.filter((item) => item.id !== targetModal.id);
@@ -2463,6 +2513,7 @@ document.addEventListener("submit", (event) => {
     "oneoff-form": saveOneOff,
     "exception-form": saveException,
     "setaside-form": saveSetAside,
+    "fromsavings-form": saveFromSavings,
     "annual-form": saveAnnual,
     "pot-form": savePot,
     "pension-form": savePension,
@@ -2958,6 +3009,19 @@ async function saveException(event) {
     toastEdit: "Exception updated",
     build: (data) => ({
       name: requireName(data.get("name"), "exception"),
+      month: coerceMonthKey(data.get("month")) || viewMonth,
+      amountPence: requireMoney(data.get("amount"), "amount"),
+    }),
+  });
+}
+
+async function saveFromSavings(event) {
+  return saveNamedMoney(event, {
+    list: "fromSavings",
+    toastAdd: "Drawn in",
+    toastEdit: "Updated",
+    build: (data) => ({
+      name: requireName(data.get("name"), "reason"),
       month: coerceMonthKey(data.get("month")) || viewMonth,
       amountPence: requireMoney(data.get("amount"), "amount"),
     }),

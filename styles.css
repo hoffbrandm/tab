@@ -1291,8 +1291,8 @@ legend { padding: 0; margin-bottom: 7px; }
   transform: translateX(-50%);
   width: min(100%, 680px);
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 2px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
   padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
   background: rgba(246, 245, 242, 0.94);
   border-top: 1px solid var(--line);
@@ -1304,10 +1304,10 @@ legend { padding: 0; margin-bottom: 7px; }
   place-items: center;
   text-decoration: none;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 750;
   border-radius: 12px;
-  padding: 0 2px;
+  padding: 0 4px;
   text-align: center;
 }
 .dock-item.active { color: var(--ink); background: #e8e8e3; }
