@@ -1763,6 +1763,37 @@ test("a category's amount can be written back in, the way it is read out", () =>
   assert.equal(payslipAmountForCategory(slip, categories[1]), 99);
 });
 
+test("writing a category's amount never leaves two rows sharing an id", () => {
+  // A row is found by its label, so its own id is the one that stays. Stamping
+  // the category's id over it collided with whatever other row already held
+  // that id, and the store refused every save from then on.
+  const dental = { id: "dental", kind: "deduction", label: "Dental" };
+  const existing = { otherDeductions: [{ id: "dental", label: "Gym flex", amountPence: 4000 }] };
+
+  // The label is already there under a different id: keep the row's own id.
+  const matched = withPayslipCategoryAmount(
+    { otherDeductions: [...existing.otherDeductions, { id: "x1", label: "Dental", amountPence: 1800 }] },
+    dental,
+    2000,
+  );
+  assert.deepEqual(matched.otherDeductions.map((row) => row.id), ["dental", "x1"]);
+  assert.equal(payslipAmountForCategory(matched, dental), 2000);
+
+  // The label is new but the category's id is taken: take the next one free.
+  const added = withPayslipCategoryAmount(existing, dental, 1800);
+  assert.deepEqual(added.otherDeductions.map((row) => row.id), ["dental", "dental-2"]);
+  assert.equal(payslipAmountForCategory(added, dental), 1800);
+
+  // Which is what the fill does, so filling a slip cannot produce the clash.
+  const filled = payslipWithFills(existing, payslipFillFromPrevious(
+    existing,
+    { otherDeductions: [{ id: "dental", label: "Dental", amountPence: 1800 }] },
+    [dental],
+  ).fills);
+  const ids = filled.otherDeductions.map((row) => row.id);
+  assert.equal(ids.length, new Set(ids).size);
+});
+
 test("a payslip form never lists the same category twice", () => {
   // Two rows for one figure would take two amounts and keep whichever was read
   // last, so the list is deduplicated where it is built rather than at each

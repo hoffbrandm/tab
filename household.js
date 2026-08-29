@@ -1347,14 +1347,23 @@ export function withPayslipCategoryAmount(slip, category, amountPence) {
     const rows = [...(next.otherDeductions || [])];
     const at = rows.findIndex((item) => String(item.label || "").trim().toLowerCase() === label);
     const row = {
-      id: category.id,
       label: category.label,
       amountPence,
       ...(category.kind === "extra" ? { extra: true } : {}),
       ...(category.kind === "parental" ? { inNet: false } : {}),
     };
-    if (at >= 0) rows[at] = { ...rows[at], ...row };
-    else rows.push(row);
+    if (at >= 0) {
+      // A row is found by its label, so its own id is the one that stays.
+      // Stamping the category's id over it collided with whatever other row
+      // already held that id, and two rows sharing one is what the store used
+      // to refuse the whole household over.
+      rows[at] = { ...rows[at], ...row };
+    } else {
+      const taken = new Set(rows.map((item) => item.id));
+      let id = category.id;
+      for (let n = 2; taken.has(id); n += 1) id = `${category.id}-${n}`;
+      rows.push({ id, ...row });
+    }
     next.otherDeductions = rows;
   }
   return next;
