@@ -71,6 +71,12 @@ import {
   weeklyCadenceLabel,
   weeklySlotKeysForRule,
   weeklySlotsForMonth,
+  weeklySlotDueDay,
+  weeklySlotIsDue,
+  monthStatementRows,
+  setAsidesForMonth,
+  setAsidesOutsideMonth,
+  setAsideTotalPence,
   weeklyPaidFrom,
   normalizeWeeklyCadence,
   oneOffsForMonth,
@@ -159,16 +165,21 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
   assert.equal(flow.cardOutPence, 11000);
   assert.equal(flow.outPence, 229000);
   assert.equal(flow.leftPence, 271000);
-  assert.equal(flow.remainingAfterPlanPence, 271000);
+  // Allowed follows the calendar, on-cards follows what was recorded. Four
+  // weekly slots in a 31-day August fall due on the 1st, 8th, 16th and 24th, so
+  // two of the four are allowed by the 10th; one of them is ticked.
+  assert.equal(flow.dueWeeklyPence, 14000);
   assert.equal(flow.tickedWeeklyPence, 7000);
   assert.equal(flow.dueCardMonthliesPence, 2000);
+  // A one-off is planned for the month, not for a day of it, so the whole
+  // month is when it may be bought.
+  assert.equal(flow.plannedAllowedPence, 40000);
   assert.equal(flow.purchasedOneOffsPence, 0);
   assert.equal(flow.reserveSpentPence, 0);
-  assert.equal(flow.spentSoFarPence, 9000);
+  assert.equal(flow.allowanceSoFarPence, 56000);
+  assert.equal(flow.onCardsSoFarPence, 9000);
   assert.equal(flow.actualOnCardsPence, 100000);
-  assert.equal(flow.cardCheckPence, -91000);
-  assert.equal(flow.committedOutPence, 229000);
-  assert.equal(flow.potPence, 271000);
+  assert.equal(flow.cardCheckPence, -44000);
   assert.equal(flow.daysInMonth, 31);
   assert.equal(annualReservePence(household.annualBills), 10000);
 
@@ -182,7 +193,7 @@ test("cashflow In / Out / Left is a month statement, not allowed-so-far", () => 
   // The per diem is the month's spending money, allowed a day at a time.
   // On the 10th of a 31-day month, 10/31 of the £900 is allowed.
   assert.equal(reserved.reserveSpentPence, Math.round((90000 * 10) / 31));
-  assert.equal(reserved.spentSoFarPence, flow.spentSoFarPence + reserved.reserveSpentPence);
+  assert.equal(reserved.onCardsSoFarPence, flow.onCardsSoFarPence + reserved.reserveSpentPence);
   assert.equal(reserved.cardCheckPence, flow.cardCheckPence + reserved.reserveSpentPence);
 
   const future = cashflowForMonth(household, "2026-09", today);
@@ -203,14 +214,14 @@ test("a monthly due on the 21st counts as allowed on or after the 21st", () => {
     monthlies: [item],
     cards: [{ id: "c-1", name: "Card", balancePence: 5000, pendingPence: 0, updatedOn: "2026-08-20" }],
   }, "2026-08", new Date("2026-08-20T12:00:00Z"));
-  assert.equal(before.allowedPence, 0);
+  assert.equal(before.dueCardMonthliesPence, 0);
   assert.equal(before.overUnderPence, -5000);
   const onDay = cashflowForMonth({
     ...emptyHousehold(),
     monthlies: [item],
     cards: [{ id: "c-1", name: "Card", balancePence: 5000, pendingPence: 0, updatedOn: "2026-08-21" }],
   }, "2026-08", new Date("2026-08-21T12:00:00Z"));
-  assert.equal(onDay.allowedPence, 5000);
+  assert.equal(onDay.dueCardMonthliesPence, 5000);
   assert.equal(onDay.overUnderPence, 0);
 });
 
@@ -244,7 +255,7 @@ test("card subs sit in Out for the month and paidMonths is not a tick", () => {
     cardSubs: [{ id: "s-2", name: "Later sub", amountPence: 9000, dueDay: 28, paidMonths: ["2026-08"] }],
   };
   const flow = cashflowForMonth(leftover, "2026-08", new Date("2026-08-10T12:00:00Z"));
-  assert.equal(flow.allowedPence, 0);
+  assert.equal(flow.dueCardMonthliesPence, 0);
   assert.equal(flow.cardOutPence, 9000);
   assert.equal(flow.outPence, leftover.bills.reduce((total, item) => total + item.amountPence, 0) + 9000 + 10000 + 40000 + 28000);
 });
@@ -259,8 +270,10 @@ test("pending amounts sit with card balances against the allowed-so-far", () => 
   assert.equal(flow.pendingPence, 8000);
   assert.equal(flow.cardSidePence, 108000);
   assert.equal(flow.actualOnCardsPence, 108000);
-  assert.equal(flow.spentSoFarPence, 9000);
-  assert.equal(flow.cardCheckPence, -99000);
+  assert.equal(flow.onCardsSoFarPence, 9000);
+  // Allowed by the 10th: two of four weekly slots, the month's planned, and no
+  // card monthly due yet — 56,000 against 108,000 really on the cards.
+  assert.equal(flow.cardCheckPence, -52000);
   assert.equal(flow.overUnderPence, flow.cardCheckPence);
 });
 
@@ -328,14 +341,19 @@ test("viewing the current month leaves previous-month ticks and the card picture
   assert.ok(august.weeklySlots.length > 0);
   assert.ok(august.weeklySlots.every((slot) => slot.ticked === false));
   assert.equal(july.dueCardMonthliesPence, 2000);
+  // A month gone by is allowed all four of its Tuesdays; two were ticked.
+  assert.equal(july.dueWeeklyPence, 28000);
   assert.equal(july.tickedWeeklyPence, 14000);
-  assert.equal(july.spentSoFarPence, 16000);
+  assert.equal(july.onCardsSoFarPence, 16000);
   assert.equal(july.cardBalancesPence, 2000);
-  assert.equal(july.cardCheckPence, 14000);
+  assert.equal(july.cardCheckPence, 28000);
   assert.equal(august.cardBalancesPence, 9000);
   assert.equal(august.dueCardMonthliesPence, 0);
-  assert.equal(august.spentSoFarPence, 0);
-  assert.equal(august.cardCheckPence, -9000);
+  // In August only the Tuesday the 4th has come round by the 10th, and nothing
+  // is ticked — so the cards may be carrying £70 and are carrying £90.
+  assert.equal(august.dueWeeklyPence, 7000);
+  assert.equal(august.onCardsSoFarPence, 0);
+  assert.equal(august.cardCheckPence, -2000);
 
   toggleWeeklySlotTick(hh, august.weeklySlots[0].id, "2026-08");
   assert.deepEqual(
@@ -465,7 +483,7 @@ test("historical month labels stay historical", () => {
   assert.equal(labels.lands, "April 2026");
   assert.equal(labels.taxYear, "2025-26");
   const past = cashflowForMonth({ ...emptyHousehold(), annualBills: [] }, "2026-03", today);
-  assert.equal(savingLine({ ...past, potPence: -100, leftPence: -100 }, today), "March 2026 does not balance yet.");
+  assert.equal(savingLine({ ...past, leftPence: -100 }, today), "March 2026 does not balance yet.");
 });
 
 test("September 2026 is not this month on 26 August 2026", () => {
@@ -476,7 +494,7 @@ test("September 2026 is not this month on 26 August 2026", () => {
   assert.equal(jumpToCurrentMonthLabel("2026-09", today), "Back to August");
   assert.equal(jumpToCurrentMonthLabel("2026-08", today), "");
   const september = cashflowForMonth({ ...emptyHousehold(), annualBills: [] }, "2026-09", today);
-  assert.equal(savingLine({ ...september, potPence: -100, leftPence: -100 }, today), "September 2026 does not balance yet.");
+  assert.equal(savingLine({ ...september, leftPence: -100 }, today), "September 2026 does not balance yet.");
   assert.equal(spendVerdict(0, formatMoney, { month: "2026-09", today }), "");
   assert.equal(spendVerdict(0, formatMoney, { month: "2026-08", today }), "");
 });
@@ -757,7 +775,7 @@ test("weekly ticks and purchased one-offs do not move Out", () => {
   assert.equal(afterBuy.oneOffsPence, 40000);
 });
 
-test("ticking a £100 weekly leaves In and Out the same and raises savings by £100", () => {
+test("the date allows a weekly; ticking it records it on the cards", () => {
   const hh = {
     ...emptyHousehold(),
     weeklyRules: [{
@@ -783,15 +801,22 @@ test("ticking a £100 weekly leaves In and Out the same and raises savings by £
   assert.equal(before.outPence, 10000);
   assert.equal(before.spentSoFarPence, 0);
   assert.equal(before.actualOnCardsPence, 30500);
-  assert.equal(before.cardCheckPence, -30500);
+  // The one slot of a once-a-month rule falls due on the 1st, so by the 26th
+  // the cards are allowed to be carrying it whether or not it was ticked.
+  assert.equal(before.dueWeeklyPence, 10000);
+  assert.equal(before.cardCheckPence, -20500);
   assert.equal(before.weeklySlots[0].paidFrom, "card");
+
   toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
   const after = cashflowForMonth(hh, "2026-08", today);
   assert.equal(after.incomePence, before.incomePence);
   assert.equal(after.outPence, before.outPence);
   assert.equal(after.actualOnCardsPence, before.actualOnCardsPence);
+  // A tick says the shop happened. The card balance already carried it and the
+  // date already allowed it, so the check does not move — what moves is the
+  // On cards column, which is now £100 of the £100 the month allowed.
   assert.equal(after.spentSoFarPence, 10000);
-  assert.equal(after.cardCheckPence, before.cardCheckPence + 10000);
+  assert.equal(after.cardCheckPence, before.cardCheckPence);
   toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
   const undone = cashflowForMonth(hh, "2026-08", today);
   assert.equal(undone.cardCheckPence, before.cardCheckPence);
@@ -900,7 +925,7 @@ test("a standing cash monthly sits in Out and never in spent so far", () => {
   assert.equal(spentSoFarForMonth(hh, "2026-08", new Date("2026-08-26T12:00:00Z")).spentSoFarPence, 0);
 });
 
-test("purchasing a planned one-off raises savings and leaves In and Out unchanged", () => {
+test("the month allows its planned; purchasing one records it on the cards", () => {
   const hh = {
     ...emptyHousehold(),
     oneOffs: [{ id: "o-1", name: "MOT", month: "2026-08", estimatePence: 40000, purchased: false }],
@@ -916,7 +941,10 @@ test("purchasing a planned one-off raises savings and leaves In and Out unchange
   const before = cashflowForMonth(hh, "2026-08", today);
   assert.equal(before.outPence, 40000);
   assert.equal(before.spentSoFarPence, 0);
-  assert.equal(before.cardCheckPence, -5000);
+  // Planned for August, so August is when it may be bought: the whole £400 is
+  // allowed from the first, and only £50 has reached the card.
+  assert.equal(before.plannedAllowedPence, 40000);
+  assert.equal(before.cardCheckPence, 35000);
   hh.oneOffs[0].purchased = true;
   const after = cashflowForMonth(hh, "2026-08", today);
   assert.equal(after.incomePence, before.incomePence);
@@ -924,7 +952,10 @@ test("purchasing a planned one-off raises savings and leaves In and Out unchange
   assert.equal(after.actualOnCardsPence, before.actualOnCardsPence);
   assert.equal(after.purchasedOneOffsPence, 40000);
   assert.equal(after.spentSoFarPence, 40000);
-  assert.equal(after.cardCheckPence, before.cardCheckPence + 40000);
+  // Buying it does not change what August allowed — it changes what the plan
+  // says has landed on the cards, which is the other column.
+  assert.equal(after.cardCheckPence, before.cardCheckPence);
+  assert.equal(after.onCardsSoFarPence, before.onCardsSoFarPence + 40000);
 });
 
 test("a future month date-gates spent so far and has no this-month verdict", () => {
@@ -964,7 +995,12 @@ test("a future month date-gates spent so far and has no this-month verdict", () 
   assert.equal(after.incomePence, september.incomePence);
   assert.equal(after.dueCardMonthliesPence, 0);
   assert.equal(after.spentSoFarPence, 30000);
-  assert.equal(after.cardCheckPence, 30000);
+  // A month that has not started allows nothing, so ticking ahead cannot make
+  // it read as under. It records what the plan says will be on the cards.
+  assert.equal(after.dueWeeklyPence, 0);
+  assert.equal(after.plannedAllowedPence, 0);
+  assert.equal(after.cardCheckPence, 0);
+  assert.equal(after.onCardsSoFarPence, 30000);
 });
 
 test("the settings category list keeps the sheet column set after a slip is saved", () => {
@@ -1158,12 +1194,12 @@ test("Savings is In minus Out and Total savings adds the card under/overspend", 
   assert.equal(flow.outPence, 229000);
   assert.equal(flow.savingsPence, 271000);
   assert.equal(flow.savingsPence, flow.leftPence);
-  assert.equal(flow.allowanceSoFarPence, 9000);
+  assert.equal(flow.allowanceSoFarPence, 56000);
   assert.equal(flow.actualOnCardsPence, 100000);
-  assert.equal(flow.overUnderPence, -91000);
-  assert.equal(flow.overspendPence, 91000);
+  assert.equal(flow.overUnderPence, -44000);
+  assert.equal(flow.overspendPence, 44000);
   assert.equal(flow.underspendPence, 0);
-  assert.equal(flow.totalSavingsPence, 271000 - 91000);
+  assert.equal(flow.totalSavingsPence, 271000 - 44000);
 });
 
 test("a card balance lowers Total savings pound for pound and leaves Savings alone", () => {
@@ -1232,8 +1268,10 @@ test("the card check needs a balance recorded for the month on screen", () => {
   const august = cashflowForMonth(hh, "2026-08", today);
   assert.equal(august.cardCheckKnown, true);
   assert.equal(august.cardBalancesPence, 9000);
-  assert.equal(august.overUnderPence, 7000 - 9000);
-  assert.equal(august.totalSavingsPence, august.savingsPence - 2000);
+  // Twice a month falls due on the 1st and the 16th, so by the 26th both are
+  // allowed — £140 against £90 really on the card.
+  assert.equal(august.overUnderPence, 14000 - 9000);
+  assert.equal(august.totalSavingsPence, august.savingsPence + 5000);
 
   // July has none. Reading the missing balance as £0 would have reported the
   // whole £140 allowance as underspend.
@@ -1427,7 +1465,7 @@ test("Out splits by where the money leaves, and the per diem leaves by card", ()
 
   // The plan's card side and the check's card side are now the same money: the
   // whole month's allowance is the card plan plus exceptions, nothing re-added.
-  assert.equal(flow.fullMonthAllowancePence, flow.cardPlanPence + flow.exceptionsPence);
+  assert.equal(flow.fullMonthAllowancePence, flow.cardPlanPence + flow.exceptionsPence - flow.setAsidePence);
 });
 
 test("the month knows what is left to spend and where it lands", () => {
@@ -1444,9 +1482,11 @@ test("the month knows what is left to spend and where it lands", () => {
 
   // What is still to come splits into money that is going to be paid whatever
   // happens and money that is actually chosen, and the halves add back exactly.
+  // Still to come is what the calendar has not reached yet — not what has not
+  // been ticked. A shop the month allowed is allowed whether it happened or not.
   assert.equal(
     flow.committedToComePence,
-    flow.cardCommitmentsPence - (flow.tickedWeeklyPence + flow.dueCardMonthliesPence + flow.purchasedOneOffsPence),
+    flow.cardCommitmentsPence - (flow.dueWeeklyPence + flow.dueCardMonthliesPence + flow.plannedAllowedPence),
   );
   assert.equal(flow.reserveLeftPence, flow.reservePence - flow.reserveSpentPence);
   assert.equal(flow.committedToComePence + flow.reserveLeftPence, flow.remainingPlanPence);
@@ -1698,6 +1738,113 @@ test("the per diem is card money; standing cash costs are not", () => {
   assert.equal(out.cardTotalPence, flow.cardPlanPence);
 });
 
+test("a weekly slot falls due on a date, and that date is what allows it", () => {
+  // A rule set to a weekday says its own dates. A rule set to N times a month
+  // has none, so its slots are spread evenly and each falls due at the start of
+  // its own slice — the week-by-week shape the rule stands in for.
+  assert.equal(weeklySlotDueDay("2026-08-20", 2, 4, "2026-08"), 20);
+  assert.deepEqual([0, 1, 2, 3].map((i) => weeklySlotDueDay("2", i, 4, "2026-08")), [1, 8, 16, 24]);
+  assert.deepEqual([0, 1].map((i) => weeklySlotDueDay("1", i, 2, "2026-09")), [1, 16]);
+  // One slot a month is due from the first; the last never falls off the end.
+  assert.equal(weeklySlotDueDay("1", 0, 1, "2026-08"), 1);
+  assert.equal(weeklySlotDueDay("1", 3, 4, "2026-02"), 22);
+
+  assert.equal(weeklySlotIsDue({ dueDay: 16 }, 15), false);
+  assert.equal(weeklySlotIsDue({ dueDay: 16 }, 16), true);
+  // An extra was added because it happened, so it is due the moment it is there.
+  const hh = {
+    ...emptyHousehold(),
+    weeklyRules: [{ id: "w", name: "Deliveroo", amountPence: 3500, cadence: "weekday", weekday: 5, tickedKeys: [] }],
+    weeklyExtras: [{ id: "e", name: "Birthday lunch", month: "2026-08", amountPence: 6500 }],
+  };
+  const slots = weeklySlotsForMonth(hh, "2026-08");
+  assert.deepEqual(slots.filter((slot) => !slot.adHoc).map((slot) => slot.dueDay), [7, 14, 21, 28]);
+  assert.equal(slots.find((slot) => slot.adHoc).dueDay, 1);
+
+  // Nothing ticked, and the month still allows the Fridays it has reached.
+  const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-20T12:00:00Z"));
+  assert.equal(flow.dueWeeklyPence, 6500 + 3500 * 2);
+  assert.equal(flow.tickedWeeklyPence, 0);
+});
+
+test("money held back takes the card allowance down and nothing else", () => {
+  const base = {
+    ...emptyHousehold(),
+    perDiem: { amountPence: 100000 },
+    cards: [{ id: "c", name: "Card", balancePence: 40000, pendingPence: 0, updatedOn: "2026-08-10" }],
+  };
+  const today = new Date("2026-08-10T12:00:00Z");
+  const before = cashflowForMonth(base, "2026-08", today);
+  const held = cashflowForMonth({
+    ...base,
+    setAsides: [{ id: "s", name: "Car service", month: "2026-08", amountPence: 50000 }],
+  }, "2026-08", today);
+
+  assert.equal(held.setAsidePence, 50000);
+  // Nothing is spent, so the plan and its saving do not move.
+  assert.equal(held.outPence, before.outPence);
+  assert.equal(held.savingsPence, before.savingsPence);
+  // The cards are allowed to carry £500 less, today and for the whole month.
+  assert.equal(held.allowanceSoFarPence, before.allowanceSoFarPence - 50000);
+  assert.equal(held.fullMonthAllowancePence, before.fullMonthAllowancePence - 50000);
+  // Which is the mirror of an exception: hold it and the month comes in that
+  // much further under, and the month-end saving is that much bigger.
+  assert.equal(held.overUnderPence, before.overUnderPence - 50000);
+  assert.equal(held.totalSavingsPence, before.totalSavingsPence - 50000);
+  // And the halves of what is left still add back exactly.
+  assert.equal(held.committedToComePence + held.reserveLeftPence, held.remainingPlanPence);
+
+  // It belongs to one month, like an exception does.
+  const otherMonth = { ...base, setAsides: [{ id: "s", name: "Car service", month: "2026-07", amountPence: 50000 }] };
+  assert.equal(cashflowForMonth(otherMonth, "2026-08", today).setAsidePence, 0);
+  assert.equal(setAsideTotalPence(otherMonth, "2026-07"), 50000);
+  assert.equal(setAsidesForMonth(otherMonth, "2026-07").length, 1);
+  assert.equal(setAsidesOutsideMonth(otherMonth, "2026-08").length, 1);
+});
+
+test("the statement's Allowed and On cards columns each foot to their total", () => {
+  // The rows are the plan read against the calendar; the two figures under them
+  // are their sums. If a row is added and the total is not, they drift — so the
+  // test adds them up rather than restating them.
+  const hh = {
+    ...emptyHousehold(),
+    perDiem: { amountPence: 93000 },
+    monthlies: [
+      { id: "m1", name: "Mortgage", amountPence: 120000, dueDay: 1, paidFrom: "cash" },
+      { id: "m2", name: "Netflix", amountPence: 1500, dueDay: 6, paidFrom: "card" },
+    ],
+    weeklyRules: [{ id: "w", name: "Food shop", amountPence: 40000, cadence: "times", timesPerMonth: 4, tickedKeys: ["2026-08:1"] }],
+    oneOffs: [{ id: "o", name: "MOT", month: "2026-08", estimatePence: 20000, purchased: true }],
+    exceptions: [{ id: "x", name: "Travel", month: "2026-08", amountPence: 9700 }],
+    setAsides: [{ id: "s", name: "Car service", month: "2026-08", amountPence: 50000 }],
+  };
+  const table = monthStatementRows(hh, "2026-08", new Date("2026-08-10T12:00:00Z"));
+  const sum = (key) => table.rows.reduce((total, row) => total + (row[key] || 0), 0);
+  assert.equal(sum("allowedPence"), table.allowedPence);
+  assert.equal(sum("cardPence"), table.onCardsPence);
+
+  // Allowed follows the calendar and On cards follows the record, so the two
+  // come apart exactly on the weeklies and the planned.
+  const byId = Object.fromEntries(table.rows.map((row) => [row.id, row]));
+  assert.equal(byId.weekly.allowedPence, 80000);
+  assert.equal(byId.weekly.cardPence, 40000);
+  assert.equal(byId.planned.allowedPence, 20000);
+  assert.equal(byId.planned.cardPence, 20000);
+  // The per diem and card monthlies have nothing to tick, so both carry them.
+  assert.equal(byId.perdiem.allowedPence, byId.perdiem.cardPence);
+  assert.equal(byId.cardout.allowedPence, byId.cardout.cardPence);
+  // Set aside is the only row that takes the allowance down, and it never
+  // reaches a card.
+  assert.equal(byId.setaside.allowedPence, -50000);
+  assert.equal(byId.setaside.cardPence, undefined);
+  // What the cards really say is kept apart from the plan's own rows.
+  assert.deepEqual(table.actualRows.map((row) => row.id), ["pending", "cards"]);
+
+  // With nothing held back the row is not there at all.
+  const noneHeld = monthStatementRows({ ...hh, setAsides: [] }, "2026-08", new Date("2026-08-10T12:00:00Z"));
+  assert.equal(noneHeld.rows.some((row) => row.id === "setaside"), false);
+});
+
 test("a weekly not yet ticked is money owed, not room to spend", () => {
   const hh = {
     ...emptyHousehold(),
@@ -1706,9 +1853,11 @@ test("a weekly not yet ticked is money owed, not room to spend", () => {
     perDiem: { amountPence: 93000 },
   };
   const flow = cashflowForMonth(hh, "2026-08", new Date("2026-08-10T12:00:00Z"));
-  // Three unticked shops and a monthly not yet due: all of it is going to be
-  // paid, so none of it is spending room.
-  assert.equal(flow.committedToComePence, 130000);
+  // Two of the four shops have come round by the 10th and the monthly is not
+  // due till the 25th, so £900 of commitment is still ahead. It is going to be
+  // paid whatever happens, so none of it is spending room.
+  assert.equal(flow.dueWeeklyPence, 80000);
+  assert.equal(flow.committedToComePence, 90000);
   // The per diem is the half that is actually chosen: 21 of 31 days to go.
   assert.equal(flow.reserveSpentPence, 30000);
   assert.equal(flow.reserveLeftPence, 63000);
@@ -1741,7 +1890,7 @@ test("a month gone has nothing left to spend; one ahead has all of it", () => {
   assert.equal(ahead.remainingPlanPence, ahead.fullMonthAllowancePence);
 });
 
-test("ticking a weekly takes it off what is left to spend, pound for pound", () => {
+test("the calendar takes a weekly off what is left to spend, not the tick", () => {
   const hh = {
     ...emptyHousehold(),
     weeklyRules: [{
@@ -1753,15 +1902,22 @@ test("ticking a weekly takes it off what is left to spend, pound for pound", () 
       tickedKeys: [],
     }],
   };
+  // Four slots in a 31-day August fall due on the 1st, 8th, 16th and 24th.
   const today = new Date("2026-08-10T12:00:00Z");
   const before = cashflowForMonth(hh, "2026-08", today);
-  assert.equal(before.remainingPlanPence, 28000);
+  assert.deepEqual(before.weeklySlots.map((slot) => slot.dueDay), [1, 8, 16, 24]);
+  assert.equal(before.remainingPlanPence, 14000);
 
+  // Ticking says the shop happened. It was already allowed on its date, so what
+  // is left to spend does not move — otherwise the same £70 counted twice.
   toggleWeeklySlotTick(hh, before.weeklySlots[0].id, "2026-08");
   const after = cashflowForMonth(hh, "2026-08", today);
-  assert.equal(after.remainingPlanPence, 21000);
-  // The plan itself has not moved — only how much of it is still ahead.
+  assert.equal(after.remainingPlanPence, before.remainingPlanPence);
   assert.equal(after.fullMonthAllowancePence, before.fullMonthAllowancePence);
+
+  // Reaching the next slot's date is what moves it.
+  const later = cashflowForMonth(hh, "2026-08", new Date("2026-08-16T12:00:00Z"));
+  assert.equal(later.remainingPlanPence, 7000);
 });
 
 test("first working day is day 1 rolled forward, not a rule of its own", () => {

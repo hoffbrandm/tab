@@ -198,6 +198,7 @@ function parseHousehold(value, today = new Date()) {
   const pendings = list(value.pendings).map(parsePending);
   const oneOffs = normalizeOneOffsForViewMonth(list(value.oneOffs).map(parseOneOff), today).items;
   const exceptions = list(value.exceptions).map(parseException);
+  const setAsides = list(value.setAsides).map(parseSetAside);
   const annualBills = list(value.annualBills).map(parseAnnualBill);
   const pots = list(value.pots).map(parsePot);
   const pensions = list(value.pensions).map(parsePension);
@@ -219,6 +220,7 @@ function parseHousehold(value, today = new Date()) {
   uniqueIds(pendings, "Pending");
   uniqueIds(oneOffs, "One-off");
   uniqueIds(exceptions, "Exception");
+  uniqueIds(setAsides, "Set aside");
   uniqueIds(annualBills, "Annual bill");
   uniqueIds(pots, "Pot");
   uniqueIds(pensions, "Pension");
@@ -239,6 +241,7 @@ function parseHousehold(value, today = new Date()) {
     perDiem,
     oneOffs,
     exceptions,
+    setAsides,
     annualBills,
     pots,
     pensions,
@@ -487,6 +490,21 @@ function parseException(item) {
     name: requiredName(item.name, "Exception"),
     month,
     amountPence: moneyPence(item.amountPence, "Exception"),
+  };
+}
+
+/** The mirror of an exception: money kept off the cards for one month. */
+function parseSetAside(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new StoreError("Each set-aside must be an object.");
+  }
+  const month = coerceMonthKey(item.month);
+  if (!isMonthKey(month)) throw new StoreError("Set-aside month must be YYYY-MM.");
+  return {
+    id: requiredId(item.id, "Set aside"),
+    name: requiredName(item.name, "Set aside"),
+    month,
+    amountPence: moneyPence(item.amountPence, "Set aside"),
   };
 }
 

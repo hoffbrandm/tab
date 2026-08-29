@@ -17,6 +17,8 @@ import {
   emptyHousehold,
   exceptionsForMonth,
   exceptionsOutsideMonth,
+  setAsidesForMonth,
+  setAsidesOutsideMonth,
   giftAidGrossPence,
   isCurrentMonth,
   jumpToCurrentMonthLabel,
@@ -149,6 +151,18 @@ function byId(id) { return store.friends.find((friend) => friend.id === id); }
 
 function esc(value = "") {
   return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
+}
+
+/** The days of the month on screen a rule's slots fall due, as "1st, 8th…". */
+function dueDaysLabel(rule) {
+  const days = weeklySlotsForMonth({ weeklyRules: [rule] }, viewMonth).map((slot) => slot.dueDay);
+  return days.length ? days.map(ordinalDay).join(", ") : "no slots this month";
+}
+
+function ordinalDay(day) {
+  const rest = day % 100;
+  if (rest >= 11 && rest <= 13) return `${day}th`;
+  return `${day}${["th", "st", "nd", "rd"][day % 10] || "th"}`;
 }
 
 function dateLabel(value) {
@@ -357,7 +371,13 @@ function signInScreen() {
   </section>`;
 }
 
-function shell({ eyebrow, title, lede, extra = "", body, month = false, back = "" }) {
+/**
+ * Every room opened with an eyebrow, a title that mostly repeated it, and a
+ * paragraph of documentation — read once, then noise on every visit after. One
+ * title now, named the same as the room's tab so the header and the bar agree,
+ * one short line, and the detail behind "How this works".
+ */
+function shell({ title, lede, help = "", extra = "", body, month = false, back = "" }) {
   return `<section class="shell app-shell">
     <header class="topbar">
       ${back ? `<button class="back" data-action="go" data-screen="${back}" aria-label="Back">‹</button>` : `<a class="wordmark" href="#/home" data-action="go" data-screen="home">TAB</a>`}
@@ -367,9 +387,9 @@ function shell({ eyebrow, title, lede, extra = "", body, month = false, back = "
     <div class="sync-row">${syncChip()}</div>
     ${month ? monthSwitcher() : ""}
     ${title ? `<div class="intro compact">
-      <p class="eyebrow">${esc(eyebrow)}</p>
       <h1>${esc(title)}</h1>
       ${lede ? `<p class="lede">${lede}</p>` : ""}
+      ${help ? `<details class="room-help"><summary>How this works</summary><p>${help}</p></details>` : ""}
     </div>` : ""}
     ${extra}
     ${body}
@@ -387,24 +407,41 @@ function monthSwitcher() {
   </div>`;
 }
 
+/**
+ * Five destinations, one row. There were eleven across three rows, which took a
+ * third of a phone screen and pushed every page down behind 240px of padding to
+ * clear it. The four rooms the month actually runs on stay in the bar; the rest
+ * are places you visit now and then, so they live one tap away under More.
+ */
+const DOCK = [
+  ["home", "Home"],
+  ["weeklies", "Weeklies"],
+  ["monthlies", "Monthlies"],
+  ["planned", "Planned"],
+];
+
+/** The rooms More lists, with a line each saying what they are for. */
+const MORE_ROOMS = [
+  ["annual", "Annual", "Renewals and once-a-year bills, saved monthly"],
+  ["pots", "Pots", "What you hold, and pension names"],
+  ["payslips", "Payslips", "Net pay per person, per month"],
+  ["ani", "£100k", "Adjusted net income against the childcare cliff"],
+  ["giving", "Giving", "Donations and Gift Aid"],
+  ["tabs", "Tabs", "Shared costs with friends"],
+];
+
+function dockIsMore(name) {
+  return MORE_ROOMS.some(([route]) => route === name) || name === "more" || name === "friend";
+}
+
 function dock() {
   const item = (name, label, active) =>
     `<a class="dock-item${active ? " active" : ""}" href="#/${name}" data-action="go" data-screen="${name}">${label}</a>`;
   return `<nav class="dock" aria-label="App">
-    ${item("home", "Home", screen.name === "home")}
-    ${item("weeklies", "Weeklies", screen.name === "weeklies")}
-    ${item("monthlies", "Monthlies", screen.name === "monthlies")}
-    ${item("planned", "Planned", screen.name === "planned")}
-    ${item("annual", "Annual", screen.name === "annual")}
-    ${item("pots", "Pots", screen.name === "pots")}
-    ${item("payslips", "Payslips", screen.name === "payslips")}
-    ${item("ani", "£100k", screen.name === "ani")}
-    ${item("giving", "Giving", screen.name === "giving")}
-    ${item("tabs", "Tabs", screen.name === "tabs" || screen.name === "friend")}
-    ${item("more", "Account", screen.name === "more")}
+    ${DOCK.map(([name, label]) => item(name, label, screen.name === name)).join("")}
+    ${item("more", "More", dockIsMore(screen.name))}
   </nav>`;
 }
-
 function sectionHead(title, action, addLabel) {
   return `<div class="section-heading"><h2>${esc(title)}</h2>${action ? `<button class="text-button" type="button" data-action="${action}">${esc(addLabel)}</button>` : ""}</div>`;
 }
@@ -528,7 +565,29 @@ function forecastEyebrow(flow) {
   }
   if (flow.monthPhase === "past") return `${label} saved`;
   if (flow.monthPhase === "future") return `${label} plans to save`;
+  // "On track" is a claim about the plan, not about the sign of the number. A
+  // month £1,229 above what the plan allows is still saving, but it is not on
+  // track, and saying so over a green figure read as everything being fine.
+  if (flow.cardCheckKnown && flow.overUnderPence < 0) return `${label} is set to save`;
   return `${label} is on track to save`;
+}
+
+/**
+ * Where today stands, as a chip rather than a clause. The position was buried
+ * three sentences into a paragraph that then repeated the same figure twice,
+ * so the one thing worth seeing first was the last thing read.
+ */
+function positionChip(flow) {
+  if (flow.monthPhase === "future") return { label: "Not started", tone: "neutral" };
+  if (!flow.cardCheckKnown) return { label: "No card balance yet", tone: "neutral" };
+  const past = flow.monthPhase === "past";
+  if (flow.overUnderPence < 0) {
+    return { label: `${formatMoney(-flow.overUnderPence)} over plan`, tone: "negative" };
+  }
+  if (flow.overUnderPence > 0) {
+    return { label: `${formatMoney(flow.overUnderPence)} under plan`, tone: "positive" };
+  }
+  return { label: past ? "Finished on plan" : "Exactly on plan", tone: "neutral" };
 }
 
 function forecastAmount(flow) {
@@ -536,9 +595,9 @@ function forecastAmount(flow) {
 }
 
 function daysLeftPhrase(flow) {
-  if (flow.daysLeft <= 0) return "on the last day of the month";
-  if (flow.daysLeft === 1) return "with 1 day to go";
-  return `with ${flow.daysLeft} days to go`;
+  if (flow.daysLeft <= 0) return "Last day";
+  if (flow.daysLeft === 1) return "1 day left";
+  return `${flow.daysLeft} days left`;
 }
 
 /**
@@ -552,39 +611,30 @@ function positionSummary(flow) {
   const planned = formatMoney(flow.savingsPence);
   // A month that has not started has no balance yet by definition, so it is
   // answered as "not started" rather than as a card waiting to be filled in.
+  // "Saves -£7,036.67" is not a sentence anyone reads twice. A plan that does
+  // not balance is short, and says so.
+  const onThePlan = flow.savingsPence < 0
+    ? `is ${formatMoney(-flow.savingsPence)} short`
+    : `saves ${planned}`;
   if (flow.monthPhase === "future") {
-    return `${label} has not started. On the plan it saves ${planned}.`;
+    return `${label} has not started. On the plan it ${onThePlan}.`;
   }
   if (!flow.cardCheckKnown) {
     const names = flow.cardsMissingSnapshot.map((card) => card.name).join(", ");
-    return `No ${label} balance on ${names}, so there is nothing to measure today against yet. On the plan alone ${label} saves ${planned}.`;
+    return `No ${label} balance on ${names}, so there is nothing to measure today against yet. On the plan alone ${label} ${onThePlan}.`;
   }
+  // How far over or under is on the chip now, so the sentence says the thing
+  // the chip cannot: what is left to come, and what to do about it.
   if (flow.monthPhase === "past") {
-    if (flow.overUnderPence < 0) return `${label} finished ${formatMoney(-flow.overUnderPence)} over plan and saved ${forecast} against a planned ${planned}.`;
-    if (flow.overUnderPence > 0) return `${label} finished ${formatMoney(flow.overUnderPence)} under plan and saved ${forecast} against a planned ${planned}.`;
-    return `${label} finished exactly on plan and saved ${forecast}.`;
+    return `Against a plan that ${onThePlan}, ${label} came in at ${forecast}.`;
   }
-  const standing = flow.overUnderPence < 0
-    ? `The cards are ${formatMoney(-flow.overUnderPence)} above what the plan allows by today`
-    : flow.overUnderPence > 0
-      ? `The cards are ${formatMoney(flow.overUnderPence)} below what the plan allows by today`
-      : `The cards are exactly where the plan allows by today`;
-  const versus = flow.overUnderPence < 0
-    ? ` — ${formatMoney(-flow.overUnderPence)} less than planned`
-    : flow.overUnderPence > 0
-      ? `, ${formatMoney(flow.overUnderPence)} more than planned`
-      : "";
-  // The close only tells you to hold to something when there is something to
-  // hold to. With no day money left the rest of the month is not a choice, so
-  // it says what lands rather than handing over an instruction to nobody.
   const lever = hasDayMoney(flow) && flow.reserveLeftPence > 0;
   const close = nothingLeftToCome(flow)
-    ? `Nothing more is due, so ${label} lands on ${forecast}${versus}.`
+    ? `Nothing more is due, so ${label} lands on ${forecast}.`
     : lever
-      ? `Hold that and ${label} saves ${forecast}${versus}.`
-      : `If that is all that lands, ${label} saves ${forecast}${versus}.`;
-  const nudge = flow.overUnderPence < 0 && lever ? " Spend under it to pull some back." : "";
-  return `${standing}, ${daysLeftPhrase(flow)}. ${stillToComeSentence(flow)} ${close}${nudge}`;
+      ? `Hold that and ${label} lands on ${forecast}.`
+      : `If that is all that lands, ${label} saves ${forecast}.`;
+  return `${stillToComeSentence(flow)} ${close}`;
 }
 
 function nothingLeftToCome(flow) {
@@ -629,8 +679,17 @@ function statementNote(flow) {
   if (flow.reserveSpentPence) {
     parts.push(`${formatMoney(flow.reserveSpentPence)} of the ${formatMoney(flow.reserveTotalPence)} per diem (${flow.dayOfMonth}/${flow.daysInMonth} of the way through)`);
   }
+  if (flow.dueWeeklyPence) {
+    parts.push(`${formatMoney(flow.dueWeeklyPence)} of weekly slots the month has reached`);
+  }
   if (flow.exceptionsPence) parts.push(`${formatMoney(flow.exceptionsPence)} of exceptions`);
-  const made = parts.length ? `The allowance includes ${parts.join(" and ")}.` : "";
+  const listed = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
+  // A set-aside is the one thing that comes off the allowance, so it is said
+  // separately rather than buried in a list of what makes it up.
+  const held = flow.setAsidePence
+    ? `${formatMoney(flow.setAsidePence)} is held back and comes off it.`
+    : "";
+  const made = [parts.length ? `The allowance includes ${listed}.` : "", held].filter(Boolean).join(" ");
   if (flow.monthPhase !== "current" || flow.remainingPlanPence <= 0) return made;
   const lands = `Spend the rest of the plan and the cards finish ${monthName(flow.month)} at ${formatMoney(flow.forecastCardsPence)}.`;
   return made ? `${made} ${lands}` : lands;
@@ -643,15 +702,18 @@ function statementNote(flow) {
  * they have been read in for years, so Home shows that layout instead.
  */
 function statementRow(row) {
-  const cell = (pence, extra = "") => (pence == null || pence === 0
-    ? `<span class="statement-cell empty">—</span>`
-    : `<span class="statement-cell${extra}">${formatMoney(pence)}</span>`);
-  return `<div class="statement-line${row.outsideSavings ? " aside" : ""}">
-    <span class="statement-cell name">${esc(row.label)}${row.outsideSavings ? "<small>not in savings</small>" : ""}</span>
-    ${cell(row.flowPence, row.flowPence < 0 ? " negative" : "")}
-    ${cell(row.allowedPence)}
-    ${cell(row.cardPence)}
+  return `<div class="statement-line${row.aside ? " aside" : ""}">
+    <span class="statement-cell name">${esc(row.label)}${row.note ? `<small>${esc(row.note)}</small>` : ""}</span>
+    ${statementCell(row.flowPence, row.flowPence < 0 ? " negative" : "")}
+    ${statementCell(row.allowedPence, row.allowedPence < 0 ? " negative" : "")}
+    ${statementCell(row.cardPence)}
   </div>`;
+}
+
+function statementCell(pence, extra = "") {
+  return pence == null || pence === 0
+    ? `<span class="statement-cell empty">—</span>`
+    : `<span class="statement-cell${extra}">${formatMoney(pence)}</span>`;
 }
 
 function statementSection(flow) {
@@ -668,6 +730,10 @@ function statementSection(flow) {
         <div class="statement-hero">
           <p class="statement-eyebrow" data-statement-eyebrow>${esc(forecastEyebrow(flow))}</p>
           <strong class="${trackClass(flow.forecastSavingPence)}" data-statement-forecast>${forecastAmount(flow)}</strong>
+          <p class="statement-chips" data-statement-chips>
+            <span class="chip ${positionChip(flow).tone}">${esc(positionChip(flow).label)}</span>
+            ${flow.monthPhase === "current" ? `<span class="chip quiet">${esc(daysLeftPhrase(flow))}</span>` : ""}
+          </p>
           <p class="statement-summary" data-statement-summary>${esc(positionSummary(flow))}</p>
         </div>
         <div class="statement-table" data-statement-table>
@@ -684,6 +750,10 @@ function statementSection(flow) {
             <span class="statement-cell">${formatMoney(table.allowedPence)}</span>
             <span class="statement-cell">${formatMoney(table.onCardsPence)}</span>
           </div>
+          <div class="statement-line caption">
+            <span class="statement-cell name">What the cards actually say</span>
+          </div>
+          ${table.actualRows.map(statementRow).join("")}
           ${check}
           <div class="statement-line grand">
             <span class="statement-cell name">Total savings</span>
@@ -748,11 +818,12 @@ function cashflowScreen() {
   const planned = plannedForViewedMonth(hh);
   const exceptions = exceptionsForMonth(hh, viewMonth);
   const otherExceptionCount = exceptionsOutsideMonth(hh, viewMonth).length;
+  const setAsides = setAsidesForMonth(hh, viewMonth);
+  const otherSetAsideCount = setAsidesOutsideMonth(hh, viewMonth).length;
   const otherPlannedCount = oneOffsOutsideMonth(hh, viewMonth).length;
   const incomeLines = flow.incomeLines || [];
 
   return shell({
-    eyebrow: "",
     title: "",
     month: true,
     extra: statementSection(flow),
@@ -802,16 +873,32 @@ function cashflowScreen() {
           amount: formatMoney(item.amountPence),
           removeAction: "remove-exception",
           removeLabel: "Delete",
-        })).join("") : `<p class="helper">Nothing set aside in ${esc(period)}.</p>`}
+        })).join("") : `<p class="helper">No exceptions in ${esc(period)}.</p>`}
         ${otherExceptionCount ? `<p class="helper">${otherExceptionCount} exception${otherExceptionCount === 1 ? "" : "s"} in other months.</p>` : ""}
         <button class="text-button" type="button" data-action="add-exception">Add an exception</button>
+      `)}
+      ${homeAccordion("setasides", `Don't spend this · ${period}`, `
+        <p class="helper">Money you have decided not to spend. The cards are allowed to carry this much less, so holding it is what turns it into a saving. It does not change the plan or what you are owed.</p>
+        ${setAsides.length ? setAsides.map((item) => lineRow({
+          edit: "edit-setaside",
+          id: item.id,
+          title: item.name,
+          detail: "Kept off the cards",
+          amount: formatMoney(item.amountPence),
+          removeAction: "remove-setaside",
+          removeLabel: "Delete",
+        })).join("") : `<p class="helper">Nothing held back in ${esc(period)}.</p>`}
+        ${otherSetAsideCount ? `<p class="helper">${otherSetAsideCount} in other months.</p>` : ""}
+        <button class="text-button" type="button" data-action="add-setaside">Hold something back</button>
       `)}
       ${homeAccordion("weeklies", "Weeklies", `
         ${weeklySlots.length ? weeklySlots.map((slot) => lineRow({
           edit: slot.adHoc ? "edit-weekly-extra" : "edit-weekly-rule",
           id: slot.adHoc ? slot.extraId : slot.ruleId,
           title: slot.name,
-          detail: slot.adHoc ? `Extra in ${period}` : (slot.date ? dateLabel(slot.date) : weeklyCadenceLabel(weeklyRulesOf(hh).find((rule) => rule.id === slot.ruleId) || {})),
+          detail: slot.adHoc
+            ? `Extra in ${period}`
+            : `${slot.date ? dateLabel(slot.date) : `Due the ${ordinalDay(slot.dueDay)}`}${slot.dueDay <= flow.dayOfMonth ? "" : " · not yet allowed"}`,
           amount: formatMoney(slot.amountPence),
           tickAction: "tick-weekly-slot",
           tickId: slot.id,
@@ -881,9 +968,9 @@ function weekliesScreen() {
   const period = monthLabel(viewMonth);
   const slots = weeklySlotsForMonth(hh, viewMonth);
   return shell({
-    eyebrow: "Weeklies",
-    title: "Weekly rules.",
-    lede: "The rules that make the slots. Enter a food shop once — every week on a chosen weekday, so four Tuesdays in the month on screen means four slots. The slots themselves are ticked on Home.",
+    title: "Weeklies.",
+    lede: "The rules that make the slots. Tick the slots on Home.",
+    help: "Enter a food shop once — every week on a chosen weekday, so four Tuesdays in the month on screen means four slots. Each slot falls due on its own date, and the cards are allowed to be carrying it from that day whether or not it has been ticked. A rule set to N times a month spreads its slots evenly across the month instead.",
     month: true,
     body: `
       <section class="block">
@@ -892,7 +979,9 @@ function weekliesScreen() {
           edit: "edit-weekly-rule",
           id: rule.id,
           title: rule.name,
-          detail: weeklyCadenceLabel(rule),
+          // The date is what allows a slot on the cards now, so a rule says
+          // which days of the month on screen it lands on.
+          detail: `${weeklyCadenceLabel(rule)} · ${dueDaysLabel(rule)}`,
           amount: formatMoney(rule.amountPence),
           removeAction: "remove-weekly-rule",
           removeLabel: "Delete",
@@ -914,9 +1003,9 @@ function monthliesScreen() {
   const perDiemPence = perDiemTotalPence(hh);
   const dailyPence = perDiemDailyPence(hh, viewMonth);
   return shell({
-    eyebrow: "Monthlies",
-    title: "Standing outs.",
-    lede: "Name, amount, and due day, on the calendar day or rolled to the next working day. These are config — they are not ticked. Cash lines and card lines both count in Out for the whole month on screen. Cash lines do not move the card allowance. Card lines do, on the due date, with no tick.",
+    title: "Monthlies.",
+    lede: "Standing bills, and the month's spending money.",
+    help: "Name, amount, and due day, on the calendar day or rolled to the next working day. These are config — they are not ticked. Cash lines and card lines both count in Out for the whole month on screen. Cash lines do not move the card allowance. Card lines do, on the due date.",
     month: true,
     body: `
       <section class="block">
@@ -959,12 +1048,10 @@ function homePlannedEmpty(period, otherCount) {
 function plannedScreen() {
   const hh = household();
   const thisMonth = plannedForViewedMonth(hh);
-  const later = [...oneOffsOutsideMonth(hh, viewMonth)]
-    .sort((a, b) => String(a.month).localeCompare(String(b.month)) || a.name.localeCompare(b.name));
   return shell({
-    eyebrow: "Planned",
     title: "Planned.",
-    lede: `${monthLabel(viewMonth)} items show on Home.`,
+    lede: `One-offs for ${monthLabel(viewMonth)} and the months ahead.`,
+    help: "A planned one-off is planned for a month rather than for a day of it, so the whole month is when it may be bought: it is in Out, and allowed on the cards, from the first. Ticking it records that it has landed.",
     month: true,
     body: `
       <section class="block">
@@ -972,7 +1059,6 @@ function plannedScreen() {
         ${thisMonth.length ? thisMonth.map(oneOffRow).join("") : emptyLines(`Nothing planned for ${monthLabel(viewMonth)}.`)}
       </section>
       ${plannedByMonthTable(hh)}
-      ${later.length ? `<section class="block">${sectionHead("Other months", "", "")}${later.map(oneOffRow).join("")}</section>` : ""}
     `,
   });
 }
@@ -986,7 +1072,8 @@ function plannedByMonthTable(hh) {
   if (!rows.length) return "";
   const most = Math.max(...rows.map((row) => row.totalPence));
   return `<section class="block">
-    ${sectionHead("Planned per month", "", "")}
+    ${sectionHead("Every month ahead")}
+    <p class="helper">Tap a month to open it. Its items are listed at the top.</p>
     <div class="planned-months">
       ${rows.map((row) => `<div class="planned-month${row.month === viewMonth ? " on" : ""}">
         <button class="planned-month-main" type="button" data-action="go-month" data-month="${esc(row.month)}">
@@ -997,7 +1084,6 @@ function plannedByMonthTable(hh) {
         <strong class="planned-month-total">${formatMoney(row.totalPence)}</strong>
       </div>`).join("")}
     </div>
-    <p class="helper">This month and every month ahead that has something planned. Tap a month to open it.</p>
   </section>`;
 }
 
@@ -1006,7 +1092,9 @@ function oneOffRow(item) {
     edit: "edit-oneoff",
     id: item.id,
     title: item.name,
-    detail: `${monthLabel(item.month)}${item.purchased ? " · purchased" : ""}`,
+    // The section heading is already the month, so the row says the one thing
+    // the heading cannot: whether it has been bought yet.
+    detail: item.purchased ? "Bought" : "Not bought yet",
     amount: formatMoney(item.estimatePence),
     tickAction: "toggle-oneoff",
     ticked: item.purchased,
@@ -1021,11 +1109,11 @@ function annualScreen() {
   const reserve = items.length ? Math.round(items.reduce((sum, item) => sum + item.amountPence, 0) / 12) : 0;
   const monthName = (month) => new Intl.DateTimeFormat("en-GB", { month: "long" }).format(new Date(2026, month - 1, 1));
   return shell({
-    eyebrow: "Annual",
-    title: "Sinking fund.",
-    lede: "Renewals and once-a-year bills. Cashflow sets aside the total divided by 12. Edit a line here and Home updates.",
+    title: "Annual.",
+    lede: "Once-a-year bills, saved for monthly.",
+    help: "Renewals and once-a-year bills. Home carries the total divided by 12 as a cash line in Out every month. Edit a line here and Home updates.",
     back: "",
-    extra: items.length ? `<div class="dash single"><div class="stat"><span>Monthly reserve</span><strong>${formatMoney(reserve)}</strong></div></div>` : "",
+    extra: items.length ? `<div class="dash single"><div class="stat"><span>Saved each month</span><strong>${formatMoney(reserve)}</strong></div></div>` : "",
     body: `
       <section class="block">
         ${sectionHead("Annual bills", "add-annual", "Add")}
@@ -1050,9 +1138,9 @@ function potsScreen() {
     ? `<p class="helper pot-reminder">Log this month’s figures when you have them.</p>`
     : "";
   return shell({
-    eyebrow: "Where’s the money",
     title: "Pots.",
-    lede: "Named pots and today’s figure. Pensions are names and status only — no policy or NI numbers.",
+    lede: "What you hold today, and pension names.",
+    help: "Named pots and today’s figure, logged month by month so the line can be drawn. Pensions are names and status only — no policy or NI numbers.",
     back: "",
     extra: hh.pots.length ? `<div class="dash single"><div class="stat"><span>Pots total</span><strong>${formatMoney(total)}</strong></div></div>${potHistoryGraphic(hh.pots)}${reminder}` : "",
     body: `
@@ -1124,9 +1212,9 @@ function payslipsScreen() {
     .filter((slip) => slip.taxYear === year)
     .sort((a, b) => b.periodMonth.localeCompare(a.periodMonth) || a.personId.localeCompare(b.personId));
   return shell({
-    eyebrow: "Pay",
     title: "Payslips.",
-    lede: "Per person, per pay period. The month on the slip stays the month on the slip. Net pay that lands in a cashflow month is the income on Home.",
+    lede: "Net pay per person, per pay period.",
+    help: "The month on the slip stays the month on the slip. Net pay that lands in a cashflow month is the income on Home. Type the net your payslip prints and the app works out how the slip is written.",
     back: "",
     extra: `<label class="inline-label">Tax year
       <select data-action="payslip-year">${taxYearOptionsFor(year).map((item) => `<option value="${item}" ${item === year ? "selected" : ""}>${item}</option>`).join("")}</select>
@@ -1162,9 +1250,9 @@ function aniScreen() {
     today: new Date(),
   });
   return shell({
-    eyebrow: "Childcare cliff",
-    title: "£100k ANI.",
-    lede: "Stay at or under £100,000 adjusted net income. YTD and the projection come from payslips. Grossed-up Gift Aid from giving in this tax year comes off automatically.",
+    title: "£100k.",
+    lede: "Adjusted net income against the childcare cliff.",
+    help: "Stay at or under £100,000 adjusted net income. YTD and the projection come from payslips. Grossed-up Gift Aid from giving in this tax year comes off automatically.",
     back: "",
     extra: `
       <div class="ani-controls">
@@ -1201,9 +1289,9 @@ function givingScreen() {
   const thisYear = items.filter((item) => ukTaxYearFromDate(item.date) === year);
   const gross = thisYear.reduce((sum, item) => sum + donationGrossPence(item), 0);
   return shell({
-    eyebrow: "Giving",
-    title: "Charity.",
-    lede: "Who, charity, date, amount, Gift Aid. Gross is 25% extra when Gift Aid is on. Tax year follows 6 April. Gift Aid in a tax year feeds the £100k helper.",
+    title: "Giving.",
+    lede: "Donations, and the Gift Aid on them.",
+    help: "Who, charity, date, amount, Gift Aid. Gross is 25% extra when Gift Aid is on. Tax year follows 6 April. Gift Aid in a tax year feeds the £100k helper.",
     back: "",
     extra: thisYear.length ? `<div class="dash single"><div class="stat"><span>Gross ${year}</span><strong>${formatMoney(gross)}</strong></div></div>` : "",
     body: `
@@ -1226,10 +1314,19 @@ function givingScreen() {
 function moreScreen() {
   const categories = masterPayslipCategories(household());
   return shell({
-    eyebrow: "Account",
-    title: "Account.",
-    lede: "Sign-in, gist, and payslip category names. Destinations stay in the bar.",
+    title: "More.",
+    lede: "The rooms you visit now and then, and your account.",
     body: `
+      <section class="block">
+        ${sectionHead("Rooms")}
+        ${MORE_ROOMS.map(([route, label, what]) => lineRow({
+          edit: "go-room",
+          id: route,
+          title: label,
+          detail: what,
+          amount: "<span class=\"line-chevron\" aria-hidden=\"true\">›</span>",
+        })).join("")}
+      </section>
       <section class="account-card">
         <div>
           <strong>${localSession ? "Local workbook" : `Signed in as ${esc(session.login)}`}</strong>
@@ -1240,17 +1337,6 @@ function moreScreen() {
         <button class="secondary wide" data-action="sign-out">Sign out</button>
       </section>
       <section class="block">
-        ${sectionHead("Payslip categories", "add-payslip-category-master", "Add")}
-        <p class="helper">The slip’s column set. Pick these and type the amount. Net is gross through the usual deductions. Parental pay sits on the slip and stays outside that sum.</p>
-        ${categories.length ? categories.map((item) => lineRow({
-          edit: "edit-payslip-category",
-          id: item.id,
-          title: item.label,
-          detail: payslipKindLabel(item.kind),
-          amount: "",
-        })).join("") : emptyLines("The usual slip columns live here. Add another if a new one appears.", "add-payslip-category-master", "Add a category")}
-      </section>
-      <section class="block">
         ${sectionHead("People", "add-person", "Add")}
         ${household().people.map((person) => lineRow({
           edit: "edit-person",
@@ -1259,6 +1345,20 @@ function moreScreen() {
           detail: "Rename this person",
           amount: "",
         })).join("")}
+      </section>
+      <section class="block">
+        ${sectionHead("Payslip categories", "add-payslip-category-master", "Add")}
+        <p class="helper">The slip’s column set. Pick these and type the amount when you enter a payslip.</p>
+        <details class="room-help">
+          <summary>${categories.length} categor${categories.length === 1 ? "y" : "ies"}</summary>
+          ${categories.length ? categories.map((item) => lineRow({
+            edit: "edit-payslip-category",
+            id: item.id,
+            title: item.label,
+            detail: payslipKindLabel(item.kind),
+            amount: "",
+          })).join("") : emptyLines("The usual slip columns live here. Add another if a new one appears.", "add-payslip-category-master", "Add a category")}
+        </details>
       </section>
     `,
   });
@@ -1384,6 +1484,7 @@ function modalMarkup() {
     "payslip-category": payslipCategoryForm,
     oneoff: oneOffForm,
     exception: exceptionForm,
+    setaside: setAsideForm,
     annual: annualForm,
     pot: potForm,
     pension: pensionForm,
@@ -1614,6 +1715,19 @@ function exceptionForm() {
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save exception" : "Add exception"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-exception">Delete exception</button>' : ""}
+  </form>`;
+}
+
+function setAsideForm() {
+  const item = modal.item || {};
+  return `<form id="setaside-form">${modalHead(item.id ? "Don't spend this" : "Hold something back", item.id ? "Edit what is held back" : "Don't spend this")}
+    <label>What for<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Car service, last month was dear…" /></label>
+    <label>Month<input required type="month" name="month" value="${item.month || viewMonth}" /></label>
+    ${moneyLabel("Amount", "amount", item.amountPence, { required: true })}
+    <p class="helper">The cards are allowed to carry this much less for the month. Nothing is spent and the plan does not move — hold it and the month comes in under, which is the saving.</p>
+    <p class="form-error" id="form-error"></p>
+    <button class="primary wide" type="submit">${item.id ? "Save" : "Hold it back"}</button>
+    ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-setaside">Delete</button>' : ""}
   </form>`;
 }
 
@@ -1990,6 +2104,13 @@ document.addEventListener("click", async (event) => {
     else setScreen({ name: nextScreen || "home" });
   }
   if (action === "go-home") setScreen({ name: "home" });
+  // More's list navigates by row, and a row carries data-id rather than
+  // data-screen, so it gets its own action instead of bending the row shape.
+  if (action === "go-room" && MORE_ROOMS.some(([route]) => route === id)) {
+    event.preventDefault();
+    closeModal();
+    setScreen({ name: id });
+  }
   if (action === "go-month") { viewMonth = event.target.closest("[data-month]").dataset.month; render(); }
   if (action === "go-planned") setScreen({ name: "planned" });
   if (action === "go-weeklies") setScreen({ name: "weeklies" });
@@ -2043,6 +2164,8 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "add-exception") openItem("exception");
   if (action === "edit-exception") openItem("exception", "exceptions", id);
+  if (action === "add-setaside") openItem("setaside");
+  if (action === "edit-setaside") openItem("setaside", "setAsides", id);
   if (action === "add-annual") openItem("annual");
   if (action === "edit-annual") openItem("annual", "annualBills", id);
   if (action === "add-pot") openItem("pot");
@@ -2070,6 +2193,11 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     removeListedItem("exceptions", id, "exception");
+  }
+  if (action === "remove-setaside") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeListedItem("setAsides", id, "held-back amount");
   }
   if (action === "remove-monthly") {
     event.preventDefault();
@@ -2158,6 +2286,7 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-delete-sub") askDelete("sub", modal.item.id, "this subscription");
   if (action === "confirm-delete-oneoff") askDelete("oneoff", modal.item.id, "this one-off");
   if (action === "confirm-delete-exception") askDelete("exception", modal.item.id, "this exception");
+  if (action === "confirm-delete-setaside") askDelete("setaside", modal.item.id, "this held-back amount");
   if (action === "confirm-delete-annual") askDelete("annual", modal.item.id, "this annual bill");
   if (action === "confirm-delete-pot") askDelete("pot", modal.item.id, "this pot");
   if (action === "confirm-delete-pension") askDelete("pension", modal.item.id, "this pension name");
@@ -2210,6 +2339,7 @@ document.addEventListener("click", async (event) => {
       if (targetModal.target === "sub") hh.cardSubs = hh.cardSubs.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "oneoff") hh.oneOffs = hh.oneOffs.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "exception") hh.exceptions = (hh.exceptions || []).filter((item) => item.id !== targetModal.id);
+      if (targetModal.target === "setaside") hh.setAsides = (hh.setAsides || []).filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "annual") hh.annualBills = hh.annualBills.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "pot") hh.pots = hh.pots.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "pension") hh.pensions = hh.pensions.filter((item) => item.id !== targetModal.id);
@@ -2284,6 +2414,7 @@ document.addEventListener("submit", (event) => {
     "home-card-form": saveHomeCard,
     "oneoff-form": saveOneOff,
     "exception-form": saveException,
+    "setaside-form": saveSetAside,
     "annual-form": saveAnnual,
     "pot-form": savePot,
     "pension-form": savePension,
@@ -2779,6 +2910,19 @@ async function saveException(event) {
     toastEdit: "Exception updated",
     build: (data) => ({
       name: requireName(data.get("name"), "exception"),
+      month: coerceMonthKey(data.get("month")) || viewMonth,
+      amountPence: requireMoney(data.get("amount"), "amount"),
+    }),
+  });
+}
+
+async function saveSetAside(event) {
+  return saveNamedMoney(event, {
+    list: "setAsides",
+    toastAdd: "Held back",
+    toastEdit: "Updated",
+    build: (data) => ({
+      name: requireName(data.get("name"), "reason"),
       month: coerceMonthKey(data.get("month")) || viewMonth,
       amountPence: requireMoney(data.get("amount"), "amount"),
     }),

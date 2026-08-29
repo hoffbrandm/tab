@@ -97,6 +97,48 @@ test("the per diem is one figure of its own, not a line in a list", () => {
   assert.doesNotMatch(app, /hh\.reserves/);
 });
 
+test("the bar carries five destinations, not eleven across three rows", () => {
+  // Eleven items wrapped to three rows, took a third of a phone screen and made
+  // every page clear 240px of it. The four rooms the month runs on stay; the
+  // rest are a tap away under More.
+  assert.match(app, /const DOCK = \[/);
+  assert.match(app, /const MORE_ROOMS = \[/);
+  const dock = app.slice(app.indexOf("const DOCK = ["), app.indexOf("function moneyControl("));
+  assert.match(dock, /DOCK\.map/);
+  assert.match(dock, /item\("more", "More", dockIsMore\(screen\.name\)\)/);
+  for (const gone of ["annual", "pots", "payslips", "ani", "giving", "tabs"]) {
+    assert.doesNotMatch(dock, new RegExp(`item\\("${gone}"`), `${gone} belongs under More now`);
+  }
+  // More lists them as rows, and a row navigates by its id.
+  assert.match(app, /edit: "go-room"/);
+  assert.match(app, /if \(action === "go-room" && MORE_ROOMS\.some/);
+  assert.match(css, /grid-template-columns: repeat\(5, 1fr\)/);
+  assert.match(rule(".app-shell"), /padding-bottom: calc\(96px/);
+});
+
+test("a room opens with one title and folds its documentation away", () => {
+  // Every room led with an eyebrow, a title that mostly repeated it, and a
+  // paragraph read once and then re-read on every visit for ever.
+  assert.doesNotMatch(app, /eyebrow:/);
+  const roomShell = app.slice(app.indexOf("function shell({"), app.indexOf("function monthSwitcher("));
+  assert.doesNotMatch(roomShell, /class="eyebrow"/);
+  assert.match(app, /function shell\(\{ title, lede, help = "", extra = "", body, month = false, back = "" \}\)/);
+  assert.match(app, /<details class="room-help"><summary>How this works<\/summary>/);
+  assert.match(css, /\.room-help > summary/);
+  // And the title matches the room's own tab, so the header and the bar agree.
+  for (const title of ['title: "Weeklies."', 'title: "Monthlies."', 'title: "Planned."', 'title: "Annual."', 'title: "Pots."', 'title: "Payslips."', 'title: "£100k."', 'title: "Giving."', 'title: "More."']) {
+    assert.ok(app.includes(title), `${title} should name the room the way the bar does`);
+  }
+});
+
+test("a weekly says which day of the month allows it", () => {
+  assert.match(app, /function dueDaysLabel/);
+  assert.match(app, /function ordinalDay/);
+  assert.match(app, /\$\{weeklyCadenceLabel\(rule\)\} · \$\{dueDaysLabel\(rule\)\}/);
+  assert.match(app, /Due the \$\{ordinalDay\(slot\.dueDay\)\}/);
+  assert.match(app, /not yet allowed/);
+});
+
 test("regularly cleared lists swipe left to delete; setup entities do not", () => {
   assert.match(app, /removeAction: "remove-oneoff"/);
   assert.match(app, /removeAction: "remove-monthly"/);
@@ -170,7 +212,12 @@ test("Home shows the month as the household's own Main Table lays it out", () =>
   assert.match(app, /"Overspend" : .*"Underspend" : "On budget"/);
   // Exceptions are shown but stepped over by the savings total, as the sheet
   // does, and the row says so rather than leaving it to be worked out.
-  assert.match(app, /row\.outsideSavings \? "<small>not in savings<\/small>" : ""/);
+  assert.match(app, /row\.note \? `<small>\$\{esc\(row\.note\)\}<\/small>` : ""/);
+  // What the cards actually say is a different kind of fact from the rows
+  // above, so it is captioned rather than mixed in with them.
+  assert.match(app, /What the cards actually say/);
+  assert.match(app, /table\.actualRows\.map\(statementRow\)/);
+  assert.match(css, /\.statement-line\.caption/);
   // The statement holds no inputs, so it re-renders whole rather than being
   // patched cell by cell — no hook can go stale against the markup.
   const refresh = app.slice(app.indexOf("function refreshStatement"), app.indexOf("function cashflowScreen"));
@@ -189,14 +236,23 @@ test("Home leads with what the month ends up saving, not with a bare total", () 
   assert.match(app, /function positionSummary/);
   assert.match(app, /is on track to save/);
   assert.match(app, /is heading for a shortfall of/);
-  // The summary has to name the three things the month is asking: where today
-  // stands, what is left to spend, and where the month lands.
-  const summary = app.slice(app.indexOf("function positionSummary"), app.indexOf("function statementNote"));
-  assert.match(summary, /above what the plan allows by today/);
-  assert.match(summary, /below what the plan allows by today/);
-  assert.match(summary, /a day/);
+  // Where today stands is a chip, so it is the first thing seen rather than a
+  // clause three sentences in — and "on track" is not claimed over a month
+  // that is above what the plan allows, however healthy the saving looks.
+  assert.match(app, /function positionChip/);
+  assert.match(app, /over plan`, tone: "negative"/);
+  assert.match(app, /under plan`, tone: "positive"/);
+  assert.match(app, /if \(flow\.cardCheckKnown && flow\.overUnderPence < 0\) return `\$\{label\} is set to save`/);
+  assert.match(app, /data-statement-chips/);
+  assert.match(css, /\.statement-chips \.chip\.negative/);
+  // The summary says what the chip cannot: what is left to come, and where the
+  // month lands if it is held.
+  const summary = app.slice(app.indexOf("function positionSummary"), app.indexOf("function nothingLeftToCome"));
   assert.match(summary, /has not started/);
-  assert.match(summary, /finished .*over plan/);
+  assert.match(summary, /lands on/);
+  assert.match(summary, /stillToComeSentence\(flow\)/);
+  // And it no longer repeats the same over/under figure the chip carries.
+  assert.doesNotMatch(summary, /less than planned|more than planned/);
   // "Keep the rest under £X" counted committed bills as spending room.
   assert.doesNotMatch(app, /Keep the rest under/);
 });
@@ -291,7 +347,12 @@ test("the weeklies room is rules; ticking lives on Home only", () => {
 
 test("Planned shows what each month ahead is carrying", () => {
   assert.match(app, /function plannedByMonthTable/);
-  assert.match(app, /Planned per month/);
+  assert.match(app, /Every month ahead/);
   assert.match(app, /data-action="go-month"/);
   assert.match(css, /\.planned-month-bar/);
+  // The room listed December's items in "Other months" and totalled them again
+  // in the table right above, so the same £600 appeared twice on one screen.
+  const plannedRoom = app.match(/function plannedScreen\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.doesNotMatch(plannedRoom, /Other months/);
+  assert.doesNotMatch(app, /oneOffsOutsideMonth\(hh, viewMonth\)\]/);
 });

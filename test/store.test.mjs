@@ -46,6 +46,23 @@ test("an old cash-in-reserve list splits into the per diem and cash monthlies", 
   assert.deepEqual(again.monthlies, monthlies);
 });
 
+test("money held back is one month's line, like an exception", () => {
+  const store = parseStore({
+    version: 1, friends: [], transactions: [],
+    household: { setAsides: [{ id: "s1", name: "Car service", month: "2026-08", amountPence: 50000 }] },
+  });
+  assert.deepEqual(store.household.setAsides, [
+    { id: "s1", name: "Car service", month: "2026-08", amountPence: 50000 },
+  ]);
+  assert.deepEqual(parseStore(JSON.parse(JSON.stringify(store))).household.setAsides, store.household.setAsides);
+  const bad = (setAside) => () => parseStore({
+    version: 1, friends: [], transactions: [], household: { setAsides: [setAside] },
+  });
+  assert.throws(bad({ id: "s1", name: "Car service", amountPence: 1 }), /Set-aside month/);
+  assert.throws(bad({ id: "s1", month: "2026-08", amountPence: 1 }), /Set aside needs a name/);
+  assert.throws(bad({ id: "s1", name: "x", month: "2026-08", amountPence: -1 }), /Set aside/);
+});
+
 test("a per diem already set is kept as it stands", () => {
   const store = parseStore({
     version: 1, friends: [], transactions: [],

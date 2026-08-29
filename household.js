@@ -97,6 +97,7 @@ export function emptyHousehold() {
     perDiem: { amountPence: 0 },
     oneOffs: [],
     exceptions: [],
+    setAsides: [],
     annualBills: [],
     pots: [],
     pensions: [],
@@ -121,6 +122,7 @@ export function householdHasData(household) {
     "pendings",
     "oneOffs",
     "exceptions",
+    "setAsides",
     "annualBills",
     "pots",
     "pensions",
@@ -402,10 +404,27 @@ export function monthliesOf(household) {
   ];
 }
 
+/**
+ * The day of the month a weekly slot falls due, so a shop that has not come
+ * round yet is not money the cards are allowed to be carrying.
+ *
+ * A rule set to a weekday says its own date. A rule set to N times a month has
+ * no dates, so the slots are spread evenly and each falls due at the start of
+ * its own slice: four shops in a 31-day month come due on the 1st, 8th, 16th
+ * and 24th, which is the week-by-week shape the rule is standing in for.
+ */
+export function weeklySlotDueDay(slotKey, index, count, month) {
+  if (DATE.test(String(slotKey))) return Number(String(slotKey).slice(8, 10));
+  const days = daysInMonthKey(month);
+  if (!days || !count || count <= 0) return 1;
+  return Math.min(days, Math.floor((index * days) / count) + 1);
+}
+
 export function weeklySlotsForMonth(household, month) {
   const slots = [];
   for (const rule of weeklyRulesOf(household)) {
-    for (const key of weeklySlotKeysForRule(rule, month)) {
+    const keys = weeklySlotKeysForRule(rule, month);
+    keys.forEach((key, index) => {
       slots.push({
         id: `${rule.id}:${key}`,
         ruleId: rule.id,
@@ -416,11 +435,12 @@ export function weeklySlotsForMonth(household, month) {
         month,
         slotKey: key,
         date: DATE.test(key) ? key : "",
+        dueDay: weeklySlotDueDay(key, index, keys.length, month),
         ticked: (rule.tickedKeys || []).includes(`${month}:${key}`),
         adHoc: false,
         paidFrom: weeklyPaidFrom(rule),
       });
-    }
+    });
   }
   for (const extra of (household?.weeklyExtras || []).filter((item) => item.month === month)) {
     slots.push({
@@ -433,12 +453,20 @@ export function weeklySlotsForMonth(household, month) {
       month,
       slotKey: extra.id,
       date: "",
+      // An extra was added because it happened, so it is due the moment it is
+      // there rather than waiting for a date it does not have.
+      dueDay: 1,
       ticked: Boolean(extra.happened),
       adHoc: true,
       paidFrom: weeklyPaidFrom(extra),
     });
   }
   return slots;
+}
+
+/** A slot the month has reached: the cards are allowed to be carrying it. */
+export function weeklySlotIsDue(slot, dayOfMonth) {
+  return Number(slot?.dueDay || 1) <= dayOfMonth;
 }
 
 export function weeklyCadenceLabel(rule) {
@@ -670,18 +698,59 @@ export function exceptionsTotalPence(household, month) {
   return sumPence(exceptionsForMonth(household, month), (item) => item.amountPence);
 }
 
+/**
+ * Money deliberately kept off the cards this month — "don't spend this". It is
+ * the mirror of an exception: an exception is paid from another pot, so the
+ * cards may carry that much more without it reading as overspend; a set-aside
+ * is money that is not to be spent at all, so the cards may carry that much
+ * less. Neither moves the plan, and neither is spent — which is the point. Hold
+ * a set-aside and the month comes in under, and the saving is that much bigger.
+ */
+export function setAsidesForMonth(household, month) {
+  return (household?.setAsides || []).filter((item) => coerceMonthKey(item?.month) === month);
+}
+
+export function setAsidesOutsideMonth(household, month) {
+  return (household?.setAsides || []).filter((item) => coerceMonthKey(item?.month) !== month);
+}
+
+export function setAsideTotalPence(household, month) {
+  return sumPence(setAsidesForMonth(household, month), (item) => item.amountPence);
+}
+
+/**
+ * Two different questions, asked of the same month, that were one figure until
+ * now: what the cards are *allowed* to be carrying by today, and what they are
+ * *actually* carrying from each category.
+ *
+ * Allowed is a matter of the calendar. A weekly slot dated the 20th is money
+ * the cards may carry from the 20th, whether or not the shop happened; a card
+ * monthly counts from its due date; the per diem counts a day at a time. Spent
+ * is a matter of what was recorded: the weeklies ticked, the planned bought.
+ *
+ * Splitting them is what makes the check mean anything. While allowed followed
+ * the ticks, ticking a weekly moved both sides at once and the month could
+ * never read as under on it.
+ */
 export function spentSoFarForMonth(household, month, today = new Date()) {
   const dayOfMonth = proRateDay(month, today);
   const monthlies = monthliesOf(household);
   const cardMonthlies = monthlies.filter((item) => item.paidFrom !== "cash");
   const weeklySlots = weeklySlotsForMonth(household, month);
   const oneOffs = oneOffsForMonth(household, month);
+  const dueWeeklyPence = sumPence(
+    weeklySlots.filter((slot) => weeklySlotIsDue(slot, dayOfMonth)),
+    (item) => item.amountPence,
+  );
   const tickedWeeklyPence = sumPence(
     weeklySlots.filter((slot) => slot.ticked),
     (item) => item.amountPence,
   );
   const dueCardMonthlies = cardMonthlies.filter((item) => monthlyIsAllowed(item, month, dayOfMonth));
   const dueCardMonthliesPence = sumPence(dueCardMonthlies, (item) => item.amountPence);
+  // A planned one-off is planned for the month rather than for a day of it, so
+  // the whole month is when it may be bought — there is no date to wait for.
+  const plannedAllowedPence = dayOfMonth > 0 ? sumPence(oneOffs, (item) => item.estimatePence) : 0;
   const purchasedOneOffsPence = sumPence(
     oneOffs.filter((item) => item.purchased),
     (item) => item.estimatePence,
@@ -692,11 +761,16 @@ export function spentSoFarForMonth(household, month, today = new Date()) {
   return {
     dayOfMonth,
     reserveTotalPence,
+    dueWeeklyPence,
     tickedWeeklyPence,
     dueCardMonthlies,
     dueCardMonthliesPence,
+    plannedAllowedPence,
     purchasedOneOffsPence,
     reserveSpentPence,
+    // What the calendar allows on the cards by today, and what the cards are
+    // actually carrying from these categories. Exceptions join both later.
+    allowedSoFarPence: dueWeeklyPence + dueCardMonthliesPence + plannedAllowedPence + reserveSpentPence,
     spentSoFarPence: tickedWeeklyPence + dueCardMonthliesPence + purchasedOneOffsPence + reserveSpentPence,
   };
 }
@@ -722,21 +796,39 @@ export function monthStatementRows(household, month, today = new Date()) {
     { id: "income", label: "Income", flowPence: flow.incomePence },
     // The annual saving is a standing cash line on the sheet, not its own row.
     { id: "cash", label: "Cash out", flowPence: -(flow.billsPence + flow.annualReservePence) },
-    { id: "perdiem", label: "Per diem", flowPence: -flow.cardReservePence, allowedPence: flow.reserveSpentPence },
-    { id: "cardout", label: "Credit card out", flowPence: -flow.cardOutPence, allowedPence: flow.dueCardMonthliesPence },
-    { id: "weekly", label: "Weekly expenses", flowPence: -flow.envelopesMonthlyPence, allowedPence: flow.tickedWeeklyPence },
-    { id: "planned", label: "Monthly expenses", flowPence: -flow.oneOffsPence, allowedPence: flow.purchasedOneOffsPence },
+    // Allowed is what the calendar permits by today; on cards is what has
+    // actually been recorded. For the per diem and card monthlies those are the
+    // same fact — there is nothing to tick — so both columns carry it.
+    { id: "perdiem", label: "Per diem", flowPence: -flow.cardReservePence, allowedPence: flow.reserveSpentPence, cardPence: flow.reserveSpentPence },
+    { id: "cardout", label: "Credit card out", flowPence: -flow.cardOutPence, allowedPence: flow.dueCardMonthliesPence, cardPence: flow.dueCardMonthliesPence },
+    // These two are where the columns come apart, and where the month is won or
+    // lost: allowed once the slot's date arrives, on the cards once it is ticked.
+    { id: "weekly", label: "Weekly expenses", flowPence: -flow.envelopesMonthlyPence, allowedPence: flow.dueWeeklyPence, cardPence: flow.tickedWeeklyPence },
+    { id: "planned", label: "Monthly expenses", flowPence: -flow.oneOffsPence, allowedPence: flow.plannedAllowedPence, cardPence: flow.purchasedOneOffsPence },
     // Paid from another pot: it lets the cards carry more without ever moving
     // savings, which is why the sheet's own Savings total steps over this row.
-    { id: "exceptions", label: "Exceptions", flowPence: flow.exceptionsPence, allowedPence: flow.exceptionsPence, outsideSavings: true },
+    { id: "exceptions", label: "Exceptions", flowPence: flow.exceptionsPence, allowedPence: flow.exceptionsPence, cardPence: flow.exceptionsPence, note: "not in savings", aside: true },
+    // The mirror of an exception, and the only row that takes the allowance
+    // down: money decided against rather than money spent.
+    ...(flow.setAsidePence
+      ? [{ id: "setaside", label: "Set aside", allowedPence: -flow.setAsidePence, note: "don't spend this", aside: true }]
+      : []),
+  ];
+  // What the cards actually say, which is a different kind of fact from the
+  // rows above: those are the plan read against the calendar, these are typed
+  // off a statement. Keeping them apart is what lets the column foot.
+  const actualRows = [
     { id: "pending", label: "Pending", cardPence: flow.pendingPence },
     { id: "cards", label: "Credit cards", cardPence: flow.cardBalancesPence },
   ];
   return {
     rows,
+    actualRows,
     savingsPence: flow.savingsPence,
     allowedPence: flow.allowanceSoFarPence,
-    onCardsPence: flow.actualOnCardsPence,
+    // The rows above foot to this: it is their sum, not the card statement.
+    onCardsPence: flow.onCardsSoFarPence,
+    actualOnCardsPence: flow.actualOnCardsPence,
     overUnderPence: flow.overUnderPence,
     cardCheckKnown: flow.cardCheckKnown,
     totalSavingsPence: flow.totalSavingsPence,
@@ -820,14 +912,6 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const cardPlanPence = cardCommitmentsPence + cardReservePence;
   const outPence = cashOutPence + cardPlanPence;
   const leftPence = incomePence - outPence;
-  const committedOutPence = outPence;
-  const potPence = leftPence;
-  const remainingAfterPlanPence = leftPence;
-  const allowedMonthlies = live.dueCardMonthlies;
-  const allowedPence = live.dueCardMonthliesPence;
-  const allowedSoFarPence = allowedPence;
-  const subsAllowedPence = allowedPence;
-  const allowedWithSubsPence = allowedPence;
   const cardBalancesPence = sumPence(cards, (item) => item.balancePence);
   const pendingRows = pendingsForMonth(household, month, today);
   const cardPendingPence = sumPence(cards, (item) => item.pendingPence || 0);
@@ -838,17 +922,27 @@ export function cashflowForMonth(household, month, today = new Date()) {
   // report the whole allowance as underspend. The check is unknown instead.
   const cardsMissingSnapshot = cards.filter((item) => item.missingSnapshot);
   const cardCheckKnown = cardsMissingSnapshot.length === 0;
+  const dueWeeklyPence = live.dueWeeklyPence;
   const tickedWeeklyPence = live.tickedWeeklyPence;
+  const plannedAllowedPence = live.plannedAllowedPence;
   const purchasedOneOffsPence = live.purchasedOneOffsPence;
   const dueCardMonthliesPence = live.dueCardMonthliesPence;
   const reserveSpentPence = live.reserveSpentPence;
-  const spentSoFarPence = live.spentSoFarPence;
   const actualOnCardsPence = cardSidePence;
   // Exceptions are paid from another pot, so the card is allowed to be that
   // much higher without it reading as overspend, and they never touch savings.
   const exceptions = exceptionsForMonth(household, month);
   const exceptionsPence = sumPence(exceptions, (item) => item.amountPence);
-  const allowanceSoFarPence = spentSoFarPence + exceptionsPence;
+  // A set-aside is the mirror: money that is not to be spent, so the cards are
+  // allowed to carry that much less. It never moves the plan or the saving —
+  // holding it is what turns it into a saving, through the underspend.
+  const setAsides = setAsidesForMonth(household, month);
+  const setAsidePence = sumPence(setAsides, (item) => item.amountPence);
+  // What the cards may be carrying by today, and what they are carrying from
+  // each category. The five that make up a card: the per diem, card monthlies,
+  // weeklies, this month's planned, and exceptions.
+  const allowanceSoFarPence = live.allowedSoFarPence + exceptionsPence - setAsidePence;
+  const onCardsSoFarPence = live.spentSoFarPence + exceptionsPence;
   // Sheet footer: Savings is In minus Out; the card check is the over/underspend
   // against the allowance; Total Savings adds the two.
   const savingsPence = leftPence;
@@ -863,15 +957,16 @@ export function cashflowForMonth(household, month, today = new Date()) {
   // left to spend, which is the number that answers "can we still pull it back".
   const phase = monthPhase(month, today);
   const daysLeft = Math.max(0, days - dayOfMonth);
-  const fullMonthAllowancePence = cardPlanPence + exceptionsPence;
+  const fullMonthAllowancePence = cardPlanPence + exceptionsPence - setAsidePence;
   const remainingPlanPence = fullMonthAllowancePence - allowanceSoFarPence;
   // What is still to come splits in two, and the halves are not the same kind
   // of money. Weeklies, card monthlies and planned one-offs are expected to be
   // paid — they are not a lever, and treating them as spending money left says
-  // there is more room in the month than there is. The reserve is the part that
-  // is genuinely chosen day to day, so it is the only half worth a per-day
-  // figure. The two add back to the whole remaining plan.
-  const committedToComePence = cardCommitmentsPence - (tickedWeeklyPence + dueCardMonthliesPence + purchasedOneOffsPence);
+  // there is more room in the month than there is. They stop being "still to
+  // come" once the calendar reaches them, spent or not. The per diem is the
+  // part that is genuinely chosen day to day, so it is the only half worth a
+  // per-day figure. The two add back to the whole remaining plan.
+  const committedToComePence = cardCommitmentsPence - (dueWeeklyPence + dueCardMonthliesPence + plannedAllowedPence);
   const reserveLeftPence = cardReservePence - reserveSpentPence;
   const perDayReserveLeftPence = daysLeft > 0 && reserveLeftPence > 0 ? Math.round(reserveLeftPence / daysLeft) : 0;
   // Where the month lands: the plan's saving carried forward with however far
@@ -909,7 +1004,6 @@ export function cashflowForMonth(household, month, today = new Date()) {
     monthlies,
     cashMonthlies,
     cardMonthlies,
-    allowedMonthlies,
     weeklySlots,
     annualReservePence: annualReserve,
     oneOffsPence,
@@ -917,13 +1011,6 @@ export function cashflowForMonth(household, month, today = new Date()) {
     envelopesMonthlyPence,
     outPence,
     leftPence,
-    committedOutPence,
-    potPence,
-    remainingAfterPlanPence,
-    allowedPence,
-    allowedSoFarPence,
-    subsAllowedPence,
-    allowedWithSubsPence,
     cardBalancesPence,
     cardsMissingSnapshot,
     cardCheckKnown,
@@ -933,14 +1020,19 @@ export function cashflowForMonth(household, month, today = new Date()) {
     pendingTablePence,
     cardSidePence,
     overUnderPence,
+    dueWeeklyPence,
     tickedWeeklyPence,
+    plannedAllowedPence,
     dueCardMonthliesPence,
     purchasedOneOffsPence,
     reserveSpentPence,
-    spentSoFarPence,
+    spentSoFarPence: live.spentSoFarPence,
+    onCardsSoFarPence,
     actualOnCardsPence,
     exceptions,
     exceptionsPence,
+    setAsides,
+    setAsidePence,
     allowanceSoFarPence,
     savingsPence,
     cardCheckPence,
@@ -955,7 +1047,7 @@ export function spendVerdict() {
 }
 
 export function savingLine(flow, today = new Date()) {
-  const left = Number.isInteger(flow?.leftPence) ? flow.leftPence : flow?.potPence;
+  const left = flow?.leftPence || 0;
   const when = isCurrentMonth(flow.month, today) ? "This month" : monthLabel(flow.month);
   if (left < 0) return `${when} does not balance yet.`;
   return `${when} can save.`;
