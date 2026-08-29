@@ -1523,20 +1523,42 @@ export function payslipAsRead(slip) {
 
 /** Net as the payslip itself says it, when the payslip says it. */
 /**
- * A slip with its net typed and nothing else on it. Entering a whole payslip is
- * a job; knowing what lands in the bank this month is not, and the second
- * should not wait on the first. Type the net, the month is right, and the
- * detail can follow whenever.
+ * A slip that prints a net and has nothing to work one out from. Entering a
+ * whole payslip is a job; knowing what lands in the bank this month is not, and
+ * the second should not wait on the first. Type the net, the month is right,
+ * and the detail can follow whenever.
+ *
+ * What decides it is gross paid, not whether the slip is otherwise blank. A
+ * salary is the contractual annual figure — it is not a payment and no net is
+ * ever worked out of it — so a slip carrying one but no gross still has nothing
+ * to compute. Reading salary as "detail" here meant the net someone had typed
+ * was ignored and the month reported £0, which looks exactly like a slip that
+ * failed to save.
  */
 export function payslipIsNetOnly(slip) {
   const stated = slip?.statedNetPence;
   if (!Number.isInteger(stated) || stated <= 0) return false;
-  return (slip?.grossPence || 0) <= 0 && (slip?.salaryPence || 0) <= 0;
+  return payslipGrossPaidPence(slip) <= 0;
 }
 
-/** True when there is enough on the slip to work taxable pay out of it. */
+/**
+ * True when there is enough on the slip to work taxable pay out of it, which is
+ * a different question from the one above: taxable pay does fall back to salary
+ * when there is no gross, so a salary is detail for the £100k line even though
+ * it is nothing to a net.
+ */
 export function payslipHasDetail(slip) {
   return (slip?.grossPence || 0) > 0 || (slip?.salaryPence || 0) > 0;
+}
+
+/**
+ * A slip that says nothing about what landed: no gross to compute from and no
+ * net printed either. It reads as £0 on Home, which is indistinguishable from a
+ * slip that never saved, so the list says so rather than leaving it to be
+ * worked out.
+ */
+export function payslipSaysNothing(slip) {
+  return payslipGrossPaidPence(slip) <= 0 && !(slip?.statedNetPence > 0);
 }
 
 export function payslipNetAsReadPence(slip) {

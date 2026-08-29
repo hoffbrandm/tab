@@ -230,8 +230,15 @@ test("a payslip opens on the month the money lands and can borrow last month's",
   assert.match(clicks, /if \(action === "fill-payslip-from-last"\)/);
   assert.match(clicks, /payslipFillFromPrevious\(current, last, merged\)/);
   assert.match(clicks, /payslipWithFills\(current, fills\)/);
-  // A slip with only a net says so where its gross would be.
+  // A slip with only a net says so where its gross would be, and one that says
+  // nothing at all names what would fix it — £0 on Home reads exactly like a
+  // slip that failed to save.
   assert.match(app, /net only, no detail yet/);
+  assert.match(app, /nothing to work a net out from — add the net it prints/);
+  assert.match(app, /payslipSaysNothing\(slip\)/);
+  // And the working is not shown against a net there is nothing to check.
+  assert.match(app, /if \(payslipIsNetOnly\(live\)\) \{/);
+  assert.match(app, /Taken from the slip/);
   assert.match(app, /only a net typed, so/);
   // And the form snapshot keeps the typed net, or a re-render threw it away.
   const snapshot = app.slice(app.indexOf("function snapshotPayslipForm"), app.indexOf("function updatePerDiemRate"));
@@ -424,9 +431,14 @@ test("the payslip form says what Gross means and checks it against the slip", ()
   assert.match(app, /name="grossExcludesBonus"/);
   assert.match(app, /Which of these is the net on your payslip\?/);
   assert.match(app, /data-action="payslip-reading"/);
-  assert.match(app, /moneyLabel\("Net on the payslip", "statedNet"/);
+  assert.match(app, /moneyLabel\("Net pay", "statedNet"/);
   assert.match(app, /data-payslip-net-block/);
   assert.match(app, /payslipNetHints\(live\)/);
+  // The net is the one figure a slip can carry on its own, so it is asked for
+  // before the figures it would otherwise be worked out from.
+  const form = app.slice(app.indexOf("function payslipForm()"), app.indexOf("function payslipNetBlock"));
+  assert.ok(form.indexOf('"Net pay", "statedNet"') < form.indexOf('"Salary", "salary"'));
+  assert.ok(form.indexOf('"Net pay", "statedNet"') < form.indexOf("payslip-cats"));
 });
 
 test("the payslips list shows the live net, never a stale cached one", () => {
