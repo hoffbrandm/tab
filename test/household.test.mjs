@@ -11,6 +11,7 @@ import {
   monthsBetween,
   payslipIsNetOnly,
   payslipHasDetail,
+  payslipSaysNothing,
   payslipFillFromPrevious,
   payslipWithFills,
   withPayslipCategoryAmount,
@@ -1667,6 +1668,30 @@ test("a slip with only its net typed is still the month's income", () => {
   assert.equal(payslipNetAsReadPence(detailed), 1000000 - 234806 - 33716);
   // And a slip with neither is not net-only either; it is simply empty.
   assert.equal(payslipIsNetOnly({ statedNetPence: 0 }), false);
+
+  // A salary is the contractual annual figure, not a payment: no net is ever
+  // worked out of it. Reading it as detail meant a slip carrying a salary and
+  // the net it prints ignored the net and reported £0 — which looks exactly
+  // like a slip that failed to save, and was reported as one.
+  const withSalary = { ...netOnly, salaryPence: 6600000 };
+  assert.equal(payslipIsNetOnly(withSalary), true);
+  assert.equal(payslipNetAsReadPence(withSalary), 579778);
+  // Taxable pay is a different question, and it does fall back to salary — so
+  // the same slip is still detail enough for the £100k line.
+  assert.equal(payslipHasDetail(withSalary), true);
+  // Whatever the gross is written as, it is the gross paid that decides.
+  assert.equal(payslipIsNetOnly({ ...netOnly, grossPence: 10, grossBeforeSacrifice: true, salarySacrificePensionPence: 10 }), true);
+});
+
+test("a slip that says nothing about what landed says so", () => {
+  // £0 on Home is indistinguishable from a slip that never saved, so the list
+  // names the one thing that would fix it rather than leaving it to be guessed.
+  assert.equal(payslipSaysNothing({}), true);
+  assert.equal(payslipSaysNothing({ salaryPence: 6600000 }), true, "a salary alone is not a payment");
+  assert.equal(payslipSaysNothing({ taxPence: 1000, niPence: 500 }), true, "deductions alone are not either");
+  assert.equal(payslipSaysNothing({ statedNetPence: 64010 }), false);
+  assert.equal(payslipSaysNothing({ grossPence: 64010 }), false);
+  assert.equal(payslipSaysNothing({ salaryPence: 6600000, statedNetPence: 64010 }), false);
 });
 
 test("the £100k line leaves net-only slips out and says how many", () => {

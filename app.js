@@ -54,6 +54,7 @@ import {
   payslipNetPence,
   payslipNetAsReadPence,
   payslipIsNetOnly,
+  payslipSaysNothing,
   payslipNetCheck,
   payslipNetHints,
   payslipGrossPaidPence,
@@ -1291,9 +1292,11 @@ function payslipsScreen() {
             title: `${personById(slip.personId)?.name || "Person"} · ${labels.period}`,
             // Net is the figure the month is actually built on, so it is the
             // one in the amount column; gross moves into the detail line.
-            detail: payslipIsNetOnly(slip)
-              ? `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · net only, no detail yet`
-              : `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · gross ${formatMoney(slip.grossPence || slip.salaryPence)}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
+            detail: payslipSaysNothing(slip)
+              ? `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · nothing to work a net out from — add the net it prints`
+              : payslipIsNetOnly(slip)
+                ? `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · net only, no detail yet`
+                : `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · gross ${formatMoney(slip.grossPence || slip.salaryPence)}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
             amount: formatMoney(payslipNetAsReadPence(slip)),
           });
         }).join("") : emptyLines("Add a month when you have a slip — or a forecast row you do not treat as fact.", "add-payslip", "Add a payslip")}
@@ -1584,8 +1587,14 @@ function formHelp(html) {
   return `<details class="room-help form-help"><summary>How this works</summary><p>${html}</p></details>`;
 }
 
-function moneyLabel(label, name, pence, { required = false, placeholder = "0.00" } = {}) {
-  return `<label>${esc(label)}${required ? "" : ' <span class="optional">optional</span>'}${moneyControl({ name, pence, required, placeholder })}</label>`;
+/**
+ * `optional` marks a field you can leave out. It is separate from `required`
+ * because one field is neither: the net can carry a slip on its own, so calling
+ * it optional undersells it, but requiring it would block a slip built from its
+ * gross and deductions instead.
+ */
+function moneyLabel(label, name, pence, { required = false, optional = !required, placeholder = "0.00" } = {}) {
+  return `<label>${esc(label)}${optional ? ' <span class="optional">optional</span>' : ""}${moneyControl({ name, pence, required, placeholder })}</label>`;
 }
 
 function friendForm() {
@@ -1898,6 +1907,8 @@ function payslipForm() {
     <label>Tax year<select name="taxYear">${taxYearOptionsFor(item.taxYear).map((year) => `<option value="${year}" ${year === (item.taxYear || currentUkTaxYear()) ? "selected" : ""}>${year}</option>`).join("")}</select></label>
     <label>Month the money lands<input required type="month" name="moneyLandsMonth" value="${months.moneyLandsMonth}" /></label>
     <label>Pay period<input required type="month" name="periodMonth" value="${months.periodMonth}" /></label>
+    ${moneyLabel("Net pay", "statedNet", item.statedNetPence, { optional: false })}
+    <p class="helper">The figure the payslip prints. Type just this and the month is right — the rest of the slip can follow whenever.</p>
     ${previous ? `<div class="fill-last">
       <button class="secondary wide" type="button" data-action="fill-payslip-from-last">Fill from ${esc(monthLabel(previous.periodMonth))}</button>
       <p class="helper">That slip's net was ${formatMoney(payslipNetAsReadPence(previous))}. Only empty boxes are filled — anything you have typed is left alone.</p>
@@ -1920,8 +1931,6 @@ function payslipForm() {
       </label>` : `<p class="helper">Every category is already on this slip.</p>`}
     </section>
     ${payslipNetBlock(live)}
-    ${moneyLabel("Net on the payslip", "statedNet", item.statedNetPence)}
-    <p class="helper">Optional, and the fastest check there is: type what the slip says and the figures above are measured against it.</p>
     <label>Tax code <span class="optional">optional</span><input maxlength="20" name="taxCode" value="${esc(item.taxCode || "")}" autocomplete="off" /></label>
     <label>Note <span class="optional">optional</span><input maxlength="200" name="note" value="${esc(item.note || "")}" /></label>
     <label class="check-row"><input type="checkbox" name="forecast" ${item.forecast ? "checked" : ""} /><span>This is a forecast — do not treat it as confirmed</span></label>
@@ -1937,6 +1946,15 @@ function payslipForm() {
  * mistyped figure obvious.
  */
 function payslipNetBlock(live) {
+  // With no gross there is no arithmetic to show, and the check would report
+  // the whole net as a shortfall — a mismatch against nothing. Say what the
+  // slip is worth instead, and what would turn it into a working slip.
+  if (payslipIsNetOnly(live)) {
+    return `<div class="payslip-net" data-payslip-net-block>
+      <p class="payslip-net-line total"><span>Net</span><strong data-payslip-net>${formatMoney(live.statedNetPence)}</strong></p>
+      <p class="payslip-net-check ok">Taken from the slip. Add the gross and the deductions whenever, and they get checked against it.</p>
+    </div>`;
+  }
   const check = payslipNetCheck(live);
   const resolved = resolvedPayslipReading(live);
   const hints = payslipNetHints(live);
