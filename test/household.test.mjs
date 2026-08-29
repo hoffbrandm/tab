@@ -7,6 +7,14 @@ import {
   outBreakdownForMonth,
   resolvedPayslipReading,
   payslipAsRead,
+  payslipMonthsForNewSlip,
+  monthsBetween,
+  payslipIsNetOnly,
+  payslipHasDetail,
+  payslipFillFromPrevious,
+  payslipWithFills,
+  withPayslipCategoryAmount,
+  payslipAmountForCategory,
   grossIsSalaryOverTwelve,
   benefitsArePaid,
   payslipNetAsReadPence,
@@ -1603,6 +1611,136 @@ test("a funded cashplan goes on and straight back off, netting to nothing", () =
   assert.ok(labels.includes("Cashplan deducted"));
   assert.equal(DEFAULT_PAYSLIP_CATEGORIES.find((c) => c.label === "Cashplan funded").kind, "extra");
   assert.equal(DEFAULT_PAYSLIP_CATEGORIES.find((c) => c.label === "Cashplan deducted").kind, "deduction");
+});
+
+test("a new slip opens on the month the money lands, for the period before", () => {
+  // You add a payslip in the month the money arrives — that is the month you
+  // are looking at and the month it gets spent in. How far back the period runs
+  // is a fact about the employer, so it is read off the person's own last slip.
+  assert.equal(monthsBetween("2026-08", "2026-07"), -1);
+  assert.equal(monthsBetween("2026-08", "2026-08"), 0);
+  assert.equal(monthsBetween("2026-12", "2027-02"), 2);
+  assert.equal(monthsBetween("", "2026-08"), null);
+
+  const people = [{ id: "m", name: "M" }];
+  const none = { ...emptyHousehold(), people };
+  assert.deepEqual(payslipMonthsForNewSlip(none, "m", "2026-09"), {
+    moneyLandsMonth: "2026-09", periodMonth: "2026-08",
+  });
+  // Paid a month in arrears: September's money is August's slip.
+  const arrears = { ...none, payslips: [{ id: "a", personId: "m", periodMonth: "2026-07", moneyLandsMonth: "2026-08" }] };
+  assert.deepEqual(payslipMonthsForNewSlip(arrears, "m", "2026-09"), {
+    moneyLandsMonth: "2026-09", periodMonth: "2026-08",
+  });
+  // Paid in the month it covers: both are September.
+  const sameMonth = { ...none, payslips: [{ id: "b", personId: "m", periodMonth: "2026-08", moneyLandsMonth: "2026-08" }] };
+  assert.deepEqual(payslipMonthsForNewSlip(sameMonth, "m", "2026-09"), {
+    moneyLandsMonth: "2026-09", periodMonth: "2026-09",
+  });
+});
+
+test("a slip with only its net typed is still the month's income", () => {
+  // Entering a whole payslip is a job; knowing what lands in the bank is not,
+  // and the second should not wait on the first.
+  const netOnly = {
+    id: "n", personId: "m", periodMonth: "2026-07", moneyLandsMonth: "2026-08",
+    confirmed: true, statedNetPence: 579778,
+  };
+  assert.equal(payslipIsNetOnly(netOnly), true);
+  assert.equal(payslipHasDetail(netOnly), false);
+  assert.equal(payslipNetAsReadPence(netOnly), 579778);
+  const flow = cashflowForMonth(
+    { ...emptyHousehold(), people: [{ id: "m", name: "M" }], payslips: [netOnly] },
+    "2026-08",
+    new Date("2026-08-26T12:00:00Z"),
+  );
+  assert.equal(flow.incomePence, 579778);
+
+  // A gross on the slip means there is arithmetic to do, so the net is worked
+  // out rather than taken on trust.
+  const detailed = { ...netOnly, grossPence: 1000000, taxPence: 234806, niPence: 33716 };
+  assert.equal(payslipIsNetOnly(detailed), false);
+  assert.equal(payslipHasDetail(detailed), true);
+  assert.equal(payslipNetAsReadPence(detailed), 1000000 - 234806 - 33716);
+  // And a slip with neither is not net-only either; it is simply empty.
+  assert.equal(payslipIsNetOnly({ statedNetPence: 0 }), false);
+});
+
+test("the £100k line leaves net-only slips out and says how many", () => {
+  // A net-only slip has no taxable pay on it. Left in, it reads as a £0 month
+  // and drags the whole run-rate down — worse than saying it is not counted.
+  const hh = {
+    ...emptyHousehold(),
+    people: [{ id: "m", name: "M" }],
+    payslips: [
+      { id: "a", personId: "m", taxYear: "2026-27", periodMonth: "2026-05", moneyLandsMonth: "2026-06", grossPence: 800000 },
+      { id: "b", personId: "m", taxYear: "2026-27", periodMonth: "2026-06", moneyLandsMonth: "2026-07", statedNetPence: 602000 },
+    ],
+  };
+  const result = aniFromHousehold(hh, { personId: "m", taxYear: "2026-27", today: new Date("2026-08-29T12:00:00Z") });
+  assert.equal(result.confirmedCount, 1);
+  assert.equal(result.netOnlyCount, 1);
+  assert.equal(result.ytdPence, 800000);
+  // The run-rate is the detailed slip's, not an average dragged to nothing.
+  assert.equal(result.lastMonthlyPence, 800000);
+});
+
+test("last month's figures are borrowed only where this month's are blank", () => {
+  // A figure you did not type looks exactly like one you did, so filling over
+  // anything typed would mean checking every field to find what was decided
+  // for you. Nothing is overwritten, ever.
+  const categories = [
+    { id: "tax", kind: "tax", label: "Tax" },
+    { id: "ni", kind: "ni", label: "NI" },
+    { id: "gym", kind: "deduction", label: "Gym flex" },
+  ];
+  const previous = {
+    salaryPence: 9600000, grossPence: 800000, taxPence: 168000, niPence: 30000, taxCode: "1257L",
+    otherDeductions: [{ id: "gym", label: "Gym flex", amountPence: 4000 }],
+  };
+  const current = { grossPence: 812000, niPence: 31000, otherDeductions: [] };
+  const { fills } = payslipFillFromPrevious(current, previous, categories);
+  assert.deepEqual(fills.map((fill) => fill.field || fill.category.label), ["salaryPence", "Tax", "Gym flex", "taxCode"]);
+
+  const filled = payslipWithFills(current, fills);
+  assert.equal(filled.grossPence, 812000, "a typed gross is left alone");
+  assert.equal(filled.niPence, 31000, "a typed NI is left alone");
+  assert.equal(filled.salaryPence, 9600000);
+  assert.equal(filled.taxPence, 168000);
+  assert.equal(filled.taxCode, "1257L");
+  assert.equal(payslipAmountForCategory(filled, categories[2]), 4000);
+
+  // Nothing to borrow from, and nothing happens.
+  assert.deepEqual(payslipFillFromPrevious(current, null, categories).fills, []);
+  // Everything already typed, and there is nothing left to fill.
+  assert.deepEqual(payslipFillFromPrevious(payslipWithFills(current, fills), previous, categories).fills, []);
+});
+
+test("a category's amount can be written back in, the way it is read out", () => {
+  const categories = [
+    { id: "tax", kind: "tax", label: "Tax" },
+    { id: "gym", kind: "deduction", label: "Gym flex" },
+    { id: "smp", kind: "parental", label: "SMP" },
+    { id: "cf", kind: "extra", label: "Cashplan funded" },
+  ];
+  let slip = {};
+  for (const category of categories) slip = withPayslipCategoryAmount(slip, category, 1234);
+  for (const category of categories) assert.equal(payslipAmountForCategory(slip, category), 1234);
+  // Parental pay stays out of net and an extra adds to it, as the kinds say.
+  assert.equal(slip.otherDeductions.find((row) => row.label === "SMP").inNet, false);
+  assert.equal(slip.otherDeductions.find((row) => row.label === "Cashplan funded").extra, true);
+  // Writing the same category again replaces it rather than adding a second.
+  slip = withPayslipCategoryAmount(slip, categories[1], 99);
+  assert.equal(slip.otherDeductions.filter((row) => row.label === "Gym flex").length, 1);
+  assert.equal(payslipAmountForCategory(slip, categories[1]), 99);
+});
+
+test("a payslip form never lists the same category twice", () => {
+  // Two rows for one figure would take two amounts and keep whichever was read
+  // last, so the list is deduplicated where it is built rather than at each
+  // caller — the fill merges two lists and would otherwise double every row.
+  const rows = [{ id: "tax", label: "Tax" }, { id: "ni", label: "NI" }, { id: "tax", label: "Tax" }, { id: "" }, null];
+  assert.deepEqual(keepPayslipFormRows(rows).map((row) => row.id), ["tax", "ni"]);
 });
 
 test("a stored slip is read the way its own net says, without being reopened", () => {

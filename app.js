@@ -51,12 +51,18 @@ import {
   payslipIsConfirmed,
   payslipNetPence,
   payslipNetAsReadPence,
+  payslipIsNetOnly,
   payslipNetCheck,
   payslipNetHints,
   payslipGrossPaidPence,
   payslipDeductionsPence,
   payslipNetReadings,
   payslipRecordLabels,
+  payslipMonthsForNewSlip,
+  previousPayslipForPerson,
+  usedPayslipCategories,
+  payslipFillFromPrevious,
+  payslipWithFills,
   pendingListTotalPence,
   pendingsForMonth,
   potHistorySeries,
@@ -1283,7 +1289,9 @@ function payslipsScreen() {
             title: `${personById(slip.personId)?.name || "Person"} · ${labels.period}`,
             // Net is the figure the month is actually built on, so it is the
             // one in the amount column; gross moves into the detail line.
-            detail: `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · gross ${formatMoney(slip.grossPence || slip.salaryPence)}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
+            detail: payslipIsNetOnly(slip)
+              ? `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · net only, no detail yet`
+              : `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · gross ${formatMoney(slip.grossPence || slip.salaryPence)}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
             amount: formatMoney(payslipNetAsReadPence(slip)),
           });
         }).join("") : emptyLines("Add a month when you have a slip — or a forecast row you do not treat as fact.", "add-payslip", "Add a payslip")}
@@ -1329,7 +1337,7 @@ function aniScreen() {
           : result.overLimit
             ? `<p>Sacrifice another ${formatMoney(result.extraSacrificePence)} this tax year${formatExtraPercent(result)} to stay at £100k.${result.remainingMonths ? ` That’s ${formatMoney(result.extraPerRemainingMonthPence)} in each of the ${result.remainingMonths} remaining months.` : ""}</p>`
             : `<p>On this projection you’re ${formatMoney(result.underByPence)} under the £100k cliff.</p>`}
-        <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Grossed-up Gift Aid taken off: ${formatMoney(result.giftAidReliefPence)}.</p>
+        <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Grossed-up Gift Aid taken off: ${formatMoney(result.giftAidReliefPence)}.${result.netOnlyCount ? ` ${result.netOnlyCount} slip${result.netOnlyCount === 1 ? " has" : "s have"} only a net typed, so ${result.netOnlyCount === 1 ? "it is" : "they are"} not in this figure — add the gross to count ${result.netOnlyCount === 1 ? "it" : "them"}.` : ""}</p>
       </section>
     `,
   });
@@ -1867,13 +1875,24 @@ function payslipForm() {
   const item = modal.payslip || {};
   const personId = item.personId || household().people[0]?.id;
   const categories = payslipFormCategories(item, personId);
+  // A new slip opens on the month you are looking at, because that is the month
+  // the money arrives in and the month the household spends it in. The period
+  // it covers is read off the person's last slip.
+  const previous = previousPayslipForPerson(household(), personId, item.periodMonth || "");
+  const months = item.id
+    ? { moneyLandsMonth: item.moneyLandsMonth || item.periodMonth || viewMonth, periodMonth: item.periodMonth || viewMonth }
+    : payslipMonthsForNewSlip(household(), personId, viewMonth);
   const available = unusedMasterPayslipCategories(categories, masterPayslipCategories(household()));
   const live = livePayslipFromForm(item, categories);
   return `<form id="payslip-form">${modalHead(item.id ? "Edit payslip" : "Add a payslip")}
     <label>Person<select name="personId" required data-action="payslip-person">${household().people.map((person) => `<option value="${person.id}" ${person.id === personId ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select></label>
     <label>Tax year<select name="taxYear">${taxYearOptionsFor(item.taxYear).map((year) => `<option value="${year}" ${year === (item.taxYear || currentUkTaxYear()) ? "selected" : ""}>${year}</option>`).join("")}</select></label>
-    <label>Pay period<input required type="month" name="periodMonth" value="${item.periodMonth || viewMonth}" /></label>
-    <label>Month the money lands<input required type="month" name="moneyLandsMonth" value="${item.moneyLandsMonth || item.periodMonth || viewMonth}" /></label>
+    <label>Month the money lands<input required type="month" name="moneyLandsMonth" value="${months.moneyLandsMonth}" /></label>
+    <label>Pay period<input required type="month" name="periodMonth" value="${months.periodMonth}" /></label>
+    ${previous ? `<div class="fill-last">
+      <button class="secondary wide" type="button" data-action="fill-payslip-from-last">Fill from ${esc(monthLabel(previous.periodMonth))}</button>
+      <p class="helper">That slip's net was ${formatMoney(payslipNetAsReadPence(previous))}. Only empty boxes are filled — anything you have typed is left alone.</p>
+    </div>` : ""}
     ${moneyLabel("Salary", "salary", item.salaryPence)}
     ${moneyLabel("Gross", "gross", item.grossPence)}
     ${formHelp("Gross is the Payments total on the slip — basic, bonus, and any parental pay — after any salary sacrifice has come off. Tax and NI go in Categories below. If your slip writes it another way, type the net it prints under Net and the app works out how to read it.")}
@@ -1893,7 +1912,7 @@ function payslipForm() {
     </section>
     ${payslipNetBlock(live)}
     ${moneyLabel("Net on the payslip", "statedNet", item.statedNetPence)}
-    <p class="helper">Optional. Type what the slip says and the figures above get checked against it.</p>
+    <p class="helper">Optional, and the fastest check there is: type what the slip says and the figures above are measured against it.</p>
     <label>Tax code <span class="optional">optional</span><input maxlength="20" name="taxCode" value="${esc(item.taxCode || "")}" autocomplete="off" /></label>
     <label>Note <span class="optional">optional</span><input maxlength="200" name="note" value="${esc(item.note || "")}" /></label>
     <label class="check-row"><input type="checkbox" name="forecast" ${item.forecast ? "checked" : ""} /><span>This is a forecast — do not treat it as confirmed</span></label>
@@ -2387,6 +2406,26 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-delete-annual") askDelete("annual", modal.item.id, "this annual bill");
   if (action === "confirm-delete-pot") askDelete("pot", modal.item.id, "this pot");
   if (action === "confirm-delete-pension") askDelete("pension", modal.item.id, "this pension name");
+  if (action === "fill-payslip-from-last") {
+    snapshotPayslipForm();
+    const current = modal.payslip || {};
+    const last = previousPayslipForPerson(household(), current.personId, current.periodMonth || "");
+    if (!last) return;
+    // Any category last month used has to be on the form before its amount can
+    // land in it, so the two lists are merged first.
+    const merged = keepPayslipFormRows([
+      ...(modal.slipCategories || []),
+      ...usedPayslipCategories(last, masterPayslipCategories(household())),
+    ]);
+    const { fills } = payslipFillFromPrevious(current, last, merged);
+    modal.slipCategories = merged;
+    modal.payslip = payslipWithFills(current, fills);
+    renderModal();
+    showToast(fills.length
+      ? `Filled ${fills.length} ${fills.length === 1 ? "box" : "boxes"} from ${monthLabel(last.periodMonth)}`
+      : "Nothing left to fill");
+    return;
+  }
   if (action === "confirm-delete-payslip") askDelete("payslip", modal.payslip.id, "this payslip");
   if (action === "confirm-delete-donation") askDelete("donation", modal.item.id, "this donation");
 
@@ -3183,6 +3222,9 @@ function snapshotPayslipForm() {
     ...(modal.payslip || {}),
     salaryPence: readMoney("salary"),
     grossPence: readMoney("gross"),
+    // Without this the net was dropped on every re-render, so adding a category
+    // after typing the slip's own net quietly threw the net away.
+    statedNetPence: readMoney("statedNet"),
   }, modal.slipCategories || [], form);
   modal.payslip = {
     ...amounts,

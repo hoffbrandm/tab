@@ -1205,8 +1205,20 @@ export function potHistorySeries(pots) {
   });
 }
 
+/**
+ * The rows a payslip form may show: real categories, each at most once. A form
+ * that listed the same category twice would take two amounts for one figure and
+ * keep whichever it read last, so the list is deduplicated here rather than at
+ * each of the places that build one.
+ */
 export function keepPayslipFormRows(rows) {
-  return (rows || []).filter((item) => item && String(item.id || "").trim());
+  const seen = new Set();
+  return (rows || []).filter((item) => {
+    const id = String(item?.id || "").trim();
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 export function builtinPayslipCategory(kind) {
@@ -1295,6 +1307,75 @@ export function payslipAmountForCategory(slip, category) {
   const label = String(category.label || "").trim().toLowerCase();
   const row = (slip.otherDeductions || []).find((item) => String(item.label || "").trim().toLowerCase() === label);
   return row?.amountPence || 0;
+}
+
+/** The inverse of payslipAmountForCategory: one category's amount, written in. */
+export function withPayslipCategoryAmount(slip, category, amountPence) {
+  const next = { ...(slip || {}) };
+  if (!category) return next;
+  if (category.kind === "bonus") next.bonusPence = amountPence;
+  else if (category.kind === "benefits") next.benefitsPence = amountPence;
+  else if (category.kind === "sacrifice") next.salarySacrificePensionPence = amountPence;
+  else if (category.kind === "pension") next.reliefAtSourcePensionPence = amountPence;
+  else if (category.kind === "tax") next.taxPence = amountPence;
+  else if (category.kind === "ni") next.niPence = amountPence;
+  else {
+    const label = String(category.label || "").trim().toLowerCase();
+    const rows = [...(next.otherDeductions || [])];
+    const at = rows.findIndex((item) => String(item.label || "").trim().toLowerCase() === label);
+    const row = {
+      id: category.id,
+      label: category.label,
+      amountPence,
+      ...(category.kind === "extra" ? { extra: true } : {}),
+      ...(category.kind === "parental" ? { inNet: false } : {}),
+    };
+    if (at >= 0) rows[at] = { ...rows[at], ...row };
+    else rows.push(row);
+    next.otherDeductions = rows;
+  }
+  return next;
+}
+
+/**
+ * Last month's figures, offered only where this month's are still blank.
+ *
+ * Most of a payslip repeats: the tax code, the sacrifice, the gym flex. Filling
+ * them in silently would be worse than leaving them empty — a figure you did
+ * not type looks exactly like one you did, so you would have to check every
+ * field to find out which the app had decided for you. So this fills nothing on
+ * its own: it is what one deliberate tap borrows, and it never touches a field
+ * that already has something in it. Type this month's net afterwards and the
+ * check that already exists says whether the borrowed figures still add up.
+ */
+export function payslipFillFromPrevious(current, previous, categories) {
+  const fills = [];
+  if (!previous) return { fills };
+  for (const field of ["salaryPence", "grossPence"]) {
+    if ((current?.[field] || 0) > 0) continue;
+    const amountPence = previous[field] || 0;
+    if (amountPence > 0) fills.push({ field, amountPence });
+  }
+  for (const category of categories || []) {
+    if (payslipAmountForCategory(current, category) > 0) continue;
+    const amountPence = payslipAmountForCategory(previous, category);
+    if (amountPence > 0) fills.push({ category, amountPence });
+  }
+  // The tax code is the field that changes least of all, and it is not money.
+  if (!String(current?.taxCode || "").trim() && String(previous.taxCode || "").trim()) {
+    fills.push({ field: "taxCode", text: String(previous.taxCode).trim() });
+  }
+  return { fills };
+}
+
+/** The fills applied, so the form can be re-rendered from one slip. */
+export function payslipWithFills(slip, fills) {
+  let next = { ...(slip || {}) };
+  for (const fill of fills || []) {
+    if (fill.field) next[fill.field] = fill.text == null ? fill.amountPence : fill.text;
+    else next = withPayslipCategoryAmount(next, fill.category, fill.amountPence);
+  }
+  return next;
 }
 
 export function payslipCategoryIsExtra(category) {
@@ -1418,7 +1499,26 @@ export function payslipAsRead(slip) {
 }
 
 /** Net as the payslip itself says it, when the payslip says it. */
+/**
+ * A slip with its net typed and nothing else on it. Entering a whole payslip is
+ * a job; knowing what lands in the bank this month is not, and the second
+ * should not wait on the first. Type the net, the month is right, and the
+ * detail can follow whenever.
+ */
+export function payslipIsNetOnly(slip) {
+  const stated = slip?.statedNetPence;
+  if (!Number.isInteger(stated) || stated <= 0) return false;
+  return (slip?.grossPence || 0) <= 0 && (slip?.salaryPence || 0) <= 0;
+}
+
+/** True when there is enough on the slip to work taxable pay out of it. */
+export function payslipHasDetail(slip) {
+  return (slip?.grossPence || 0) > 0 || (slip?.salaryPence || 0) > 0;
+}
+
 export function payslipNetAsReadPence(slip) {
+  // Nothing to do the slip's arithmetic on, so the net it prints is the answer.
+  if (payslipIsNetOnly(slip)) return slip.statedNetPence;
   return payslipNetPence(payslipAsRead(slip));
 }
 
@@ -1610,6 +1710,33 @@ export function previousPayslipForPerson(household, personId, beforeMonth = "") 
     .sort((a, b) => String(b.periodMonth).localeCompare(String(a.periodMonth)))[0] || null;
 }
 
+/**
+ * The months a new slip should open on. You add a payslip in the month the
+ * money arrives — that is the month you are looking at and the month the
+ * household spends it in — and the slip itself is for the period before.
+ *
+ * How far before is a fact about the person's employer, not a rule, so it is
+ * read off their last slip: one is paid a month in arrears, another in the same
+ * month. With no history to read, a month back is the common case.
+ */
+export function payslipMonthsForNewSlip(household, personId, landsMonth) {
+  const last = previousPayslipForPerson(household, personId);
+  const lastLands = last?.moneyLandsMonth || last?.periodMonth;
+  const known = last?.periodMonth && lastLands
+    ? monthsBetween(lastLands, last.periodMonth)
+    : null;
+  const offset = Number.isInteger(known) ? known : -1;
+  return { moneyLandsMonth: landsMonth, periodMonth: addMonths(landsMonth, offset) };
+}
+
+/** Whole months from one month key to another, negative when it goes back. */
+export function monthsBetween(from, to) {
+  const a = parseMonthKey(from);
+  const b = parseMonthKey(to);
+  if (!a || !b) return null;
+  return (b.year - a.year) * 12 + (b.month - a.month);
+}
+
 export function defaultCategoriesForNewPayslip(household, personId) {
   const last = previousPayslipForPerson(household, personId);
   if (!last) return [];
@@ -1777,7 +1904,12 @@ export function aniProjection({
   const slips = (payslips || [])
     .filter((slip) => slip.personId === personId && slip.taxYear === taxYear)
     .sort((a, b) => String(a.periodMonth).localeCompare(String(b.periodMonth)));
-  const confirmed = slips.filter((slip) => payslipIsConfirmed(slip, today));
+  // A net-only slip has no taxable pay on it, so it cannot count here. Left in,
+  // it would read as a £0 month and drag the whole run-rate down with it, which
+  // is worse than saying plainly that it is not counted.
+  const allConfirmed = slips.filter((slip) => payslipIsConfirmed(slip, today));
+  const confirmed = allConfirmed.filter(payslipHasDetail);
+  const netOnlyCount = allConfirmed.length - confirmed.length;
   const months = [...new Set(confirmed.map((slip) => slip.periodMonth).filter(Boolean))];
   const remainingMonths = Math.max(0, 12 - months.length);
   const ytdPence = sumPence(confirmed, payslipAniPence);
@@ -1801,6 +1933,7 @@ export function aniProjection({
     taxYear,
     confirmedCount: confirmed.length,
     monthsCounted: months.length,
+    netOnlyCount,
     remainingMonths,
     ytdPence,
     lastMonthlyPence,
