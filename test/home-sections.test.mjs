@@ -20,7 +20,10 @@ function memoryStorage(initial = {}) {
 test("home sections start collapsed and persist independently of ticks", () => {
   const storage = memoryStorage();
   const defaults = defaultHomeSectionState();
-  assert.deepEqual(HOME_SECTION_IDS, ["income", "cards", "pending", "exceptions", "weeklies", "planned"]);
+  // Every accordion Home renders, in the order it renders them. "breakdown"
+  // was missing, so "How this adds up" could not be left open — an unknown id
+  // is dropped on read and never written back.
+  assert.deepEqual(HOME_SECTION_IDS, ["breakdown", "income", "cards", "pending", "exceptions", "setasides", "weeklies", "planned"]);
   // Home opens as the statement; the sections sit closed under it.
   assert.equal(defaults.planned, false);
   assert.equal(defaults.income, false);

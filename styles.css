@@ -597,9 +597,30 @@ legend { padding: 0; margin-bottom: 7px; }
   }
 }
 
-.app-shell { padding-bottom: calc(240px + env(safe-area-inset-bottom)); }
-.intro.compact { padding: 18px 2px 14px; }
-.intro.compact h1 { font-size: clamp(1.85rem, 8vw, 2.7rem); }
+/* One row of five, so the page only has to clear a bar rather than a block. */
+.app-shell { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+/* One title, one line, and the detail folded away. The header used to run to
+   an eyebrow, a title and a four-sentence paragraph before any content. */
+.intro.compact { padding: 14px 2px 12px; }
+.intro.compact h1 { font-size: clamp(1.6rem, 6.5vw, 2.1rem); }
+.intro.compact .lede { margin: 6px 0 0; font-size: 0.95rem; }
+.room-help { margin: 10px 0 0; }
+.room-help > summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--muted);
+  font-weight: 750;
+  font-size: 0.8rem;
+}
+.room-help > summary::-webkit-details-marker { display: none; }
+.room-help > summary::after { content: " ›"; }
+.room-help[open] > summary::after { content: " ⌄"; }
+.room-help p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
 
 .month-switch {
   display: grid;
@@ -764,6 +785,43 @@ legend { padding: 0; margin-bottom: 7px; }
   margin-top: 4px;
 }
 .statement-line.check .statement-cell.name { color: var(--muted); }
+/* Where today stands, at a glance. It used to be a clause three sentences into
+   the paragraph under a green number, which read as "all fine" either way. */
+.statement-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+.statement-chips .chip {
+  font-size: 0.72rem;
+  font-weight: 750;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #e8e8e3;
+  color: var(--ink);
+}
+.statement-chips .chip.negative { background: var(--red-soft); color: var(--red); }
+.statement-chips .chip.positive { background: var(--green-soft); color: var(--green); }
+.statement-chips .chip.quiet { background: transparent; color: var(--muted); padding-left: 2px; }
+/* The rows above the Savings line are the plan read against the calendar; the
+   ones below are typed off a card statement. The caption says which is which so
+   one column can carry both without the reader having to guess. */
+.statement-line.caption {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  /* One cell, the whole row: in the four-column grid the label was cut off
+     mid-word at the first column's width. */
+  display: block;
+}
+.statement-line.caption .statement-cell.name {
+  color: var(--muted);
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.58rem;
+}
 .statement-line.grand {
   border-top: 2px solid var(--ink);
   padding-top: 8px;
@@ -1213,9 +1271,9 @@ legend { padding: 0; margin-bottom: 7px; }
   transform: translateX(-50%);
   width: min(100%, 680px);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 4px;
-  padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
+  padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
   background: rgba(246, 245, 242, 0.94);
   border-top: 1px solid var(--line);
   backdrop-filter: blur(10px);
@@ -1226,10 +1284,10 @@ legend { padding: 0; margin-bottom: 7px; }
   place-items: center;
   text-decoration: none;
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: 0.72rem;
   font-weight: 750;
   border-radius: 12px;
-  padding: 0 4px;
+  padding: 0 2px;
   text-align: center;
 }
 .dock-item.active { color: var(--ink); background: #e8e8e3; }
@@ -1279,7 +1337,8 @@ legend { padding: 0; margin-bottom: 7px; }
   border-radius: 13px;
   background: #ecebe6;
 }
-.app-shell .floating { bottom: calc(78px + env(safe-area-inset-bottom)); }
+.app-shell .floating { bottom: calc(72px + env(safe-area-inset-bottom)); }
+.line-chevron { color: var(--muted); font-weight: 700; }
 
 @media (min-width: 700px) {
   .app-shell { padding-bottom: 48px; }
