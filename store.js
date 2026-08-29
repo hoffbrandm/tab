@@ -479,6 +479,12 @@ function parseOneOff(item) {
     month,
     estimatePence: moneyPence(item.estimatePence, "One-off"),
     purchased: Boolean(item.purchased),
+    // Card unless it says otherwise, which is what an older record means.
+    paidFrom: item.paidFrom === "cash" ? "cash" : "card",
+    // The day is optional, and only a card line has anywhere to use it.
+    ...(Number.isInteger(item.dueDay) && item.dueDay >= 1 && item.dueDay <= 31
+      ? { dueDay: item.dueDay }
+      : {}),
   };
 }
 

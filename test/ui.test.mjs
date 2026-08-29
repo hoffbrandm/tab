@@ -238,6 +238,21 @@ test("a payslip opens on the month the money lands and can borrow last month's",
   assert.match(snapshot, /statedNetPence: readMoney\("statedNet"\)/);
 });
 
+test("a planned expense can be cash, and a card one can name its day", () => {
+  const form = app.slice(app.indexOf("function oneOffForm()"), app.indexOf("function exceptionForm()"));
+  assert.match(form, /data-action="oneoff-paid-from"/);
+  assert.match(form, /Cash — straight out of the bank/);
+  // A due day has nowhere to be used on a cash line, so it is not offered.
+  assert.match(form, /data-oneoff-field="dueDay"/);
+  assert.match(app, /\[data-oneoff-field=dueDay\]"\)\?\.classList\.toggle\("hidden", event\.target\.value !== "card"\)/);
+  // Switching to cash drops any day, rather than leaving one nothing reads.
+  assert.match(app, /dueDay: data\.get\("paidFrom"\) === "cash" \? undefined : oneOffDueDay\(data\.get\("dueDay"\)\)/);
+  // Both lists say which side each one comes out of, and when.
+  const row = app.slice(app.indexOf("function oneOffRow"), app.indexOf("function renderModal"));
+  assert.match(row, /oneOffPaidFrom\(item\) === "cash" \? "Cash"/);
+  assert.match(app, /oneOffDueLabel\(item\)\.replace\("Planned", "Card"\)/);
+});
+
 test("regularly cleared lists swipe left to delete; setup entities do not", () => {
   assert.match(app, /removeAction: "remove-oneoff"/);
   assert.match(app, /removeAction: "remove-monthly"/);

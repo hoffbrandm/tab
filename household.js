@@ -773,11 +773,15 @@ export function spentSoFarForMonth(household, month, today = new Date()) {
   );
   const dueCardMonthlies = cardMonthlies.filter((item) => monthlyIsAllowed(item, month, dayOfMonth));
   const dueCardMonthliesPence = sumPence(dueCardMonthlies, (item) => item.amountPence);
-  // A planned one-off is planned for the month rather than for a day of it, so
-  // the whole month is when it may be bought — there is no date to wait for.
-  const plannedAllowedPence = dayOfMonth > 0 ? sumPence(oneOffs, (item) => item.estimatePence) : 0;
+  // Only a card one-off can be on a card. A cash one leaves the bank with the
+  // rest of the cash out and has no business in either card column.
+  const cardOneOffs = oneOffs.filter((item) => oneOffPaidFrom(item) === "card");
+  const plannedAllowedPence = sumPence(
+    cardOneOffs.filter((item) => oneOffIsAllowed(item, dayOfMonth)),
+    (item) => item.estimatePence,
+  );
   const purchasedOneOffsPence = sumPence(
-    oneOffs.filter((item) => item.purchased),
+    cardOneOffs.filter((item) => item.purchased),
     (item) => item.estimatePence,
   );
   const days = daysInMonthKey(month);
@@ -817,6 +821,9 @@ export function spentSoFarForMonth(household, month, today = new Date()) {
  */
 export function monthStatementRows(household, month, today = new Date()) {
   const flow = cashflowForMonth(household, month, today);
+  // Negated without JavaScript's -0, which is not equal to 0 and would make a
+  // row that is simply empty read as a different value from one that is.
+  const minus = (pence) => (pence ? -pence : 0);
   const rows = [
     { id: "income", label: "Income", flowPence: flow.incomePence },
     // Every exception came out of another pot, so the month draws that much in
@@ -834,22 +841,22 @@ export function monthStatementRows(household, month, today = new Date()) {
       }]
       : []),
     // The annual saving is a standing cash line on the sheet, not its own row.
-    { id: "cash", label: "Cash out", flowPence: -(flow.billsPence + flow.annualReservePence) },
+    { id: "cash", label: "Cash out", flowPence: minus(flow.cashOutPence) },
     // Allowed is what the calendar permits by today; on cards is what has
     // actually been recorded. For the per diem and card monthlies those are the
     // same fact — there is nothing to tick — so both columns carry it.
-    { id: "perdiem", label: "Per diem", flowPence: -flow.cardReservePence, allowedPence: flow.reserveSpentPence, cardPence: flow.reserveSpentPence },
-    { id: "cardout", label: "Credit card out", flowPence: -flow.cardOutPence, allowedPence: flow.dueCardMonthliesPence, cardPence: flow.dueCardMonthliesPence },
+    { id: "perdiem", label: "Per diem", flowPence: minus(flow.cardReservePence), allowedPence: flow.reserveSpentPence, cardPence: flow.reserveSpentPence },
+    { id: "cardout", label: "Credit card out", flowPence: minus(flow.cardOutPence), allowedPence: flow.dueCardMonthliesPence, cardPence: flow.dueCardMonthliesPence },
     // These two are where the columns come apart, and where the month is won or
     // lost: allowed once the slot's date arrives, on the cards once it is ticked.
-    { id: "weekly", label: "Weekly expenses", flowPence: -flow.envelopesMonthlyPence, allowedPence: flow.dueWeeklyPence, cardPence: flow.tickedWeeklyPence },
-    { id: "planned", label: "Monthly expenses", flowPence: -flow.oneOffsPence, allowedPence: flow.plannedAllowedPence, cardPence: flow.purchasedOneOffsPence },
+    { id: "weekly", label: "Weekly expenses", flowPence: minus(flow.envelopesMonthlyPence), allowedPence: flow.dueWeeklyPence, cardPence: flow.tickedWeeklyPence },
+    { id: "planned", label: "Monthly expenses", flowPence: minus(flow.oneOffsPence), allowedPence: flow.plannedAllowedPence, cardPence: flow.purchasedOneOffsPence },
     // An ordinary expense now, funded by the transfer in above.
-    { id: "exceptions", label: "Exceptions", flowPence: -flow.exceptionsPence, allowedPence: flow.exceptionsPence, cardPence: flow.exceptionsPence },
+    { id: "exceptions", label: "Exceptions", flowPence: minus(flow.exceptionsPence), allowedPence: flow.exceptionsPence, cardPence: flow.exceptionsPence },
     // The only row that takes the allowance down: money decided against rather
     // than money spent, so it never reaches the month column.
     ...(flow.setAsidePence
-      ? [{ id: "setaside", label: "Set aside", allowedPence: -flow.setAsidePence, note: "don't spend this", aside: true }]
+      ? [{ id: "setaside", label: "Set aside", allowedPence: minus(flow.setAsidePence), note: "don't spend this", aside: true }]
       : []),
   ];
   // What the cards actually say, which is a different kind of fact from the
@@ -889,6 +896,7 @@ export function outBreakdownForMonth(household, month, today = new Date()) {
   const cash = [
     ...flow.cashMonthlies.map((item) => ({ name: item.name, amountPence: item.amountPence, detail: monthlyDueLabel(item, month) })),
     ...(flow.annualReservePence ? [{ name: "Annual bills, saved monthly", amountPence: flow.annualReservePence, detail: "Annual total ÷ 12" }] : []),
+    ...flow.cashOneOffs.map((item) => ({ name: item.name, amountPence: item.estimatePence, detail: "Planned, in cash" })),
   ];
   const card = [
     ...flow.cardMonthlies.map((item) => ({ name: item.name, amountPence: item.amountPence, detail: monthlyDueLabel(item, month) })),
@@ -900,7 +908,7 @@ export function outBreakdownForMonth(household, month, today = new Date()) {
       count: rule.count,
       eachPence: rule.eachPence,
     })),
-    ...flow.oneOffs.map((item) => ({ name: item.name, amountPence: item.estimatePence, detail: "Planned" })),
+    ...flow.cardOneOffs.map((item) => ({ name: item.name, amountPence: item.estimatePence, detail: oneOffDueLabel(item) })),
     // dailyPence rather than a formatted string: money is formatted in one
     // place, and that place is the view.
     ...(perDiemTotalPence(household)
@@ -939,13 +947,18 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const cardReservePence = perDiemTotalPence(household);
   const reservePence = cardReservePence;
   const annualReserve = annualReservePence(annualBills);
-  const oneOffsPence = sumPence(oneOffs, (item) => item.estimatePence);
+  // Planned splits by where it is paid from, the way a monthly does.
+  const cashOneOffs = oneOffs.filter((item) => oneOffPaidFrom(item) === "cash");
+  const cardOneOffs = oneOffs.filter((item) => oneOffPaidFrom(item) === "card");
+  const cashOneOffsPence = sumPence(cashOneOffs, (item) => item.estimatePence);
+  const oneOffsPence = sumPence(cardOneOffs, (item) => item.estimatePence);
   const envelopesMonthlyPence = sumPence(weeklySlots, (item) => item.amountPence);
   // Out splits the way the money actually leaves. Cash is what leaves the bank:
-  // standing cash monthlies and the annual saving. The per diem is spent on the
-  // cards, so it sits on the card side — counting it as bank money in the plan
-  // and card money in the check would be the same £1,000 counted twice.
-  const cashOutPence = billsPence + annualReserve;
+  // standing cash monthlies, the annual saving, and any planned one-off marked
+  // as cash. The per diem is spent on the cards, so it sits on the card side —
+  // counting it as bank money in the plan and card money in the check would be
+  // the same £1,000 counted twice.
+  const cashOutPence = billsPence + annualReserve + cashOneOffsPence;
   // Card commitments are the ones that are going to be paid: card monthlies,
   // this month's planned, and every weekly slot. The per diem rides on top and
   // is the part that is chosen day by day, so it is tracked apart from them.
@@ -1061,6 +1074,9 @@ export function cashflowForMonth(household, month, today = new Date()) {
     weeklySlots,
     annualReservePence: annualReserve,
     oneOffsPence,
+    cashOneOffsPence,
+    cashOneOffs,
+    cardOneOffs,
     oneOffs,
     envelopesMonthlyPence,
     outPence,
@@ -1787,6 +1803,41 @@ export function coerceMonthKey(value, fallbackYear = new Date().getFullYear()) {
 
 export function oneOffMonthKey(item) {
   return coerceMonthKey(item?.month);
+}
+
+/**
+ * Where a planned one-off is paid from. Card is the default because that is
+ * where the plan has always assumed it lands, and an older record has no side
+ * recorded — a cash one leaves the bank with the rest of the cash out and never
+ * touches the card allowance.
+ */
+export function oneOffPaidFrom(item) {
+  return item?.paidFrom === "cash" ? "cash" : "card";
+}
+
+/**
+ * A card one-off may name the day it falls due. Without one, the whole month is
+ * when it may be bought — it is planned for a month, not for a day of it — and
+ * with one, the cards are not allowed to be carrying it until that day.
+ */
+export function oneOffIsAllowed(item, dayOfMonth) {
+  if (dayOfMonth <= 0) return false;
+  const due = Number(item?.dueDay);
+  if (!Number.isInteger(due) || due < 1 || due > 31) return true;
+  return due <= dayOfMonth;
+}
+
+/** What a planned one-off's row says about when it lands. */
+export function oneOffDueLabel(item) {
+  const due = Number(item?.dueDay);
+  if (!Number.isInteger(due) || due < 1 || due > 31) return "Planned";
+  return `Planned · due ${ordinalDayLabel(due)}`;
+}
+
+function ordinalDayLabel(day) {
+  const rest = day % 100;
+  if (rest >= 11 && rest <= 13) return `${day}th`;
+  return `${day}${["th", "st", "nd", "rd"][day % 10] || "th"}`;
 }
 
 export function oneOffsForMonth(household, month) {

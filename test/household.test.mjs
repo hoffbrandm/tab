@@ -92,6 +92,9 @@ import {
   normalizeWeeklyCadence,
   oneOffsForMonth,
   oneOffsOutsideMonth,
+  oneOffPaidFrom,
+  oneOffIsAllowed,
+  oneOffDueLabel,
   plannedMonthTotals,
   exceptionsForMonth,
   exceptionsOutsideMonth,
@@ -1974,6 +1977,93 @@ test("money drawn in from savings raises what the month ends up with", () => {
   assert.equal(extraFromSavingsPence(otherMonth, "2026-07"), 100000);
   assert.equal(fromSavingsForMonth(otherMonth, "2026-07").length, 1);
   assert.equal(fromSavingsOutsideMonth(otherMonth, "2026-08").length, 1);
+});
+
+test("a planned one-off says which side it comes out of", () => {
+  // Card unless it says otherwise, which is what an older record means.
+  assert.equal(oneOffPaidFrom({}), "card");
+  assert.equal(oneOffPaidFrom({ paidFrom: "card" }), "card");
+  assert.equal(oneOffPaidFrom({ paidFrom: "cash" }), "cash");
+  assert.equal(oneOffPaidFrom({ paidFrom: "nonsense" }), "card");
+
+  // No day means the whole month is when it may be bought; a day means from
+  // then. A month that has not started allows neither.
+  assert.equal(oneOffIsAllowed({}, 1), true);
+  assert.equal(oneOffIsAllowed({}, 0), false);
+  assert.equal(oneOffIsAllowed({ dueDay: 20 }, 19), false);
+  assert.equal(oneOffIsAllowed({ dueDay: 20 }, 20), true);
+  assert.equal(oneOffIsAllowed({ dueDay: 99 }, 1), true, "a nonsense day is no day at all");
+
+  assert.equal(oneOffDueLabel({}), "Planned");
+  assert.equal(oneOffDueLabel({ dueDay: 1 }), "Planned · due 1st");
+  assert.equal(oneOffDueLabel({ dueDay: 22 }), "Planned · due 22nd");
+  assert.equal(oneOffDueLabel({ dueDay: 11 }), "Planned · due 11th");
+});
+
+test("a cash planned expense leaves the bank and never reaches the cards", () => {
+  const base = {
+    ...emptyHousehold(),
+    people: [{ id: "p", name: "P" }],
+    payslips: [slipFor("p", "2026-08", 500000)],
+    cards: [{ id: "c", name: "Card", balancePence: 0, pendingPence: 0, updatedOn: "2026-08-10" }],
+  };
+  const today = new Date("2026-08-10T12:00:00Z");
+  const onCard = cashflowForMonth({
+    ...base,
+    oneOffs: [{ id: "o", name: "Sofa", month: "2026-08", estimatePence: 60000, paidFrom: "card" }],
+  }, "2026-08", today);
+  const inCash = cashflowForMonth({
+    ...base,
+    oneOffs: [{ id: "o", name: "Dentist", month: "2026-08", estimatePence: 60000, paidFrom: "cash" }],
+  }, "2026-08", today);
+
+  // Money out is money out, so Out and the saving do not care which side it is.
+  assert.equal(inCash.outPence, onCard.outPence);
+  assert.equal(inCash.savingsPence, onCard.savingsPence);
+  // But only the card one is card money.
+  assert.equal(onCard.cashOutPence, 0);
+  assert.equal(onCard.oneOffsPence, 60000);
+  assert.equal(onCard.plannedAllowedPence, 60000);
+  assert.equal(inCash.cashOutPence, 60000);
+  assert.equal(inCash.cashOneOffsPence, 60000);
+  assert.equal(inCash.oneOffsPence, 0);
+  assert.equal(inCash.plannedAllowedPence, 0);
+  assert.equal(inCash.allowanceSoFarPence, 0, "a cash line never moves what the cards may carry");
+  // Buying a cash one does not put it on the cards either.
+  const bought = cashflowForMonth({
+    ...base,
+    oneOffs: [{ id: "o", name: "Dentist", month: "2026-08", estimatePence: 60000, paidFrom: "cash", purchased: true }],
+  }, "2026-08", today);
+  assert.equal(bought.purchasedOneOffsPence, 0);
+  assert.equal(bought.onCardsSoFarPence, 0);
+  // The statement's Cash out row carries it, and the column still totals.
+  const table = monthStatementRows({
+    ...base,
+    oneOffs: [{ id: "o", name: "Dentist", month: "2026-08", estimatePence: 60000, paidFrom: "cash" }],
+  }, "2026-08", today);
+  assert.equal(table.rows.find((row) => row.id === "cash").flowPence, -60000);
+  assert.equal(table.rows.find((row) => row.id === "planned").flowPence, 0);
+  assert.equal(table.rows.reduce((total, row) => total + (row.flowPence || 0), 0), table.savingsPence);
+});
+
+test("a card one-off with a day is not allowed until the month reaches it", () => {
+  const hh = {
+    ...emptyHousehold(),
+    oneOffs: [
+      { id: "a", name: "MOT", month: "2026-08", estimatePence: 22000, paidFrom: "card" },
+      { id: "b", name: "Sofa", month: "2026-08", estimatePence: 60000, paidFrom: "card", dueDay: 20 },
+    ],
+  };
+  const on = (day) => cashflowForMonth(hh, "2026-08", new Date(`2026-08-${day}T12:00:00Z`));
+  // The undated one is allowed all month; the dated one waits for its day.
+  assert.equal(on("10").plannedAllowedPence, 22000);
+  assert.equal(on("19").plannedAllowedPence, 22000);
+  assert.equal(on("20").plannedAllowedPence, 82000);
+  // Neither is in the plan any less for it: Out is the whole month's.
+  assert.equal(on("10").oneOffsPence, 82000);
+  // And the breakdown says which day each lands on.
+  const out = outBreakdownForMonth(hh, "2026-08", new Date("2026-08-10T12:00:00Z"));
+  assert.deepEqual(out.card.map((row) => row.detail), ["Planned", "Planned · due 20th"]);
 });
 
 test("money held back takes the card allowance down and nothing else", () => {
