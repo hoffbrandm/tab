@@ -97,6 +97,7 @@ export function emptyHousehold() {
     perDiem: { amountPence: 0 },
     oneOffs: [],
     exceptions: [],
+    fromSavings: [],
     setAsides: [],
     annualBills: [],
     pots: [],
@@ -122,6 +123,7 @@ export function householdHasData(household) {
     "pendings",
     "oneOffs",
     "exceptions",
+    "fromSavings",
     "setAsides",
     "annualBills",
     "pots",
@@ -699,6 +701,29 @@ export function exceptionsTotalPence(household, month) {
 }
 
 /**
+ * Money drawn in from savings to cover the month. Every exception is already
+ * money that came out of another pot, so the exceptions are carried here
+ * automatically and anything typed on top is an extra transfer in.
+ *
+ * This is what makes the statement add up. An exception used to be a positive
+ * number that the savings total stepped over — an asterisk on the one row that
+ * broke the rule. As an ordinary expense funded by an ordinary transfer in, the
+ * two cancel exactly and the column simply totals.
+ */
+export function fromSavingsForMonth(household, month) {
+  return (household?.fromSavings || []).filter((item) => coerceMonthKey(item?.month) === month);
+}
+
+export function fromSavingsOutsideMonth(household, month) {
+  return (household?.fromSavings || []).filter((item) => coerceMonthKey(item?.month) !== month);
+}
+
+/** What was typed, on top of the exceptions the month already draws in. */
+export function extraFromSavingsPence(household, month) {
+  return sumPence(fromSavingsForMonth(household, month), (item) => item.amountPence);
+}
+
+/**
  * Money deliberately kept off the cards this month — "don't spend this". It is
  * the mirror of an exception: an exception is paid from another pot, so the
  * cards may carry that much more without it reading as overspend; a set-aside
@@ -794,6 +819,20 @@ export function monthStatementRows(household, month, today = new Date()) {
   const flow = cashflowForMonth(household, month, today);
   const rows = [
     { id: "income", label: "Income", flowPence: flow.incomePence },
+    // Every exception came out of another pot, so the month draws that much in
+    // from savings whether or not anything else is typed. The two cancel, which
+    // is why the column below adds up without an exception to the rule.
+    ...(flow.fromSavingsPence
+      ? [{
+        id: "fromsavings",
+        label: "From savings",
+        flowPence: flow.fromSavingsPence,
+        // Short enough not to clip the name column.
+        note: flow.exceptionsPence
+          ? (flow.extraFromSavingsPence ? "plus exceptions" : "the exceptions")
+          : "drawn in",
+      }]
+      : []),
     // The annual saving is a standing cash line on the sheet, not its own row.
     { id: "cash", label: "Cash out", flowPence: -(flow.billsPence + flow.annualReservePence) },
     // Allowed is what the calendar permits by today; on cards is what has
@@ -805,11 +844,10 @@ export function monthStatementRows(household, month, today = new Date()) {
     // lost: allowed once the slot's date arrives, on the cards once it is ticked.
     { id: "weekly", label: "Weekly expenses", flowPence: -flow.envelopesMonthlyPence, allowedPence: flow.dueWeeklyPence, cardPence: flow.tickedWeeklyPence },
     { id: "planned", label: "Monthly expenses", flowPence: -flow.oneOffsPence, allowedPence: flow.plannedAllowedPence, cardPence: flow.purchasedOneOffsPence },
-    // Paid from another pot: it lets the cards carry more without ever moving
-    // savings, which is why the sheet's own Savings total steps over this row.
-    { id: "exceptions", label: "Exceptions", flowPence: flow.exceptionsPence, allowedPence: flow.exceptionsPence, cardPence: flow.exceptionsPence, note: "not in savings", aside: true },
-    // The mirror of an exception, and the only row that takes the allowance
-    // down: money decided against rather than money spent.
+    // An ordinary expense now, funded by the transfer in above.
+    { id: "exceptions", label: "Exceptions", flowPence: -flow.exceptionsPence, allowedPence: flow.exceptionsPence, cardPence: flow.exceptionsPence },
+    // The only row that takes the allowance down: money decided against rather
+    // than money spent, so it never reaches the month column.
     ...(flow.setAsidePence
       ? [{ id: "setaside", label: "Set aside", allowedPence: -flow.setAsidePence, note: "don't spend this", aside: true }]
       : []),
@@ -868,6 +906,9 @@ export function outBreakdownForMonth(household, month, today = new Date()) {
     ...(perDiemTotalPence(household)
       ? [{ name: "Per diem", amountPence: perDiemTotalPence(household), dailyPence: perDiemDailyPence(household, month) }]
       : []),
+    // Spending like any other, so it is in Out and it is in this breakdown —
+    // what pays for it is the transfer in on the statement, not an exemption.
+    ...flow.exceptions.map((item) => ({ name: item.name, amountPence: item.amountPence, detail: "From savings" })),
   ];
   return {
     cash,
@@ -910,8 +951,21 @@ export function cashflowForMonth(household, month, today = new Date()) {
   // is the part that is chosen day by day, so it is tracked apart from them.
   const cardCommitmentsPence = cardOutPence + oneOffsPence + envelopesMonthlyPence;
   const cardPlanPence = cardCommitmentsPence + cardReservePence;
-  const outPence = cashOutPence + cardPlanPence;
-  const leftPence = incomePence - outPence;
+  // An exception is money spent, so it is in Out like any other spending. It
+  // used to be a positive row the savings total stepped over — an asterisk on
+  // the one line that broke the rule. What funds it is the transfer in below,
+  // and the two cancel, so the statement's column simply totals.
+  const exceptions = exceptionsForMonth(household, month);
+  const exceptionsPence = sumPence(exceptions, (item) => item.amountPence);
+  const outPence = cashOutPence + cardPlanPence + exceptionsPence;
+  // In is the month's pay plus whatever is drawn in from savings: the
+  // exceptions, which came from another pot by definition, and anything typed
+  // on top to cover a month that does not otherwise reach.
+  const fromSavings = fromSavingsForMonth(household, month);
+  const extraFromSavingsPence = sumPence(fromSavings, (item) => item.amountPence);
+  const fromSavingsPence = exceptionsPence + extraFromSavingsPence;
+  const inPence = incomePence + fromSavingsPence;
+  const leftPence = inPence - outPence;
   const cardBalancesPence = sumPence(cards, (item) => item.balancePence);
   const pendingRows = pendingsForMonth(household, month, today);
   const cardPendingPence = sumPence(cards, (item) => item.pendingPence || 0);
@@ -929,10 +983,6 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const dueCardMonthliesPence = live.dueCardMonthliesPence;
   const reserveSpentPence = live.reserveSpentPence;
   const actualOnCardsPence = cardSidePence;
-  // Exceptions are paid from another pot, so the card is allowed to be that
-  // much higher without it reading as overspend, and they never touch savings.
-  const exceptions = exceptionsForMonth(household, month);
-  const exceptionsPence = sumPence(exceptions, (item) => item.amountPence);
   // A set-aside is the mirror: money that is not to be spent, so the cards are
   // allowed to carry that much less. It never moves the plan or the saving —
   // holding it is what turns it into a saving, through the underspend.
@@ -992,6 +1042,10 @@ export function cashflowForMonth(household, month, today = new Date()) {
     people,
     incomeLines,
     incomePence,
+    inPence,
+    fromSavings,
+    extraFromSavingsPence,
+    fromSavingsPence,
     billsPence,
     cardOutPence,
     cashOutPence,

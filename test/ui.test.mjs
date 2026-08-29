@@ -97,22 +97,26 @@ test("the per diem is one figure of its own, not a line in a list", () => {
   assert.doesNotMatch(app, /hh\.reserves/);
 });
 
-test("the bar carries five destinations, not eleven across three rows", () => {
-  // Eleven items wrapped to three rows, took a third of a phone screen and made
-  // every page clear 240px of it. The four rooms the month runs on stay; the
-  // rest are a tap away under More.
+test("the bar carries the rooms the month runs through, and More carries the rest", () => {
+  // Eleven items wrapped to three rows and took a third of a phone screen. Of
+  // the five that replaced them, Weeklies and Monthlies are config that barely
+  // changes once it is right — so the bar is Home, what is coming, who owes
+  // what, and More.
   assert.match(app, /const DOCK = \[/);
   assert.match(app, /const MORE_ROOMS = \[/);
   const dock = app.slice(app.indexOf("const DOCK = ["), app.indexOf("function moneyControl("));
   assert.match(dock, /DOCK\.map/);
   assert.match(dock, /item\("more", "More", dockIsMore\(screen\.name\)\)/);
-  for (const gone of ["annual", "pots", "payslips", "ani", "giving", "tabs"]) {
-    assert.doesNotMatch(dock, new RegExp(`item\\("${gone}"`), `${gone} belongs under More now`);
-  }
+  const inBar = [...app.slice(app.indexOf("const DOCK = ["), app.indexOf("/** The rooms More lists")).matchAll(/\["([a-z]+)",/g)].map((m) => m[1]);
+  assert.deepEqual(inBar, ["home", "planned", "tabs"]);
+  const underMore = [...app.slice(app.indexOf("const MORE_ROOMS = ["), app.indexOf("function dockIsMore")).matchAll(/\["([a-z£0-9]+)",/g)].map((m) => m[1]);
+  assert.deepEqual(underMore, ["weeklies", "monthlies", "annual", "pots", "payslips", "ani", "giving"]);
+  // A friend's tab is a Tabs screen, so the bar says so rather than going blank.
+  assert.match(dock, /name === "tabs" && screen\.name === "friend"/);
   // More lists them as rows, and a row navigates by its id.
   assert.match(app, /edit: "go-room"/);
   assert.match(app, /if \(action === "go-room" && MORE_ROOMS\.some/);
-  assert.match(css, /grid-template-columns: repeat\(5, 1fr\)/);
+  assert.match(css, /grid-template-columns: repeat\(4, 1fr\)/);
   assert.match(rule(".app-shell"), /padding-bottom: calc\(96px/);
 });
 
@@ -197,6 +201,21 @@ test("a friend's running balance is a total, not the row's own sentence again", 
   assert.doesNotMatch(row, /balanceText\(friend\.name, balancePence\)/);
 });
 
+test("money can be drawn in from savings, and the exceptions come with it", () => {
+  assert.match(app, /homeAccordion\("fromsavings"/);
+  assert.match(app, /if \(action === "add-fromsavings"\) openItem\("fromsavings"\)/);
+  assert.match(app, /fromsavings: fromSavingsForm/);
+  assert.match(app, /"fromsavings-form": saveFromSavings/);
+  assert.match(app, /list: "fromSavings"/);
+  // Money moved in from savings is not money earned, so a total leaning on one
+  // says so rather than reading as a month that simply went well.
+  assert.match(app, /of the total came in from savings/);
+  // It sits between the exceptions it carries and the money held back, which is
+  // the order the statement puts them in.
+  const home = app.slice(app.indexOf('homeAccordion("exceptions"'), app.indexOf('homeAccordion("weeklies"'));
+  assert.ok(home.indexOf('homeAccordion("fromsavings"') < home.indexOf('homeAccordion("setasides"'));
+});
+
 test("regularly cleared lists swipe left to delete; setup entities do not", () => {
   assert.match(app, /removeAction: "remove-oneoff"/);
   assert.match(app, /removeAction: "remove-monthly"/);
@@ -261,13 +280,17 @@ test("Home shows the month as the household's own Main Table lays it out", () =>
   assert.match(app, /monthStatementRows\(household\(\), viewMonth, new Date\(\)\)/);
   assert.match(app, /function statementRow/);
   assert.match(app, /class="statement-table" data-statement-table/);
-  // The sheet's three columns, and its two totals.
-  assert.match(app, />In and out</);
+  // Three columns, and the first of them adds up: every row is signed, the
+  // over/underspend is a term in it rather than a note beside it, and the last
+  // line is what the month ends up with.
+  assert.match(app, />The month</);
   assert.match(app, />Allowed</);
   assert.match(app, />On cards</);
-  assert.match(app, />Savings</);
-  assert.match(app, />Total savings</);
+  assert.match(app, />The plan saves</);
+  assert.match(app, />Ends up saving</);
   assert.match(app, /"Overspend" : .*"Underspend" : "On budget"/);
+  const check = app.slice(app.indexOf("const check = table.cardCheckKnown"), app.indexOf("return `<section class=\"statement\""));
+  assert.match(check, /statement-cell \$\{trackClass\(table\.overUnderPence\)\}">\$\{formatMoney\(table\.overUnderPence\)\}/);
   // Exceptions are shown but stepped over by the savings total, as the sheet
   // does, and the row says so rather than leaving it to be worked out.
   assert.match(app, /row\.note \? `<small>\$\{esc\(row\.note\)\}<\/small>` : ""/);

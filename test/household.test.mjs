@@ -77,6 +77,9 @@ import {
   setAsidesForMonth,
   setAsidesOutsideMonth,
   setAsideTotalPence,
+  fromSavingsForMonth,
+  fromSavingsOutsideMonth,
+  extraFromSavingsPence,
   weeklyPaidFrom,
   normalizeWeeklyCadence,
   oneOffsForMonth,
@@ -1513,6 +1516,7 @@ test("the Out breakdown names every line and ties to the totals", () => {
     weeklyRules: [{ id: "w", name: "Food shop", amountPence: 40000, cadence: "times", timesPerMonth: 4, tickedKeys: [] }],
     oneOffs: [{ id: "o", name: "MOT", month: "2026-08", estimatePence: 20000 }],
     perDiem: { amountPence: 93000 },
+    exceptions: [{ id: "x", name: "Travel insurance", month: "2026-08", amountPence: 9700 }],
     annualBills: [{ id: "a", name: "Insurance", amountPence: 120000, month: 3 }],
   };
   const today = new Date("2026-08-10T12:00:00Z");
@@ -1522,14 +1526,16 @@ test("the Out breakdown names every line and ties to the totals", () => {
   // The whole point: the rows add up to the figures on the statement, so a
   // total that looks wrong can be checked against its lines instead of trusted.
   assert.equal(out.cashTotalPence, flow.cashOutPence);
-  assert.equal(out.cardTotalPence, flow.cardPlanPence);
+  assert.equal(out.cardTotalPence, flow.cardPlanPence + flow.exceptionsPence);
   assert.equal(out.cashTotalPence + out.cardTotalPence, flow.outPence);
 
   // Cash is the bank side only: the mortgage and the annual saving.
   assert.deepEqual(out.cash.map((row) => row.name), ["Mortgage", "Annual bills, saved monthly"]);
-  // The card side carries the per diem, because that is where it is spent.
-  assert.deepEqual(out.card.map((row) => row.name), ["Netflix", "Food shop", "MOT", "Per diem"]);
-  assert.equal(out.card.at(-1).amountPence, 93000);
+  // The card side carries the per diem, because that is where it is spent, and
+  // the exceptions, which are spending like any other.
+  assert.deepEqual(out.card.map((row) => row.name), ["Netflix", "Food shop", "MOT", "Per diem", "Travel insurance"]);
+  assert.equal(out.card.find((row) => row.name === "Per diem").amountPence, 93000);
+  assert.equal(out.card.at(-1).amountPence, 9700);
 
   // Four identical slots collapse to one row that still shows the working.
   const food = out.card.find((row) => row.name === "Food shop");
@@ -1767,6 +1773,71 @@ test("a weekly slot falls due on a date, and that date is what allows it", () =>
   assert.equal(flow.tickedWeeklyPence, 0);
 });
 
+test("an exception is spending, and the month draws in what pays for it", () => {
+  // An exception used to be a positive row the savings total stepped over — an
+  // asterisk on the one line that broke the rule. It is spending now, and what
+  // funds it is a transfer in of the same size, so the two cancel exactly and
+  // the statement's month column simply totals.
+  const base = {
+    ...emptyHousehold(),
+    people: [{ id: "p", name: "P" }],
+    payslips: [slipFor("p", "2026-08", 500000)],
+    perDiem: { amountPence: 100000 },
+    cards: [{ id: "c", name: "Card", balancePence: 40000, pendingPence: 0, updatedOn: "2026-08-10" }],
+  };
+  const today = new Date("2026-08-10T12:00:00Z");
+  const plain = cashflowForMonth(base, "2026-08", today);
+  const withException = cashflowForMonth({
+    ...base,
+    exceptions: [{ id: "x", name: "Travel", month: "2026-08", amountPence: 56000 }],
+  }, "2026-08", today);
+
+  assert.equal(withException.exceptionsPence, 56000);
+  // It is in Out, and it is in In, so the saving does not move.
+  assert.equal(withException.outPence, plain.outPence + 56000);
+  assert.equal(withException.fromSavingsPence, 56000);
+  assert.equal(withException.inPence, plain.inPence + 56000);
+  assert.equal(withException.savingsPence, plain.savingsPence);
+  // And it still lets the cards carry that much more.
+  assert.equal(withException.allowanceSoFarPence, plain.allowanceSoFarPence + 56000);
+  assert.equal(withException.totalSavingsPence, plain.totalSavingsPence + 56000);
+});
+
+test("money drawn in from savings raises what the month ends up with", () => {
+  const base = {
+    ...emptyHousehold(),
+    people: [{ id: "p", name: "P" }],
+    payslips: [slipFor("p", "2026-08", 500000)],
+    perDiem: { amountPence: 100000 },
+    exceptions: [{ id: "x", name: "Travel", month: "2026-08", amountPence: 56000 }],
+    cards: [{ id: "c", name: "Card", balancePence: 40000, pendingPence: 0, updatedOn: "2026-08-10" }],
+  };
+  const today = new Date("2026-08-10T12:00:00Z");
+  const before = cashflowForMonth(base, "2026-08", today);
+  const drawn = cashflowForMonth({
+    ...base,
+    fromSavings: [{ id: "f", name: "Cover the shortfall", month: "2026-08", amountPence: 100000 }],
+  }, "2026-08", today);
+
+  // The exceptions are carried in on their own; what is typed lands on top.
+  assert.equal(before.fromSavingsPence, 56000);
+  assert.equal(drawn.extraFromSavingsPence, 100000);
+  assert.equal(drawn.fromSavingsPence, 156000);
+  // Nothing is spent, so Out does not move — the month simply ends up with more.
+  assert.equal(drawn.outPence, before.outPence);
+  assert.equal(drawn.savingsPence, before.savingsPence + 100000);
+  assert.equal(drawn.totalSavingsPence, before.totalSavingsPence + 100000);
+  // But it is not spending money: the cards are allowed no more than before.
+  assert.equal(drawn.allowanceSoFarPence, before.allowanceSoFarPence);
+  assert.equal(drawn.fullMonthAllowancePence, before.fullMonthAllowancePence);
+  // And it belongs to one month, like an exception does.
+  const otherMonth = { ...base, fromSavings: [{ id: "f", name: "x", month: "2026-07", amountPence: 100000 }] };
+  assert.equal(cashflowForMonth(otherMonth, "2026-08", today).extraFromSavingsPence, 0);
+  assert.equal(extraFromSavingsPence(otherMonth, "2026-07"), 100000);
+  assert.equal(fromSavingsForMonth(otherMonth, "2026-07").length, 1);
+  assert.equal(fromSavingsOutsideMonth(otherMonth, "2026-08").length, 1);
+});
+
 test("money held back takes the card allowance down and nothing else", () => {
   const base = {
     ...emptyHousehold(),
@@ -1822,6 +1893,10 @@ test("the statement's Allowed and On cards columns each foot to their total", ()
   const sum = (key) => table.rows.reduce((total, row) => total + (row[key] || 0), 0);
   assert.equal(sum("allowedPence"), table.allowedPence);
   assert.equal(sum("cardPence"), table.onCardsPence);
+  // And the month column adds up the same way, down to what the month ends up
+  // with: every row is signed, and the over/underspend is a term in the sum.
+  assert.equal(sum("flowPence"), table.savingsPence);
+  assert.equal(table.savingsPence + table.overUnderPence, table.totalSavingsPence);
 
   // Allowed follows the calendar and On cards follows the record, so the two
   // come apart exactly on the weeklies and the planned.

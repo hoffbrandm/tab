@@ -63,6 +63,23 @@ test("money held back is one month's line, like an exception", () => {
   assert.throws(bad({ id: "s1", name: "x", month: "2026-08", amountPence: -1 }), /Set aside/);
 });
 
+test("money drawn in from savings is one month's line, like an exception", () => {
+  const store = parseStore({
+    version: 1, friends: [], transactions: [],
+    household: { fromSavings: [{ id: "f1", name: "Cover the shortfall", month: "2026-08", amountPence: 100000 }] },
+  });
+  assert.deepEqual(store.household.fromSavings, [
+    { id: "f1", name: "Cover the shortfall", month: "2026-08", amountPence: 100000 },
+  ]);
+  assert.deepEqual(parseStore(JSON.parse(JSON.stringify(store))).household.fromSavings, store.household.fromSavings);
+  const bad = (line) => () => parseStore({
+    version: 1, friends: [], transactions: [], household: { fromSavings: [line] },
+  });
+  assert.throws(bad({ id: "f1", name: "x", amountPence: 1 }), /From-savings month/);
+  assert.throws(bad({ id: "f1", month: "2026-08", amountPence: 1 }), /From savings needs a name/);
+  assert.throws(bad({ id: "f1", name: "x", month: "2026-08", amountPence: -1 }), /From savings/);
+});
+
 test("a per diem already set is kept as it stands", () => {
   const store = parseStore({
     version: 1, friends: [], transactions: [],

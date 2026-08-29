@@ -199,6 +199,7 @@ function parseHousehold(value, today = new Date()) {
   const oneOffs = normalizeOneOffsForViewMonth(list(value.oneOffs).map(parseOneOff), today).items;
   const exceptions = list(value.exceptions).map(parseException);
   const setAsides = list(value.setAsides).map(parseSetAside);
+  const fromSavings = list(value.fromSavings).map(parseFromSavings);
   const annualBills = list(value.annualBills).map(parseAnnualBill);
   const pots = list(value.pots).map(parsePot);
   const pensions = list(value.pensions).map(parsePension);
@@ -221,6 +222,7 @@ function parseHousehold(value, today = new Date()) {
   uniqueIds(oneOffs, "One-off");
   uniqueIds(exceptions, "Exception");
   uniqueIds(setAsides, "Set aside");
+  uniqueIds(fromSavings, "From savings");
   uniqueIds(annualBills, "Annual bill");
   uniqueIds(pots, "Pot");
   uniqueIds(pensions, "Pension");
@@ -241,6 +243,7 @@ function parseHousehold(value, today = new Date()) {
     perDiem,
     oneOffs,
     exceptions,
+    fromSavings,
     setAsides,
     annualBills,
     pots,
@@ -490,6 +493,21 @@ function parseException(item) {
     name: requiredName(item.name, "Exception"),
     month,
     amountPence: moneyPence(item.amountPence, "Exception"),
+  };
+}
+
+/** Money drawn in from savings for one month, on top of its exceptions. */
+function parseFromSavings(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new StoreError("Each from-savings line must be an object.");
+  }
+  const month = coerceMonthKey(item.month);
+  if (!isMonthKey(month)) throw new StoreError("From-savings month must be YYYY-MM.");
+  return {
+    id: requiredId(item.id, "From savings"),
+    name: requiredName(item.name, "From savings"),
+    month,
+    amountPence: moneyPence(item.amountPence, "From savings"),
   };
 }
 
