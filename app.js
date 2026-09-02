@@ -414,11 +414,18 @@ function shell({ title, lede, help = "", extra = "", body, month = false, back =
   </section>`;
 }
 
+/**
+ * Forward only. A month gone by is not something the tracker can act on: card
+ * balances do not belong to a month the way the plan does, they are simply what
+ * the cards say now. So Tab opens on this month, and ‹ is only ever the way
+ * back from a month you walked forward into.
+ */
 function monthSwitcher() {
   const now = new Date();
   const jump = jumpToCurrentMonthLabel(viewMonth, now);
+  const atThisMonth = viewMonth <= monthKey(now);
   return `<div class="month-switch">
-    <button type="button" class="month-nav" data-action="month-prev" aria-label="Previous month">‹</button>
+    <button type="button" class="month-nav" data-action="month-prev" aria-label="Previous month"${atThisMonth ? " disabled" : ""}>‹</button>
     <div><strong>${esc(monthLabel(viewMonth))}</strong>${jump ? `<button type="button" class="text-button" data-action="month-now">${esc(jump)}</button>` : ""}</div>
     <button type="button" class="month-nav" data-action="month-next" aria-label="Next month">›</button>
   </div>`;
@@ -513,23 +520,6 @@ function trackClass(pence, known = true) {
 }
 
 /**
- * Ahead / behind, not underspend / overspend: the row sits under "Where you
- * are", and the question it answers is whether today is in front of the plan or
- * behind it, not whether a single spend was too big.
- */
-function overUnderLabel(flow) {
-  if (!flow.cardCheckKnown) return "Ahead / behind plan";
-  if (flow.overUnderPence < 0) return "Behind plan";
-  if (flow.overUnderPence > 0) return "Ahead of plan";
-  return "Exactly on plan";
-}
-
-function overUnderAmount(flow) {
-  if (!flow.cardCheckKnown) return "—";
-  return formatMoney(Math.abs(flow.overUnderPence));
-}
-
-/**
  * What is still to come is two kinds of money, and one row called "left to
  * spend" made them look like one. Weeklies and monthlies are expected to be
  * paid, so counting them as spending room says the month has more slack in it
@@ -593,6 +583,11 @@ function forecastEyebrow(flow) {
  * Where today stands, as a chip rather than a clause. The position was buried
  * three sentences into a paragraph that then repeated the same figure twice,
  * so the one thing worth seeing first was the last thing read.
+ *
+ * Mid-month this is either "on plan" or an overspend, and that is the honest
+ * pair: money already gone beyond the plan is real today, while spending the
+ * plan expects and has not seen yet is late rather than saved. An underspend
+ * belongs to a month that has finished.
  */
 function positionChip(flow) {
   if (flow.monthPhase === "future") return { label: "Not started", tone: "neutral" };
@@ -604,7 +599,7 @@ function positionChip(flow) {
   if (flow.overUnderPence > 0) {
     return { label: `${formatMoney(flow.overUnderPence)} under plan`, tone: "positive" };
   }
-  return { label: past ? "Finished on plan" : "Exactly on plan", tone: "neutral" };
+  return { label: past ? "Finished on plan" : "On plan", tone: "neutral" };
 }
 
 function forecastAmount(flow) {
@@ -742,10 +737,17 @@ function statementSection(flow) {
   const table = monthStatementRows(household(), viewMonth, new Date());
   // The check belongs in the month column, signed, because it is a term in the
   // sum rather than a note beside it: the column runs Income to Total savings
-  // and adds up on the way down.
+  // and adds up on the way down. It sits directly under what the cards actually
+  // say because that is what it measures: the plan against where the cards are
+  // going to end up, not against an allowance the calendar has handed out.
+  const checkName = table.overUnderPence < 0
+    ? { label: "Overspend", note: "on the cards, past the plan" }
+    : table.overUnderPence > 0
+      ? { label: "Underspend", note: "the month never spent" }
+      : { label: "On budget", note: "nothing unaccounted for" };
   const check = table.cardCheckKnown
     ? `<div class="statement-line check">
-        <span class="statement-cell name">${esc(table.overUnderPence < 0 ? "Overspend" : table.overUnderPence > 0 ? "Underspend" : "On budget")}</span>
+        <span class="statement-cell name">${esc(checkName.label)}<small>${esc(checkName.note)}</small></span>
         <span class="statement-cell ${trackClass(table.overUnderPence)}">${formatMoney(table.overUnderPence)}</span>
         <span class="statement-cell empty">—</span>
         <span class="statement-cell empty">—</span>
@@ -2246,14 +2248,24 @@ document.addEventListener("click", async (event) => {
     closeModal();
     setScreen({ name: id });
   }
-  if (action === "go-month") { viewMonth = event.target.closest("[data-month]").dataset.month; render(); }
+  if (action === "go-month") {
+    // Same floor as the arrows: the months listed all start at this one, and a
+    // stale one in the markup must not take the app backwards.
+    const asked = event.target.closest("[data-month]").dataset.month;
+    viewMonth = asked >= monthKey() ? asked : monthKey();
+    render();
+  }
   if (action === "go-planned") setScreen({ name: "planned" });
   if (action === "go-weeklies") setScreen({ name: "weeklies" });
   if (action === "go-monthlies") setScreen({ name: "monthlies" });
   if (action === "go-annual") setScreen({ name: "annual" });
   if (action === "home") { event.preventDefault(); setScreen({ name: "home" }); closeModal(); }
   if (action === "open-friend") setScreen({ name: "friend", friendId: id });
-  if (action === "month-prev") { viewMonth = addMonths(viewMonth, -1); render(); }
+  if (action === "month-prev") {
+    // Never behind this month, whichever way the button was reached.
+    const back = addMonths(viewMonth, -1);
+    if (back >= monthKey()) { viewMonth = back; render(); }
+  }
   if (action === "month-next") { viewMonth = addMonths(viewMonth, 1); render(); }
   if (action === "month-now") { viewMonth = monthKey(); render(); }
 
