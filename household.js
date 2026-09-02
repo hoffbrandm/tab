@@ -1003,9 +1003,10 @@ export function cashflowForMonth(household, month, today = new Date()) {
   const dueCardMonthliesPence = live.dueCardMonthliesPence;
   const reserveSpentPence = live.reserveSpentPence;
   const actualOnCardsPence = cardSidePence;
-  // A set-aside is the mirror: money that is not to be spent, so the cards are
-  // allowed to carry that much less. It never moves the plan or the saving —
-  // holding it is what turns it into a saving, through the underspend.
+  // A set-aside is the mirror of an exception: money that is not to be spent, so
+  // the cards are allowed to carry that much less. It never moves the plan or
+  // the saving. It is the one part of the plan the month stops expecting to go
+  // out, which is how holding it back turns into a saving.
   const setAsides = setAsidesForMonth(household, month);
   const setAsidePence = sumPence(setAsides, (item) => item.amountPence);
   // What the cards may be carrying by today, and what they are carrying from
@@ -1013,38 +1014,67 @@ export function cashflowForMonth(household, month, today = new Date()) {
   // weeklies, this month's planned, and exceptions.
   const allowanceSoFarPence = live.allowedSoFarPence + exceptionsPence - setAsidePence;
   const onCardsSoFarPence = live.spentSoFarPence + exceptionsPence;
-  // Sheet footer: Savings is In minus Out; the card check is the over/underspend
-  // against the allowance; Total Savings adds the two.
   const savingsPence = leftPence;
-  const cardCheckPence = allowanceSoFarPence - actualOnCardsPence;
+  const phase = monthPhase(month, today);
+  const daysLeft = Math.max(0, days - dayOfMonth);
+  const cardPlanWithExceptionsPence = cardPlanPence + exceptionsPence;
+  const fullMonthAllowancePence = cardPlanWithExceptionsPence - setAsidePence;
+  const remainingPlanPence = fullMonthAllowancePence - allowanceSoFarPence;
+  // What the cards have left to take, in two halves that are not the same kind
+  // of money. Card monthlies, weeklies and planned one-offs are expected to be
+  // paid — they are not a lever, and treating them as spending money left says
+  // there is more room in the month than there is. The per diem is the part
+  // that is genuinely chosen day to day, so it is the only half worth a per-day
+  // figure.
+  //
+  // A commitment stops being still to come once it is recorded as done, not
+  // once its date has passed: a shop the month has reached but nobody has been
+  // to has not been spent and has not been saved — it is late, and the month
+  // should still expect it. A month that has ended is the one case where
+  // nothing is still to come, because whatever was never spent never will be.
+  const recordedCommitmentsPence = tickedWeeklyPence + dueCardMonthliesPence + purchasedOneOffsPence;
+  const committedToComePence = phase === "past" ? 0 : cardCommitmentsPence - recordedCommitmentsPence;
+  const reserveLeftPence = phase === "past" ? 0 : cardReservePence - reserveSpentPence;
+  const perDayReserveLeftPence = daysLeft > 0 && reserveLeftPence > 0 ? Math.round(reserveLeftPence / daysLeft) : 0;
+  // Money held back is the one thing that comes off what is still to come: the
+  // rest of the plan is spending that is going to happen, and a set-aside is
+  // spending that has been decided against.
+  const stillToComePence = Math.max(0, committedToComePence + reserveLeftPence - setAsidePence);
+  // The cards took at least what has been recorded against them — everything in
+  // that figure is card-side money by definition. A balance typed before the
+  // latest charge landed is a balance running behind, not evidence of money
+  // saved; without this, ticking a shop would read as a windfall the size of
+  // the shop until the statement caught up. Only a live month can be running
+  // behind, though: once the month is over the balance is the final word, and
+  // a plan item that never reached it was never spent.
+  const cardsCountedPence = phase === "past"
+    ? actualOnCardsPence
+    : Math.max(actualOnCardsPence, onCardsSoFarPence);
+  // Sheet footer: Savings is In minus Out; the check is the gap between what
+  // the plan set aside for the cards and what they are going to end up taking;
+  // Total savings adds the two.
+  //
+  // It used to measure the pro-rated allowance against the cards, which booked
+  // every shop the calendar had reached but nobody had done yet as money saved.
+  // With four or five weekly slots that reads as a large underspend and lifts
+  // the month-end figure by it, when all that has happened is that the spending
+  // has not come out yet.
+  //
+  // What is left is what the two definitions above make it: money held back,
+  // less whatever the cards are carrying that nothing accounts for. So during a
+  // month the check is a real overspend or nothing at all, and only a month
+  // that has ended can show an underspend — which is exactly when one is real.
+  const cardCheckPence = cardPlanWithExceptionsPence - stillToComePence - cardsCountedPence;
   const overUnderPence = cardCheckKnown ? cardCheckPence : 0;
   const totalSavingsPence = savingsPence + overUnderPence;
   const overspendPence = overUnderPence < 0 ? -overUnderPence : 0;
   const underspendPence = overUnderPence > 0 ? overUnderPence : 0;
-  // The end-of-month view. allowanceSoFar is the card-side plan pro-rated to
-  // today; the same total on the last day is the whole card plan plus the whole
-  // reserve plus exceptions. The gap between them is what the month still has
-  // left to spend, which is the number that answers "can we still pull it back".
-  const phase = monthPhase(month, today);
-  const daysLeft = Math.max(0, days - dayOfMonth);
-  const fullMonthAllowancePence = cardPlanPence + exceptionsPence - setAsidePence;
-  const remainingPlanPence = fullMonthAllowancePence - allowanceSoFarPence;
-  // What is still to come splits in two, and the halves are not the same kind
-  // of money. Weeklies, card monthlies and planned one-offs are expected to be
-  // paid — they are not a lever, and treating them as spending money left says
-  // there is more room in the month than there is. They stop being "still to
-  // come" once the calendar reaches them, spent or not. The per diem is the
-  // part that is genuinely chosen day to day, so it is the only half worth a
-  // per-day figure. The two add back to the whole remaining plan.
-  const committedToComePence = cardCommitmentsPence - (dueWeeklyPence + dueCardMonthliesPence + plannedAllowedPence);
-  const reserveLeftPence = cardReservePence - reserveSpentPence;
-  const perDayReserveLeftPence = daysLeft > 0 && reserveLeftPence > 0 ? Math.round(reserveLeftPence / daysLeft) : 0;
   // Where the month lands: the plan's saving carried forward with however far
   // ahead or behind today already is. Same number as Total savings — named for
   // the question it answers rather than for the sheet row it came from.
   const forecastSavingPence = totalSavingsPence;
-  // Spend the rest of the plan exactly and the cards finish here.
-  const forecastCardsPence = actualOnCardsPence + remainingPlanPence;
+  // Everything still to come lands on top of what the cards have taken so far.
+  const forecastCardsPence = cardsCountedPence + stillToComePence;
 
   return {
     month,
@@ -1052,6 +1082,7 @@ export function cashflowForMonth(household, month, today = new Date()) {
     daysLeft,
     fullMonthAllowancePence,
     remainingPlanPence,
+    stillToComePence,
     committedToComePence,
     reserveLeftPence,
     perDayReserveLeftPence,

@@ -1154,6 +1154,13 @@ legend { padding: 0; margin-bottom: 7px; }
   line-height: 1;
 }
 
+/* There is nothing behind this month to go to, so the arrow is dimmed in place
+   rather than removed — the bar keeps its shape as you walk forward and back. */
+.month-nav:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 .dash {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

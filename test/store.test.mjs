@@ -64,9 +64,12 @@ test("money held back is one month's line, like an exception", () => {
 });
 
 test("a planned one-off keeps which side it is paid from, and a usable day", () => {
+  // Pinned, because reading a store drops one-offs for months already gone: an
+  // unpinned clock made this pass all August and fail on the 1st of September.
+  const today = new Date("2026-08-01T12:00:00Z");
   const parse = (oneOff) => parseStore({
     version: 1, friends: [], transactions: [], household: { oneOffs: [oneOff] },
-  }).household.oneOffs[0];
+  }, today).household.oneOffs[0];
   const base = { id: "o1", name: "Sofa", month: "2026-08", estimatePence: 60000 };
   // An older record has no side recorded, and card is what it always meant.
   assert.equal(parse(base).paidFrom, "card");
@@ -82,8 +85,8 @@ test("a planned one-off keeps which side it is paid from, and a usable day", () 
   const store = parseStore({
     version: 1, friends: [], transactions: [],
     household: { oneOffs: [{ ...base, paidFrom: "cash", dueDay: 20 }] },
-  });
-  assert.deepEqual(parseStore(JSON.parse(JSON.stringify(store))).household.oneOffs, store.household.oneOffs);
+  }, today);
+  assert.deepEqual(parseStore(JSON.parse(JSON.stringify(store)), today).household.oneOffs, store.household.oneOffs);
 });
 
 test("a repeated deduction id is repaired, not thrown at the whole household", () => {

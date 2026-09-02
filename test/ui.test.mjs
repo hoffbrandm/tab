@@ -332,8 +332,14 @@ test("Home shows the month as the household's own Main Table lays it out", () =>
   assert.match(app, />On cards</);
   assert.match(app, />The plan saves</);
   assert.match(app, />Ends up saving</);
-  assert.match(app, /"Overspend" : .*"Underspend" : "On budget"/);
-  const check = app.slice(app.indexOf("const check = table.cardCheckKnown"), app.indexOf("return `<section class=\"statement\""));
+  // The check sits under what the cards actually say, and says in a word what
+  // it is measuring, because "Underspend" against an allowance and "Underspend"
+  // against where the cards are heading are not the same claim.
+  assert.match(app, /label: "Overspend", note: "on the cards, past the plan"/);
+  assert.match(app, /label: "Underspend", note: "the month never spent"/);
+  assert.match(app, /label: "On budget", note: "nothing unaccounted for"/);
+  const check = app.slice(app.indexOf("const checkName = table.overUnderPence"), app.indexOf("return `<section class=\"statement\""));
+  assert.match(check, /esc\(checkName\.label\)\}<small>\$\{esc\(checkName\.note\)\}/);
   assert.match(check, /statement-cell \$\{trackClass\(table\.overUnderPence\)\}">\$\{formatMoney\(table\.overUnderPence\)\}/);
   // Exceptions are shown but stepped over by the savings total, as the sheet
   // does, and the row says so rather than leaving it to be worked out.
@@ -352,6 +358,23 @@ test("Home shows the month as the household's own Main Table lays it out", () =>
   }
   assert.match(css, /\.statement-line/);
   assert.match(css, /font-variant-numeric:\s*tabular-nums/);
+});
+
+test("the month bar only goes forward from this month", () => {
+  // A month gone by is not something the tracker can act on — card balances are
+  // what the cards say now, not a figure filed under a month — so there is
+  // nothing to see behind today. The arrow is disabled rather than removed, so
+  // the bar does not change shape when you walk forward and back.
+  const bar = app.slice(app.indexOf("function monthSwitcher("), app.indexOf("const DOCK = ["));
+  assert.match(bar, /const atThisMonth = viewMonth <= monthKey\(now\)/);
+  assert.match(bar, /data-action="month-prev"[^`]*\$\{atThisMonth \? " disabled" : ""\}/);
+  // And the handler holds the same floor, so nothing reaches a past month by
+  // another route: not the arrow, and not a month tapped in Planned.
+  const prev = app.slice(app.indexOf('if (action === "month-prev")'), app.indexOf('if (action === "month-next")'));
+  assert.match(prev, /if \(back >= monthKey\(\)\)/);
+  const go = app.slice(app.indexOf('if (action === "go-month")'), app.indexOf('if (action === "go-monthlies")'));
+  assert.match(go, /asked >= monthKey\(\) \? asked : monthKey\(\)/);
+  assert.match(css, /\.month-nav/);
 });
 
 test("Home leads with what the month ends up saving, not with a bare total", () => {
