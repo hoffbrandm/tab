@@ -286,6 +286,38 @@ test("repayments do not keep a share adjustment", () => {
   assert.equal("myShareAdjustmentPence" in parsed.transactions[0], false);
 });
 
+test("an exact split stores a flat share and rejects one bigger than the total", () => {
+  const { myShareAdjustmentPence, ...withoutAdjustment } = expense;
+  const parsed = parseStore({
+    version: 1,
+    friends: [friend],
+    transactions: [{ ...withoutAdjustment, splitMode: "exact", mySharePence: 4000 }],
+  });
+  assert.equal(parsed.transactions[0].splitMode, "exact");
+  assert.equal(parsed.transactions[0].mySharePence, 4000);
+  assert.equal("myShareAdjustmentPence" in parsed.transactions[0], false);
+  assert.throws(
+    () => parseStore({ version: 1, friends: [friend], transactions: [{ ...withoutAdjustment, splitMode: "exact", mySharePence: 20000 }] }),
+    StoreError,
+  );
+});
+
+test("a split by headcount stores both counts and rejects a nonsense split", () => {
+  const { myShareAdjustmentPence, ...withoutAdjustment } = expense;
+  const parsed = parseStore({
+    version: 1,
+    friends: [friend],
+    transactions: [{ ...withoutAdjustment, splitMode: "shares", myShareUnits: 3, friendShareUnits: 1 }],
+  });
+  assert.equal(parsed.transactions[0].splitMode, "shares");
+  assert.equal(parsed.transactions[0].myShareUnits, 3);
+  assert.equal(parsed.transactions[0].friendShareUnits, 1);
+  assert.throws(
+    () => parseStore({ version: 1, friends: [friend], transactions: [{ ...withoutAdjustment, splitMode: "shares", myShareUnits: 0, friendShareUnits: 0 }] }),
+    StoreError,
+  );
+});
+
 test("older bills and card subs become monthlies with unique ids", () => {
   const parsed = parseStore({
     version: 1,

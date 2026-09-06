@@ -1,4 +1,4 @@
-import { balanceFor, balanceText, formatMoney, parseMoneyToPence, runningBalances, splitExpense } from "./calculations.js";
+import { balanceFor, balanceText, formatMoney, parseMoneyToPence, resolveSplit, runningBalances, splitByPeople, splitExact, splitExpense } from "./calculations.js";
 import { createGistStore, GistError } from "./gist-store.js";
 import {
   addMonths,
@@ -1514,7 +1514,7 @@ function transactionRow({ transaction, balancePence }, friend) {
   const headline = transaction.description || (isExpense ? "Expense" : "Transfer");
   let detail;
   if (isExpense) {
-    const split = splitExpense(transaction.amountPence, transaction.myShareAdjustmentPence || 0);
+    const split = resolveSplit(transaction);
     detail = transaction.paidBy === "me"
       ? `You paid ${formatMoney(transaction.amountPence)} · ${friend.name} owes ${formatMoney(split.friendSharePence)}`
       : `${friend.name} paid ${formatMoney(transaction.amountPence)} · You owe ${formatMoney(split.mySharePence)}`;
@@ -1610,21 +1610,66 @@ function friendForm() {
   </form>`;
 }
 
+/** How a stored transaction's split reads back into the form's radio choice. An old
+ * transaction with a nonzero adjustment shows as "exact", so simply editing and
+ * resaving it moves it onto the new model. */
+function initialSplitMode(transaction) {
+  if (transaction.splitMode === "shares") return "shares";
+  if (transaction.splitMode === "exact" || transaction.myShareAdjustmentPence) return "exact";
+  return "even";
+}
+
+function initialMySharePence(transaction) {
+  if (transaction.splitMode === "exact" && Number.isInteger(transaction.mySharePence)) return transaction.mySharePence;
+  try {
+    return splitExpense(transaction.amountPence, transaction.myShareAdjustmentPence || 0).mySharePence;
+  } catch {
+    return Math.floor((transaction.amountPence || 0) / 2);
+  }
+}
+
+/** The exact-amount field always names whichever side did not pay — the figure
+ * people actually say out loud, like "you owe me 40". */
+function exactShareLabel(paidBy, friendName) {
+  return paidBy === "friend" ? "Your share" : `${friendName ? esc(friendName) + "’s" : "Their"} share`;
+}
+
 function transactionForm() {
   const transaction = modal.transaction || {};
   const friendId = transaction.friendId || modal.friendId || store.friends[0]?.id;
   const isExpense = (transaction.type || modal.type) === "expense";
   const friend = byId(friendId);
   const amount = transaction.amountPence ? (transaction.amountPence / 100).toFixed(2).replace(/\.00$/, "") : "";
-  const adjustment = transaction.myShareAdjustmentPence ? (transaction.myShareAdjustmentPence / 100).toFixed(2).replace(/\.00$/, "") : "";
+  const paidBy = transaction.paidBy === "friend" ? "friend" : "me";
+  const splitMode = isExpense ? initialSplitMode(transaction) : "even";
+  const mySharePence = isExpense && transaction.amountPence ? initialMySharePence(transaction) : 0;
+  const owedPence = paidBy === "friend" ? mySharePence : (transaction.amountPence || 0) - mySharePence;
+  const owedValue = transaction.amountPence ? (owedPence / 100).toFixed(2).replace(/\.00$/, "") : "";
+  const myUnits = transaction.splitMode === "shares" ? transaction.myShareUnits : 1;
+  const friendUnits = transaction.splitMode === "shares" ? transaction.friendShareUnits : 1;
   return `<form id="transaction-form">${modalHead(isExpense ? "Add expense" : "Record transfer")}
     <label>With<select name="friendId" required ${modal.friendId ? "disabled" : ""}>${store.friends.map((item) => `<option value="${item.id}" ${item.id === friendId ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label>
     <label>Amount${moneyControl({ name: "amount", value: amount, required: true })}</label>
     <fieldset><legend>Who paid?</legend><div class="segmented">
-      <label><input type="radio" name="paidBy" value="me" ${(!transaction.paidBy || transaction.paidBy === "me") ? "checked" : ""}/><span>I paid</span></label>
-      <label><input type="radio" name="paidBy" value="friend" ${transaction.paidBy === "friend" ? "checked" : ""}/><span>${esc(friend?.name || "Friend")} paid</span></label>
+      <label><input type="radio" name="paidBy" value="me" ${paidBy === "me" ? "checked" : ""}/><span>I paid</span></label>
+      <label><input type="radio" name="paidBy" value="friend" ${paidBy === "friend" ? "checked" : ""}/><span>${esc(friend?.name || "Friend")} paid</span></label>
     </div></fieldset>
-    ${isExpense ? `<details class="adjustment" ${adjustment ? "open" : ""}><summary>Adjust my share <span>optional</span></summary><p>Keep it at zero for the usual 50/50 split. Use a positive number to add to your share, or a minus number to take it off.</p><label>Change to my share${moneyControl({ name: "adjustment", value: adjustment, placeholder: "0" })}</label></details>` : ""}
+    ${isExpense ? `
+    <fieldset><legend>Split</legend><div class="segmented segmented-3">
+      <label><input type="radio" name="splitMode" value="even" ${splitMode === "even" ? "checked" : ""}/><span>Evenly</span></label>
+      <label><input type="radio" name="splitMode" value="exact" ${splitMode === "exact" ? "checked" : ""}/><span>Exact amount</span></label>
+      <label><input type="radio" name="splitMode" value="shares" ${splitMode === "shares" ? "checked" : ""}/><span>By people</span></label>
+    </div></fieldset>
+    <label class="split-field ${splitMode === "exact" ? "" : "hidden"}" id="owed-field">
+      <span id="owed-label">${exactShareLabel(paidBy, friend?.name)}</span>${moneyControl({ name: "owed", value: owedValue, placeholder: "0.00" })}
+    </label>
+    <div class="split-field ${splitMode === "shares" ? "" : "hidden"}" id="shares-field">
+      <p class="split-hint">How many people are on each side of this one.</p>
+      <div class="split-shares-row">
+        <label>Your people<input type="number" name="myUnits" min="0" step="1" inputmode="numeric" value="${esc(myUnits ?? 1)}" /></label>
+        <label id="friend-units-label">${esc(friend?.name || "Friend")}’s people<input type="number" name="friendUnits" min="0" step="1" inputmode="numeric" value="${esc(friendUnits ?? 1)}" /></label>
+      </div>
+    </div>` : ""}
     <label>${isExpense ? "What was it for" : "Note"} <span class="optional">optional</span><input maxlength="100" name="description" value="${esc(transaction.description)}" placeholder="${isExpense ? "Dinner" : "Transfer"}" /></label>
     <label>Date<input required type="date" name="date" value="${transaction.date || today()}" /></label>
     <div class="live-split" id="live-split"></div>
@@ -2754,32 +2799,61 @@ function parseSignedMoney(value) {
   return pence === null ? null : negative ? -pence : pence;
 }
 
+/** Reads the split fields from the transaction form into the payload fields
+ * store.js expects, throwing a user-facing message if the split doesn't add up. */
+function splitPayloadFromForm(data, amountPence, paidBy) {
+  const splitMode = data.get("splitMode") || "even";
+  if (splitMode === "exact") {
+    const owed = parseMoneyToPence(data.get("owed"));
+    if (owed == null) throw new Error("Enter what’s owed on this one.");
+    const mySharePence = paidBy === "friend" ? owed : amountPence - owed;
+    splitExact(amountPence, mySharePence);
+    return { splitMode: "exact", mySharePence };
+  }
+  if (splitMode === "shares") {
+    const myShareUnits = Number(data.get("myUnits"));
+    const friendShareUnits = Number(data.get("friendUnits"));
+    splitByPeople(amountPence, myShareUnits, friendShareUnits);
+    return { splitMode: "shares", myShareUnits, friendShareUnits };
+  }
+  return { myShareAdjustmentPence: 0 };
+}
+
 async function saveTransaction(event) {
   event.preventDefault();
   const data = new FormData(event.target);
   const amountPence = parseMoneyToPence(data.get("amount"));
   const type = modal.transaction?.type || modal.type;
-  const adjustment = type === "expense" ? parseSignedMoney(data.get("adjustment")) : 0;
   if (!amountPence || amountPence <= 0) return showFormError("Enter an amount greater than zero.");
-  if (adjustment === null) return showFormError("Use a valid adjustment, such as 5 or -5.");
-  try { if (type === "expense") splitExpense(amountPence, adjustment); } catch (error) { return showFormError(error.message); }
+  const paidBy = data.get("paidBy");
+  let splitPayload = {};
+  if (type === "expense") {
+    try { splitPayload = splitPayloadFromForm(data, amountPence, paidBy); } catch (error) { return showFormError(error.message); }
+  }
   const friendId = modal.friendId || data.get("friendId");
   const payload = {
     friendId,
     type,
     amountPence,
-    paidBy: data.get("paidBy"),
+    paidBy,
     description: data.get("description").trim(),
     date: data.get("date"),
     createdAt: modal.transaction?.createdAt || new Date().toISOString(),
+    ...splitPayload,
   };
-  if (type === "expense") payload.myShareAdjustmentPence = adjustment;
   const editing = Boolean(modal.transaction?.id);
   const transactionId = modal.transaction?.id;
   setBusy(event.target, true);
   const saved = await withStoreUpdate(() => {
-    if (editing) Object.assign(store.transactions.find((item) => item.id === transactionId), payload);
-    else store.transactions.push({ id: uid(), ...payload });
+    if (editing) {
+      const target = store.transactions.find((item) => item.id === transactionId);
+      delete target.splitMode;
+      delete target.mySharePence;
+      delete target.myShareUnits;
+      delete target.friendShareUnits;
+      delete target.myShareAdjustmentPence;
+      Object.assign(target, payload);
+    } else store.transactions.push({ id: uid(), ...payload });
   });
   if (!saved) {
     showFormError(sync.message || "Could not save this entry.");
@@ -3358,6 +3432,22 @@ function updateCardBalance(input) {
   persistQueue.schedule();
 }
 
+/** Reads the split fields from the live form (mirrors splitPayloadFromForm, but
+ * throws plain Error messages meant for the live preview rather than a payload). */
+function liveSplit(amountPence, paidBy, form) {
+  const splitMode = form.elements.splitMode?.value || "even";
+  if (splitMode === "exact") {
+    const owed = parseMoneyToPence(form.elements.owed?.value || "");
+    if (owed == null) throw new Error("Enter what’s owed on this one.");
+    const mySharePence = paidBy === "friend" ? owed : amountPence - owed;
+    return splitExact(amountPence, mySharePence);
+  }
+  if (splitMode === "shares") {
+    return splitByPeople(amountPence, Number(form.elements.myUnits?.value), Number(form.elements.friendUnits?.value));
+  }
+  return splitExpense(amountPence, 0);
+}
+
 function updateLiveSplit() {
   const form = document.querySelector("#transaction-form");
   const output = document.querySelector("#live-split");
@@ -3366,21 +3456,28 @@ function updateLiveSplit() {
   const amountPence = parseMoneyToPence(form.elements.amount.value);
   const paidBy = form.elements.paidBy.value;
   const friend = byId(modal.friendId || form.elements.friendId.value);
-  if (!amountPence) { output.textContent = ""; return; }
   if (!isExpense) {
+    if (!amountPence) { output.textContent = ""; return; }
     output.textContent = paidBy === "me"
       ? `You’re paying ${friend.name} ${formatMoney(amountPence)}.`
       : `${friend.name} is paying you ${formatMoney(amountPence)}.`;
     return;
   }
-  const adjustment = parseSignedMoney(form.elements.adjustment?.value || "");
+  const splitMode = form.elements.splitMode?.value || "even";
+  const owedLabel = document.querySelector("#owed-label");
+  if (owedLabel) owedLabel.textContent = exactShareLabel(paidBy, friend?.name);
+  const friendUnitsLabel = document.querySelector("#friend-units-label");
+  if (friendUnitsLabel?.firstChild) friendUnitsLabel.firstChild.textContent = `${friend?.name || "Friend"}’s people`;
+  document.querySelector("#owed-field")?.classList.toggle("hidden", splitMode !== "exact");
+  document.querySelector("#shares-field")?.classList.toggle("hidden", splitMode !== "shares");
+  if (!amountPence) { output.textContent = ""; return; }
   try {
-    const split = splitExpense(amountPence, adjustment ?? 0);
+    const split = liveSplit(amountPence, paidBy, form);
     output.innerHTML = paidBy === "me"
       ? `You paid <strong>${formatMoney(amountPence)}</strong><span>Your share ${formatMoney(split.mySharePence)}</span><span>${esc(friend.name)}’s share ${formatMoney(split.friendSharePence)}</span><b>${esc(friend.name)} owes you ${formatMoney(split.friendSharePence)}</b>`
       : `${esc(friend.name)} paid <strong>${formatMoney(amountPence)}</strong><span>Your share ${formatMoney(split.mySharePence)}</span><span>${esc(friend.name)}’s share ${formatMoney(split.friendSharePence)}</span><b>You owe ${esc(friend.name)} ${formatMoney(split.mySharePence)}</b>`;
-  } catch {
-    output.textContent = "Adjustment needs to keep both shares at zero or more.";
+  } catch (error) {
+    output.textContent = error.message;
   }
 }
 

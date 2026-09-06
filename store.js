@@ -1,4 +1,4 @@
-import { splitExpense } from "./calculations.js";
+import { splitByPeople, splitExact, splitExpense } from "./calculations.js";
 import {
   BUILTIN_PAYSLIP_CATEGORIES,
   normalizeDueRoll,
@@ -119,16 +119,39 @@ function parseTransaction(transaction, friendIds) {
   };
 
   if (type === "expense") {
-    const adjustment = transaction.myShareAdjustmentPence || 0;
-    if (!Number.isInteger(adjustment)) {
-      throw new StoreError("Adjustment must be whole pence.");
+    const splitMode = transaction.splitMode;
+    if (splitMode === "exact") {
+      const mySharePence = transaction.mySharePence;
+      try {
+        splitExact(amountPence, mySharePence);
+      } catch (error) {
+        throw new StoreError(error.message);
+      }
+      parsed.splitMode = "exact";
+      parsed.mySharePence = mySharePence;
+    } else if (splitMode === "shares") {
+      const myShareUnits = transaction.myShareUnits;
+      const friendShareUnits = transaction.friendShareUnits;
+      try {
+        splitByPeople(amountPence, myShareUnits, friendShareUnits);
+      } catch (error) {
+        throw new StoreError(error.message);
+      }
+      parsed.splitMode = "shares";
+      parsed.myShareUnits = myShareUnits;
+      parsed.friendShareUnits = friendShareUnits;
+    } else {
+      const adjustment = transaction.myShareAdjustmentPence || 0;
+      if (!Number.isInteger(adjustment)) {
+        throw new StoreError("Adjustment must be whole pence.");
+      }
+      try {
+        splitExpense(amountPence, adjustment);
+      } catch (error) {
+        throw new StoreError(error.message);
+      }
+      parsed.myShareAdjustmentPence = adjustment;
     }
-    try {
-      splitExpense(amountPence, adjustment);
-    } catch (error) {
-      throw new StoreError(error.message);
-    }
-    parsed.myShareAdjustmentPence = adjustment;
   }
 
   return parsed;

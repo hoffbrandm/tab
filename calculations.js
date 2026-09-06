@@ -8,12 +8,37 @@ export function splitExpense(amountPence, myShareAdjustmentPence = 0) {
   return { mySharePence, friendSharePence: amountPence - mySharePence };
 }
 
+/** A flat, named amount for each side rather than a nudge off half. */
+export function splitExact(amountPence, mySharePence) {
+  if (!Number.isInteger(amountPence) || amountPence <= 0) throw new Error("Amount must be a positive whole number of pence.");
+  if (!Number.isInteger(mySharePence) || mySharePence < 0 || mySharePence > amountPence) {
+    throw new Error("Share must be between zero and the total.");
+  }
+  return { mySharePence, friendSharePence: amountPence - mySharePence };
+}
+
+/** Split by headcount on each side, e.g. 3 of mine against 1 of theirs. */
+export function splitByPeople(amountPence, myCount, friendCount) {
+  if (!Number.isInteger(amountPence) || amountPence <= 0) throw new Error("Amount must be a positive whole number of pence.");
+  if (!Number.isInteger(myCount) || !Number.isInteger(friendCount) || myCount < 0 || friendCount < 0 || myCount + friendCount <= 0) {
+    throw new Error("Enter how many people are on each side.");
+  }
+  const mySharePence = Math.round((amountPence * myCount) / (myCount + friendCount));
+  return { mySharePence, friendSharePence: amountPence - mySharePence };
+}
+
+export function resolveSplit(transaction) {
+  if (transaction.splitMode === "exact") return splitExact(transaction.amountPence, transaction.mySharePence);
+  if (transaction.splitMode === "shares") return splitByPeople(transaction.amountPence, transaction.myShareUnits, transaction.friendShareUnits);
+  return splitExpense(transaction.amountPence, transaction.myShareAdjustmentPence || 0);
+}
+
 export function transactionImpact(transaction) {
   // A positive balance means the friend still owes me. Cash paid to me reduces it;
   // cash I pay to the friend increases it.
   if (transaction.type === "repayment") return transaction.paidBy === "friend" ? -transaction.amountPence : transaction.amountPence;
   if (transaction.type !== "expense") throw new Error("Unknown transaction type.");
-  const { mySharePence, friendSharePence } = splitExpense(transaction.amountPence, transaction.myShareAdjustmentPence || 0);
+  const { mySharePence, friendSharePence } = resolveSplit(transaction);
   return transaction.paidBy === "me" ? friendSharePence : -mySharePence;
 }
 
