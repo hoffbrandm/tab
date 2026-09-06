@@ -167,7 +167,7 @@ test("an optional field is one line, and an empty amount looks empty", () => {
   // Two controls lay themselves out and must not be given a box: a checkbox
   // sits beside its words, and a segmented control is a row of choices.
   assert.match(css, /fieldset > \.segmented \{ margin-top: 7px; \}/);
-  assert.match(css, /\n\.segmented \{[^}]*grid-template-columns:\s*1fr 1fr/);
+  assert.match(css, /\n\.segmented \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/);
   // And a placeholder 0.00 was set in the same bold as a typed figure.
   assert.match(rule("input::placeholder"), /font-weight:\s*500/);
 });
