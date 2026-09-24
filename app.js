@@ -1319,7 +1319,7 @@ function aniScreen() {
   return shell({
     title: "£100k.",
     lede: "Adjusted net income against the childcare cliff.",
-    help: "Stay at or under £100,000 adjusted net income. YTD and the projection come from payslips. Grossed-up Gift Aid from giving in this tax year comes off automatically.",
+    help: "Stay at or under £100,000 adjusted net income. YTD and the projection come from payslips you have entered. A month with a detailed slip is locked, whether or not the money has landed. Grossed-up Gift Aid from giving in this tax year comes off automatically.",
     back: "",
     extra: `
       <div class="ani-controls">
@@ -1339,12 +1339,12 @@ function aniScreen() {
         <div class="stat"><span>Limit</span><strong>${formatMoney(ANI_LIMIT_PENCE)}</strong></div>
       </div>
       <section class="verdict ${result.overLimit ? "negative" : "positive"}">
-        ${result.confirmedCount === 0
-          ? "<p>Add a confirmed payslip to project the rest of the tax year.</p>"
+        ${result.monthsCounted === 0
+          ? "<p>Add a payslip to project the rest of the tax year.</p>"
           : result.overLimit
-            ? `<p>Sacrifice another ${formatMoney(result.extraSacrificePence)} this tax year${formatExtraPercent(result)} to stay at £100k.${result.remainingMonths ? ` That’s ${formatMoney(result.extraPerRemainingMonthPence)} in each of the ${result.remainingMonths} remaining months.` : ""}</p>`
+            ? `<p>Sacrifice another ${formatMoney(result.extraSacrificePence)} this tax year${formatExtraPercent(result)} to stay at £100k.${result.remainingMonths ? ` That’s ${formatMoney(result.extraPerRemainingMonthPence)} in each of the ${result.remainingMonths} remaining month${result.remainingMonths === 1 ? "" : "s"}.` : ""}</p>`
             : `<p>On this projection you’re ${formatMoney(result.underByPence)} under the £100k cliff.</p>`}
-        <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Grossed-up Gift Aid taken off: ${formatMoney(result.giftAidReliefPence)}.${result.netOnlyCount ? ` ${result.netOnlyCount} slip${result.netOnlyCount === 1 ? " has" : "s have"} only a net typed, so ${result.netOnlyCount === 1 ? "it is" : "they are"} not in this figure — add the gross to count ${result.netOnlyCount === 1 ? "it" : "them"}.` : ""}</p>
+        <p class="helper">${result.monthsCounted} locked payslip${result.monthsCounted === 1 ? "" : "s"}, ${result.remainingMonths} month${result.remainingMonths === 1 ? "" : "s"} left to adjust at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Grossed-up Gift Aid taken off: ${formatMoney(result.giftAidReliefPence)}.${result.netOnlyCount ? ` ${result.netOnlyCount} slip${result.netOnlyCount === 1 ? " has" : "s have"} only a net typed, so ${result.netOnlyCount === 1 ? "it is" : "they are"} not in this figure — add the gross to count ${result.netOnlyCount === 1 ? "it" : "them"}.` : ""}</p>
       </section>
     `,
   });

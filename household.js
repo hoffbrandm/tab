@@ -2019,21 +2019,30 @@ export function aniProjection({
   personName,
   taxYear,
   includeGiftAid = true,
+  // Accepted so callers can keep passing it. This helper does not use it:
+  // a month locks when the slip is entered, not when the money lands.
   today = new Date(),
 } = {}) {
+  void today;
   const slips = (payslips || [])
     .filter((slip) => slip.personId === personId && slip.taxYear === taxYear)
     .sort((a, b) => String(a.periodMonth).localeCompare(String(b.periodMonth)));
-  // A net-only slip has no taxable pay on it, so it cannot count here. Left in,
-  // it would read as a £0 month and drag the whole run-rate down with it, which
-  // is worse than saying plainly that it is not counted.
-  const allConfirmed = slips.filter((slip) => payslipIsConfirmed(slip, today));
-  const confirmed = allConfirmed.filter(payslipHasDetail);
-  const netOnlyCount = allConfirmed.length - confirmed.length;
-  const months = [...new Set(confirmed.map((slip) => slip.periodMonth).filter(Boolean))];
+  // A month is locked once a detailed slip is entered. That period's payroll
+  // is already done, even when the money has not landed — Home and cashflow
+  // still use payslipIsConfirmed for that, and this helper must not. Waiting
+  // on the landing month left a submitted September adjustable, and spread
+  // the extra sacrifice over a month that can no longer change.
+  // A forecast row is not entered fact, so it stays out. A net-only slip has
+  // no taxable pay, so it cannot count here either. Left in, it would read as
+  // a £0 month and drag the whole run-rate down, which is worse than saying
+  // plainly that it is not counted.
+  const entered = slips.filter((slip) => !slip.forecast);
+  const locked = entered.filter(payslipHasDetail);
+  const netOnlyCount = entered.length - locked.length;
+  const months = [...new Set(locked.map((slip) => slip.periodMonth).filter(Boolean))];
   const remainingMonths = Math.max(0, 12 - months.length);
-  const ytdPence = sumPence(confirmed, payslipAniPence);
-  const last = confirmed[confirmed.length - 1];
+  const ytdPence = sumPence(locked, payslipAniPence);
+  const last = locked[locked.length - 1];
   const lastMonthlyPence = last ? payslipAniPence(last) : 0;
   const projectedRestPence = lastMonthlyPence * remainingMonths;
   const giftAidReliefPence = includeGiftAid
@@ -2051,7 +2060,7 @@ export function aniProjection({
 
   return {
     taxYear,
-    confirmedCount: confirmed.length,
+    confirmedCount: locked.length,
     monthsCounted: months.length,
     netOnlyCount,
     remainingMonths,
