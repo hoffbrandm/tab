@@ -435,6 +435,20 @@ test("the £100k helper takes grossed-up Gift Aid off, and never adds it on", ()
   assert.match(app, /Grossed-up Gift Aid taken off/);
 });
 
+test("the £100k helper says how many payslips are locked and how many months are left to adjust", () => {
+  const ani = app.slice(app.indexOf("function aniScreen"), app.indexOf("function givingScreen"));
+  assert.match(ani, /locked payslip/);
+  assert.match(ani, /left to adjust/);
+  assert.match(ani, /in each of the \$\{result\.remainingMonths\} remaining month/);
+  assert.match(ani, /whether or not the money has landed/);
+  assert.doesNotMatch(ani, /confirmed month/);
+  assert.doesNotMatch(ani, /confirmed payslip/);
+  // Home's payslip list still marks a month confirmed only once the money lands.
+  const payslips = app.slice(app.indexOf("function payslipsScreen"), app.indexOf("function aniScreen"));
+  assert.match(payslips, /payslipIsConfirmed\(slip\)/);
+  assert.match(payslips, /Confirmed/);
+});
+
 test("each payslip category says what it does to net", () => {
   // "Benefit in kind" and "Cash allowance" are indistinguishable to anyone who
   // does not already know payroll terms, and the form showed a bare name.

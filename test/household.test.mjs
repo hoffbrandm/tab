@@ -581,6 +581,88 @@ test("£100k helper projects remaining months and extra salary sacrifice", () =>
   assert.ok(result.projectedPence > ANI_LIMIT_PENCE);
 });
 
+test("£100k helper locks an entered slip before the money lands and spreads the extra over the months left", () => {
+  // Six detailed slips through September. September's money lands in October,
+  // so on 24 Sep it has not "confirmed" for cashflow — but the slip is in, so
+  // that month can no longer be changed. The extra spreads over Oct–Mar (6),
+  // not over a seventh adjustable month.
+  // Earlier months are synthetic pence. Together with a last month of
+  // £8,489.52 they land on the projection in the brief.
+  const lastMonthlyPence = 848952;
+  const earlierPence = [836506, 836506, 836506, 836506, 836508];
+  const periods = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"];
+  const slips = periods.map((periodMonth, index) => slip(
+    periodMonth,
+    index === 5 ? lastMonthlyPence : earlierPence[index],
+    index === 5 ? { moneyLandsMonth: "2026-10" } : {},
+  ));
+  slips.push(slip("2026-10", 999999, { forecast: true, moneyLandsMonth: "2026-11" }));
+  const today = new Date("2026-09-24T12:00:00Z");
+  assert.equal(payslipIsConfirmed(slips[5], today), false, "September has not landed, and cashflow still says so");
+
+  const result = aniProjection({
+    payslips: slips,
+    personId: "you",
+    taxYear: "2026-27",
+    today,
+  });
+  assert.equal(result.confirmedCount, 6);
+  assert.equal(result.monthsCounted, 6);
+  assert.equal(result.remainingMonths, 6);
+  assert.equal(result.lastMonthlyPence, lastMonthlyPence);
+  assert.equal(result.ytdPence, 5031484);
+  assert.equal(result.projectedRestPence, lastMonthlyPence * 6);
+  assert.equal(result.projectedPence, 10125196);
+  assert.equal(result.extraSacrificePence, 125196);
+  assert.equal(result.extraPerRemainingMonthPence, 20866);
+  assert.equal(result.extraPerRemainingMonthPence, Math.round(125196 / 6));
+  assert.notEqual(result.extraPerRemainingMonthPence, Math.round(125196 / 7));
+
+  const withGift = aniProjection({
+    payslips: slips,
+    donations: [{
+      id: "d-lock",
+      who: "you",
+      charity: "Example",
+      date: "2026-06-01",
+      amountPence: 80000,
+      giftAid: true,
+    }],
+    personId: "you",
+    personName: "you",
+    taxYear: "2026-27",
+    today,
+  });
+  assert.equal(withGift.giftAidReliefPence, 100000);
+  assert.equal(withGift.remainingMonths, 6);
+  assert.equal(withGift.projectedPence, result.projectedPence - 100000);
+});
+
+test("£100k helper still divides by seven when August is the last locked slip", () => {
+  // Today is already September, but September has not been entered. The extra
+  // still spreads over the seven months that can change, not over six because
+  // the calendar has moved on.
+  const slips = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08"].map((periodMonth) => slip(
+    periodMonth,
+    900000,
+    { moneyLandsMonth: periodMonth === "2026-08" ? "2026-09" : periodMonth },
+  ));
+  const result = aniProjection({
+    payslips: slips,
+    personId: "you",
+    taxYear: "2026-27",
+    today: new Date("2026-09-24T12:00:00Z"),
+  });
+  assert.equal(result.confirmedCount, 5);
+  assert.equal(result.monthsCounted, 5);
+  assert.equal(result.remainingMonths, 7);
+  assert.equal(result.ytdPence, 4500000);
+  assert.equal(result.projectedRestPence, 6300000);
+  assert.equal(result.projectedPence, 10800000);
+  assert.equal(result.extraSacrificePence, 800000);
+  assert.equal(result.extraPerRemainingMonthPence, Math.round(800000 / 7));
+});
+
 test("£100k helper ignores forecast rows and can stay under the cliff", () => {
   const confirmed = [
     slip("2026-04", 800000),
@@ -1730,6 +1812,29 @@ test("the £100k line leaves net-only slips out and says how many", () => {
   assert.equal(result.ytdPence, 800000);
   // The run-rate is the detailed slip's, not an average dragged to nothing.
   assert.equal(result.lastMonthlyPence, 800000);
+
+  // The same exclusion holds when the net-only slip's money has not landed.
+  // Locking no longer waits for that, so the note still has to fire.
+  const early = aniProjection({
+    payslips: [
+      slip("2026-08", 800000, { moneyLandsMonth: "2026-09" }),
+      slip("2026-09", 0, {
+        grossPence: 0,
+        salaryPence: 0,
+        statedNetPence: 400000,
+        moneyLandsMonth: "2026-10",
+      }),
+    ],
+    personId: "you",
+    taxYear: "2026-27",
+    today: new Date("2026-09-24T12:00:00Z"),
+  });
+  assert.equal(early.netOnlyCount, 1);
+  assert.equal(early.confirmedCount, 1);
+  assert.equal(early.monthsCounted, 1);
+  assert.equal(early.ytdPence, 800000);
+  assert.equal(early.lastMonthlyPence, 800000);
+  assert.equal(early.remainingMonths, 11);
 });
 
 test("last month's figures are borrowed only where this month's are blank", () => {
