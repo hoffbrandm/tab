@@ -1344,6 +1344,8 @@ function aniScreen() {
           : result.overLimit
             ? `<p>Sacrifice another ${formatMoney(result.extraSacrificePence)} this tax year${formatExtraPercent(result)} to stay at £100k.${result.remainingMonths ? ` That’s ${formatMoney(result.extraPerRemainingMonthPence)} in each of the ${result.remainingMonths} remaining months.` : ""}</p>`
             : `<p>On this projection you’re ${formatMoney(result.underByPence)} under the £100k cliff.</p>`}
+        ${result.confirmedCount > 0 && result.remainingMonths > 0 ? `<p>${result.totalSacrificeRatio === null ? "Add your annual salary to calculate pension percentages." : `An extra <strong>${((result.extraSacrificeOfRemaining || 0) * 100).toFixed(2)}%</strong>; a total of <strong>${(result.totalSacrificeRatio * 100).toFixed(2)}%</strong> of gross salary, including your existing ${(result.currentSacrificeRatio * 100).toFixed(2)}%, based on your pay remaining the same. Round the total up to the next percentage your HR system accepts.`}</p>` : ""}
+        ${result.extraSacrificePence > 0 ? `<p>Alternatively, give <strong>${formatMoney(result.giftAidDonationNeededPence)}</strong> to charity with Gift Aid this tax year to cover the same gap. This is an alternative to the extra pension, not an additional requirement, and assumes you qualify for Gift Aid.</p>` : ""}
         <p class="helper">${result.confirmedCount} confirmed month${result.confirmedCount === 1 ? "" : "s"}, ${result.remainingMonths} remaining at ${formatMoney(result.lastMonthlyPence)} each. Forecast rows are not counted. Grossed-up Gift Aid taken off: ${formatMoney(result.giftAidReliefPence)}.${result.netOnlyCount ? ` ${result.netOnlyCount} slip${result.netOnlyCount === 1 ? " has" : "s have"} only a net typed, so ${result.netOnlyCount === 1 ? "it is" : "they are"} not in this figure — add the gross to count ${result.netOnlyCount === 1 ? "it" : "them"}.` : ""}</p>
       </section>
     `,
@@ -1946,14 +1948,14 @@ function payslipForm() {
   const previous = previousPayslipForPerson(household(), personId, item.periodMonth || "");
   const months = item.id
     ? { moneyLandsMonth: item.moneyLandsMonth || item.periodMonth || viewMonth, periodMonth: item.periodMonth || viewMonth }
-    : payslipMonthsForNewSlip(household(), personId, viewMonth);
+    : item.periodMonth ? { periodMonth: item.periodMonth, moneyLandsMonth: addMonths(item.periodMonth, 1) } : payslipMonthsForNewSlip(household(), personId, viewMonth);
   const available = unusedMasterPayslipCategories(categories, masterPayslipCategories(household()));
   const live = livePayslipFromForm(item, categories);
   return `<form id="payslip-form">${modalHead(item.id ? "Edit payslip" : "Add a payslip")}
     <label>Person<select name="personId" required data-action="payslip-person">${household().people.map((person) => `<option value="${person.id}" ${person.id === personId ? "selected" : ""}>${esc(person.name)}</option>`).join("")}</select></label>
     <label>Tax year<select name="taxYear">${taxYearOptionsFor(item.taxYear).map((year) => `<option value="${year}" ${year === (item.taxYear || currentUkTaxYear()) ? "selected" : ""}>${year}</option>`).join("")}</select></label>
-    <label>Month the money lands<input required type="month" name="moneyLandsMonth" value="${months.moneyLandsMonth}" /></label>
-    <label>Pay period<input required type="month" name="periodMonth" value="${months.periodMonth}" /></label>
+    <label>Pay month<input required type="month" name="periodMonth" data-action="payslip-period" value="${months.periodMonth}" /></label>
+    <p class="helper" data-payslip-lands>Money lands in ${esc(monthLabel(addMonths(months.periodMonth, 1)))}.</p>
     ${moneyLabel("Net pay", "statedNet", item.statedNetPence, { optional: false })}
     <p class="helper">The figure the payslip prints. Type just this and the month is right — the rest of the slip can follow whenever.</p>
     ${previous ? `<div class="fill-last">
@@ -2611,10 +2613,15 @@ document.addEventListener("change", async (event) => {
     event.target.value = "";
     renderModal();
   }
+  if (action === "payslip-period") {
+    snapshotPayslipForm();
+    const hint = document.querySelector("[data-payslip-lands]");
+    if (hint) hint.textContent = `Money lands in ${monthLabel(addMonths(event.target.value, 1))}.`;
+  }
   if (action === "payslip-person") {
     if (modal?.kind !== "payslip" || modal.payslip?.id) return;
     snapshotPayslipForm();
-    modal.payslip = { ...(modal.payslip || {}), personId: event.target.value };
+    modal.payslip = { ...(modal.payslip || {}), personId: event.target.value, ...payslipMonthsForNewSlip(household(), event.target.value, viewMonth) };
     modal.slipCategories = defaultCategoriesForNewPayslip(household(), event.target.value);
     renderModal();
   }
@@ -3300,7 +3307,7 @@ async function savePayslip(event) {
     netPence: amounts.netPence,
     statedNetPence,
     note: String(data.get("note") || "").trim(),
-    moneyLandsMonth: data.get("moneyLandsMonth") || data.get("periodMonth"),
+    moneyLandsMonth: addMonths(data.get("periodMonth"), 1),
     forecast: data.get("forecast") === "on",
     taxCode: String(data.get("taxCode") || "").trim(),
   };
@@ -3357,7 +3364,7 @@ function snapshotPayslipForm() {
     personId: data.get("personId"),
     taxYear: data.get("taxYear"),
     periodMonth: data.get("periodMonth"),
-    moneyLandsMonth: data.get("moneyLandsMonth"),
+    moneyLandsMonth: addMonths(data.get("periodMonth"), 1),
     note: String(data.get("note") || "").trim(),
     taxCode: String(data.get("taxCode") || "").trim(),
     forecast: data.get("forecast") === "on",
@@ -3482,3 +3489,4 @@ function updateLiveSplit() {
 }
 
 bootApp();
+

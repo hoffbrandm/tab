@@ -559,7 +559,7 @@ test("£100k helper projects remaining months and extra salary sacrifice", () =>
     slip("2026-05", 900000),
     slip("2026-06", 900000),
     slip("2026-07", 900000),
-    slip("2026-08", 900000),
+    slip("2026-08", 900000, { salaryPence: 10800000 }),
     slip("2026-09", 900000, { forecast: true }),
   ];
   const result = aniProjection({
@@ -1164,7 +1164,7 @@ test("payslip ANI is taxable pay plus taxable benefits", () => {
   }), 860000);
   // With no gross typed, salary is contractual and so sits before the sacrifice.
   assert.equal(payslipAniPence({
-    salaryPence: 800000,
+    salaryPence: 9600000,
     bonusPence: 100000,
     benefitsPence: 10000,
     salarySacrificePensionPence: 50000,
@@ -1648,7 +1648,7 @@ test("a new slip opens on the month the money lands, for the period before", () 
   const people = [{ id: "m", name: "M" }];
   const none = { ...emptyHousehold(), people };
   assert.deepEqual(payslipMonthsForNewSlip(none, "m", "2026-09"), {
-    moneyLandsMonth: "2026-09", periodMonth: "2026-08",
+    moneyLandsMonth: "2026-10", periodMonth: "2026-09",
   });
   // Paid a month in arrears: September's money is August's slip.
   const arrears = { ...none, payslips: [{ id: "a", personId: "m", periodMonth: "2026-07", moneyLandsMonth: "2026-08" }] };
@@ -1658,7 +1658,7 @@ test("a new slip opens on the month the money lands, for the period before", () 
   // Paid in the month it covers: both are September.
   const sameMonth = { ...none, payslips: [{ id: "b", personId: "m", periodMonth: "2026-08", moneyLandsMonth: "2026-08" }] };
   assert.deepEqual(payslipMonthsForNewSlip(sameMonth, "m", "2026-09"), {
-    moneyLandsMonth: "2026-09", periodMonth: "2026-09",
+    moneyLandsMonth: "2026-10", periodMonth: "2026-09",
   });
 });
 
@@ -2420,4 +2420,27 @@ test("planned totals per month cover this month and the ones ahead", () => {
   assert.equal(plannedMonthTotals(hh, "2026-08").some((row) => row.month === "2026-05"), false);
   assert.deepEqual(plannedMonthTotals(hh, "2026-11").map((row) => row.month), ["2026-12"]);
   assert.deepEqual(plannedMonthTotals({ ...emptyHousehold() }, "2026-08"), []);
+});
+
+
+
+test("HR total includes existing sacrifice; Gift Aid is the alternative net donation", () => {
+  const payslips = Array.from({length: 7}, (_, i) => ({
+    personId: "you", taxYear: "2026-27", periodMonth: `2026-${String(i+4).padStart(2,"0")}`,
+    salaryPence: 12000000, grossPence: 1000000,
+    grossBeforeSacrifice: true, salarySacrificePensionPence: 150000,
+  }));
+  const r = aniProjection({payslips, personId:"you", taxYear:"2026-27", today:new Date("2026-10-25")});
+  assert.equal(r.projectedPence, 10200000);
+  assert.equal(r.extraSacrificeOfRemaining, 0.04);
+  assert.equal(r.currentSacrificeRatio, 0.15);
+  assert.equal(r.totalSacrificeRatio, 0.19);
+  assert.equal(r.giftAidDonationNeededPence, 160000);
+  assert.equal(r.ytdPence + 5 * (1000000 - 190000), ANI_LIMIT_PENCE);
+  assert.ok(giftAidGrossPence(r.giftAidDonationNeededPence, true) >= r.extraSacrificePence);
+});
+
+test("new payslip advances December to January and pays in February", () => {
+  assert.deepEqual(payslipMonthsForNewSlip({payslips:[{personId:"m",periodMonth:"2026-12"}]}, "m", "2026-12"),
+    {periodMonth:"2027-01",moneyLandsMonth:"2027-02"});
 });
