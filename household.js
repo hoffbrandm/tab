@@ -1701,7 +1701,7 @@ export function payslipTaxablePayPence(slip) {
   if (!slip) return 0;
   if ((slip.grossPence || 0) > 0) return payslipGrossPaidPence(slip);
   // No gross typed. Salary is contractual, so it is a before-sacrifice figure.
-  return (slip.salaryPence || 0) + (slip.bonusPence || 0) - (slip.salarySacrificePensionPence || 0);
+  return Math.round((slip.salaryPence || 0) / 12) + (slip.bonusPence || 0) - (slip.salarySacrificePensionPence || 0);
 }
 
 /** True when more than one reading of Gross is possible for this slip. */
@@ -1795,23 +1795,11 @@ export function previousPayslipForPerson(household, personId, beforeMonth = "") 
     .sort((a, b) => String(b.periodMonth).localeCompare(String(a.periodMonth)))[0] || null;
 }
 
-/**
- * The months a new slip should open on. You add a payslip in the month the
- * money arrives — that is the month you are looking at and the month the
- * household spends it in — and the slip itself is for the period before.
- *
- * How far before is a fact about the person's employer, not a rule, so it is
- * read off their last slip: one is paid a month in arrears, another in the same
- * month. With no history to read, a month back is the common case.
- */
-export function payslipMonthsForNewSlip(household, personId, landsMonth) {
+/** One pay-period control; payment always lands in the following month. */
+export function payslipMonthsForNewSlip(household, personId, currentMonth) {
   const last = previousPayslipForPerson(household, personId);
-  const lastLands = last?.moneyLandsMonth || last?.periodMonth;
-  const known = last?.periodMonth && lastLands
-    ? monthsBetween(lastLands, last.periodMonth)
-    : null;
-  const offset = Number.isInteger(known) ? known : -1;
-  return { moneyLandsMonth: landsMonth, periodMonth: addMonths(landsMonth, offset) };
+  const periodMonth = last?.periodMonth ? addMonths(last.periodMonth, 1) : currentMonth;
+  return { periodMonth, moneyLandsMonth: addMonths(periodMonth, 1) };
 }
 
 /** Whole months from one month key to another, negative when it goes back. */
@@ -1954,7 +1942,7 @@ export function addPendingRow(household, { id, amountPence = 0, note = "", month
 }
 
 export function extraSacrificeRatio(projection) {
-  const remaining = Number(projection?.projectedRestPence) || 0;
+  const remaining = Number(projection?.remainingSalaryPence ?? projection?.projectedRestPence) || 0;
   const extra = Number(projection?.extraSacrificePence) || 0;
   if (extra <= 0) return 0;
   if (remaining <= 0) return 0;
@@ -2044,10 +2032,16 @@ export function aniProjection({
   const extraPerRemainingMonthPence = remainingMonths > 0
     ? Math.round(extraSacrificePence / remainingMonths)
     : extraSacrificePence;
-  const extraSacrificeOfRemaining = extraSacrificeRatio({
-    extraSacrificePence,
-    projectedRestPence,
-  });
+  // HR percentages apply to contractual salary before sacrifice, not ANI.
+  const monthlySalaryPence = last ? Math.round((last.salaryPence || 0) / 12) : 0;
+  const remainingSalaryPence = monthlySalaryPence * remainingMonths;
+  const currentMonthlySacrificePence = last?.salarySacrificePensionPence || 0;
+  const currentSacrificeRatio = monthlySalaryPence > 0 ? currentMonthlySacrificePence / monthlySalaryPence : null;
+  const extraSacrificeOfRemaining = remainingSalaryPence > 0 ? extraSacrificePence / remainingSalaryPence : null;
+  const totalSacrificeRatio = currentSacrificeRatio === null || extraSacrificeOfRemaining === null
+    ? null : currentSacrificeRatio + extraSacrificeOfRemaining;
+  const giftAidDonationNeededPence = Math.ceil(extraSacrificePence * 4 / 5);
+
 
   return {
     taxYear,
@@ -2063,6 +2057,10 @@ export function aniProjection({
     extraSacrificePence,
     extraPerRemainingMonthPence,
     extraSacrificeOfRemaining,
+    remainingSalaryPence,
+    currentSacrificeRatio,
+    totalSacrificeRatio,
+    giftAidDonationNeededPence,
     underByPence: Math.max(0, ANI_LIMIT_PENCE - projectedPence),
     overLimit: projectedPence > ANI_LIMIT_PENCE,
   };
@@ -2094,3 +2092,4 @@ export function isTaxYearLabel(value) {
 }
 
 export { DATE, MONTH, TAX_YEAR };
+

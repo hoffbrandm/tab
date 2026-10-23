@@ -221,7 +221,10 @@ test("a payslip opens on the month the money lands and can borrow last month's",
   // and the lands month leads because that is the month you are adding it in.
   assert.match(app, /payslipMonthsForNewSlip\(household\(\), personId, viewMonth\)/);
   const form = app.slice(app.indexOf("function payslipForm()"), app.indexOf("function payslipNetBlock"));
-  assert.ok(form.indexOf("Month the money lands") < form.indexOf("Pay period"), "the lands month leads");
+  assert.match(form, /Pay month<input required type="month" name="periodMonth"/);
+  assert.doesNotMatch(form, /name="moneyLandsMonth"/);
+  assert.match(app, /moneyLandsMonth: addMonths\(data.get\("periodMonth"\), 1\)/);
+  assert.match(app, /data-payslip-lands/);
   // One deliberate tap borrows last month's figures, and says so before it does.
   assert.match(form, /data-action="fill-payslip-from-last"/);
   assert.match(form, /Only empty boxes are filled/);
@@ -509,3 +512,4 @@ test("Planned shows what each month ahead is carrying", () => {
   assert.doesNotMatch(plannedRoom, /Other months/);
   assert.doesNotMatch(app, /oneOffsOutsideMonth\(hh, viewMonth\)\]/);
 });
+
