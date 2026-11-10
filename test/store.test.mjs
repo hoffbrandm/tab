@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cashflowForMonth, emptyHousehold, oneOffsForMonth } from "../household.js";
-import { emptyStore, gistOneOffsNeedRewrite, parseStore, StoreError } from "../store.js";
+import { emptyStore, gistOneOffsNeedRewrite, gistPayslipsNeedRewrite, parseStore, StoreError } from "../store.js";
 
 const friend = {
   id: "ben",
@@ -520,6 +520,35 @@ test("imported one-offs move to this year and previous months are dropped", () =
   assert.equal(flow.outPence, 12000);
   assert.equal(gistOneOffsNeedRewrite(raw, parsed), true);
   assert.equal(gistOneOffsNeedRewrite(parsed, parsed), false);
+});
+
+test("load normalises payslip category aliases and flags gist rewrite", () => {
+  const raw = {
+    version: 1,
+    friends: [],
+    transactions: [],
+    household: {
+      ...emptyHousehold(),
+      payslips: [{
+        id: "slip-1",
+        personId: "person-you",
+        taxYear: "2026-27",
+        periodMonth: "2026-09",
+        moneyLandsMonth: "2026-09",
+        statedNetPence: 250000,
+        otherDeductions: [
+          { id: "d1", label: "SMP", amountPence: 1000, inNet: false },
+          { id: "d2", label: "Statutory Maternity Pay", amountPence: 2000, inNet: false },
+        ],
+      }],
+    },
+  };
+  const parsed = parseStore(raw);
+  const row = parsed.household.payslips[0].otherDeductions[0];
+  assert.equal(row.label, "Statutory maternity (SMP)");
+  assert.equal(row.amountPence, 3000);
+  assert.equal(gistPayslipsNeedRewrite(raw, parsed), true);
+  assert.equal(gistPayslipsNeedRewrite(parsed, parsed), false);
 });
 
 test("September load drops August planned rows, including purchased", () => {

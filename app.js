@@ -54,7 +54,9 @@ import {
   payslipNetPence,
   payslipNetAsReadPence,
   payslipIsNetOnly,
+  payslipNeedsGross,
   payslipSaysNothing,
+  canonicalPayslipCategoryLabel,
   payslipNetCheck,
   payslipNetHints,
   payslipGrossPaidPence,
@@ -238,7 +240,7 @@ async function bootApp() {
     boot = { name: "ready" };
     maybeOfferLocalImport();
     render();
-    if (payload.oneOffsRewritten) persist().catch(() => {});
+    if (payload.oneOffsRewritten || payload.payslipsRewritten) persist().catch(() => {});
   } catch (error) {
     if (error instanceof GistError && error.status === 401) {
       sessionStore.clear();
@@ -1298,7 +1300,9 @@ function payslipsScreen() {
               ? `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · nothing to work a net out from — add the net it prints`
               : payslipIsNetOnly(slip)
                 ? `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · net only, no detail yet`
-                : `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · gross ${formatMoney(slip.grossPence || slip.salaryPence)}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
+                : payslipNeedsGross(slip)
+                  ? `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · add the gross the payslip shows${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`
+                  : `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · gross ${formatMoney(slip.grossPence || slip.salaryPence)}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
             amount: formatMoney(payslipNetAsReadPence(slip)),
           });
         }).join("") : emptyLines("Add a month when you have a slip — or a forecast row you do not treat as fact.", "add-payslip", "Add a payslip")}
@@ -3073,10 +3077,14 @@ async function savePayslipCategory(event) {
   const kind = special ? existing.kind : (
     data.get("kind") === "extra" ? "extra" : data.get("kind") === "parental" ? "parental" : "deduction"
   );
+  const resolved = canonicalPayslipCategoryLabel(label, kind);
+  if (resolved.builtinField) {
+    return showFormError("That name belongs on the built-in Pension (relief at source) line, not as its own category.");
+  }
   const payload = {
     id: existing.id || uid(),
-    label,
-    kind,
+    label: resolved.label,
+    kind: resolved.kind,
   };
   setBusy(event.target, true);
   const saved = await withStoreUpdate(() => {

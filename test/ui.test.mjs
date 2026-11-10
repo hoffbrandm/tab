@@ -81,7 +81,7 @@ test("Home Planned and the Planned room keep one add control", () => {
   const plannedRoom = app.match(/function plannedScreen\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(plannedRoom, /sectionHead\(monthLabel\(viewMonth\), "add-oneoff", "Add"\)/);
   assert.doesNotMatch(plannedRoom, /emptyLines\([^)]*"add-oneoff"/);
-  assert.match(app, /if \(payload\.oneOffsRewritten\) persist\(\)/);
+  assert.match(app, /if \(payload\.oneOffsRewritten \|\| payload\.payslipsRewritten\) persist\(\)/);
 });
 
 test("the per diem is one figure of its own, not a line in a list", () => {
@@ -234,6 +234,8 @@ test("a payslip opens on the month the money lands and can borrow last month's",
   // nothing at all names what would fix it — £0 on Home reads exactly like a
   // slip that failed to save.
   assert.match(app, /net only, no detail yet/);
+  assert.match(app, /add the gross the payslip shows/);
+  assert.match(app, /payslipNeedsGross\(slip\)/);
   assert.match(app, /nothing to work a net out from — add the net it prints/);
   assert.match(app, /payslipSaysNothing\(slip\)/);
   // And the working is not shown against a net there is nothing to check.

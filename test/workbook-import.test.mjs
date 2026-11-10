@@ -117,8 +117,8 @@ test("a synthetic workbook maps into household lines and keeps friend tabs", asy
   const check = payslipNetCheck(imported);
   assert.equal(check.matches, false);
   assert.equal(check.differencePence, 16000);
-  assert.ok(store.household.payslips[0].otherDeductions.some((row) => row.label === "Smp" || row.label === "SMP"));
-  assert.equal(store.household.payslips[0].otherDeductions.find((row) => /smp/i.test(row.label)).inNet, false);
+  assert.ok(store.household.payslips[0].otherDeductions.some((row) => row.label === "Statutory maternity (SMP)"));
+  assert.equal(store.household.payslips[0].otherDeductions.find((row) => row.label === "Statutory maternity (SMP)").inNet, false);
   assert.ok(flow.pendingPence >= 6000);
   const summary = reportLines(report);
   assert.ok(summary.landed.some((item) => item[0] === "Income" && item[1] === 2));
