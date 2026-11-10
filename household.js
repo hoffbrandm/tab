@@ -51,7 +51,7 @@ export const SHEET_PAYSLIP_DEDUCTIONS = [
   { id: "dental", label: "Dental", kind: "deduction" },
   { id: "cycle-scheme", label: "Cycle scheme", kind: "deduction" },
   { id: "jury-service", label: "Jury service", kind: "deduction" },
-  { id: "smp", label: "SMP", kind: "parental" },
+  { id: "smp", label: "Statutory maternity (SMP)", kind: "parental" },
   { id: "enhanced-maternity", label: "Enhanced maternity", kind: "parental" },
   { id: "enhanced-paternity", label: "Enhanced paternity", kind: "parental" },
   { id: "ospp", label: "OSPP", kind: "parental" },
@@ -60,6 +60,150 @@ export const DEFAULT_PAYSLIP_CATEGORIES = [
   ...BUILTIN_PAYSLIP_CATEGORIES,
   ...SHEET_PAYSLIP_DEDUCTIONS,
 ];
+
+/** Case-insensitive key for payslip category names; punctuation and spacing ignored. */
+export function payslipLabelMatchKey(label) {
+  return String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function payslipAliasEntry(canonical, kind, aliases, builtinField) {
+  return {
+    canonical,
+    kind,
+    builtinField,
+    keys: new Set(aliases.map((alias) => payslipLabelMatchKey(alias))),
+  };
+}
+
+/**
+ * True synonyms only — statutory maternity is not enhanced maternity, and each
+ * built-in deduction name keeps its meaning.
+ */
+const PAYSLIP_CATEGORY_ALIASES = [
+  payslipAliasEntry("Statutory maternity (SMP)", "parental", [
+    "SMP",
+    "Statutory Maternity Pay",
+    "Statutory maternity",
+    "Statutory maternity pay",
+    "Statutory maternity pay (SMP)",
+    "Statutory maternity (SMP)",
+  ]),
+  payslipAliasEntry("Enhanced maternity", "parental", [
+    "Enhanced Maternity",
+    "Enhanced maternity",
+    "Enhanced maternity pay",
+  ]),
+  payslipAliasEntry("Enhanced paternity", "parental", [
+    "Enhanced Paternity",
+    "Enhanced paternity",
+    "Enhanced paternity pay",
+  ]),
+  payslipAliasEntry("OSPP", "parental", [
+    "OSPP",
+    "Ospp",
+    "Ordinary statutory paternity pay",
+  ]),
+  payslipAliasEntry("Will writing", "deduction", ["Will Writing", "Will writing"]),
+  payslipAliasEntry("Critical illness EE", "deduction", [
+    "Critical Illness Ee",
+    "Critical Illness EE",
+    "Critical illness EE",
+  ]),
+  payslipAliasEntry("Critical illness DP", "deduction", [
+    "Critical Illness Dp",
+    "Critical Illness DP",
+    "Critical illness DP",
+  ]),
+  payslipAliasEntry("Payroll giving", "deduction", ["Payroll Giving", "Payroll giving"]),
+  payslipAliasEntry("Gym flex", "deduction", ["Gym Flex", "Gym flex"]),
+  payslipAliasEntry("Cycle scheme", "deduction", ["Cycle Scheme", "Cycle scheme"]),
+  payslipAliasEntry("Jury service", "deduction", ["Jury Service", "Jury service"]),
+  payslipAliasEntry("Pension (relief at source)", "pension", [
+    "Non Salary Sacrifice Pension",
+    "Pension (relief at source)",
+    "Relief at source pension",
+  ], "reliefAtSourcePensionPence"),
+];
+
+/**
+ * Map a typed or stored label to one canonical name (and kind). Relief-at-source
+ * pension aliases are directed at the built-in pension field, not a deduction row.
+ */
+export function canonicalPayslipCategoryLabel(label, kindHint) {
+  const key = payslipLabelMatchKey(label);
+  if (!key) return { label: "", kind: kindHint || "deduction" };
+  for (const entry of PAYSLIP_CATEGORY_ALIASES) {
+    if (entry.keys.has(key)) {
+      return {
+        label: entry.canonical,
+        kind: entry.kind,
+        ...(entry.builtinField ? { builtinField: entry.builtinField } : {}),
+      };
+    }
+  }
+  for (const category of DEFAULT_PAYSLIP_CATEGORIES) {
+    if (payslipLabelMatchKey(category.label) === key) {
+      return { label: category.label, kind: category.kind };
+    }
+  }
+  return { label: String(label || "").trim(), kind: kindHint || "deduction" };
+}
+
+/**
+ * On load: canonicalise category labels, merge alias duplicates on one slip,
+ * and move relief-at-source pension aliases onto the pension field. Totals stay
+ * the same because amounts are summed, not dropped.
+ */
+export function normalizePayslipSlip(slip) {
+  if (!slip) return slip;
+  const next = { ...slip };
+  let reliefAtSourcePensionPence = next.reliefAtSourcePensionPence || 0;
+  const merged = new Map();
+
+  for (const row of next.otherDeductions || []) {
+    const hintedKind = row.extra ? "extra" : (payslipAmountOutsideNet(row) ? "parental" : "deduction");
+    const resolved = canonicalPayslipCategoryLabel(row.label, hintedKind);
+    if (resolved.builtinField === "reliefAtSourcePensionPence") {
+      reliefAtSourcePensionPence += row.amountPence || 0;
+      continue;
+    }
+    const kind = resolved.kind || hintedKind;
+    const mapKey = `${kind}:${payslipLabelMatchKey(resolved.label)}`;
+    const existing = merged.get(mapKey);
+    if (existing) {
+      existing.amountPence = (existing.amountPence || 0) + (row.amountPence || 0);
+      continue;
+    }
+    merged.set(mapKey, {
+      ...row,
+      label: resolved.label,
+      amountPence: row.amountPence || 0,
+      ...(kind === "extra" ? { extra: true } : { extra: undefined }),
+      ...(kind === "parental" ? { inNet: false } : {}),
+    });
+  }
+
+  next.reliefAtSourcePensionPence = reliefAtSourcePensionPence;
+  next.otherDeductions = [...merged.values()].map((row) => {
+    const copy = { ...row };
+    if (!copy.extra) delete copy.extra;
+    return copy;
+  });
+  return next;
+}
+
+export function normalizePayslipCategory(category) {
+  if (!category) return category;
+  const kind = PAYSLIP_CATEGORY_KINDS.includes(category.kind) ? category.kind : "deduction";
+  const resolved = canonicalPayslipCategoryLabel(category.label, kind);
+  if (resolved.builtinField) return null;
+  return { ...category, label: resolved.label, kind: resolved.kind };
+}
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH = /^\d{4}-\d{2}$/;
@@ -1282,12 +1426,18 @@ export function builtinPayslipCategory(kind) {
 export function payslipCategoriesOf(household) {
   const seen = new Map();
   const remember = (category) => {
-    const kind = PAYSLIP_CATEGORY_KINDS.includes(category?.kind) ? category.kind : "deduction";
-    const label = String(category?.label || "").trim();
+    const hinted = PAYSLIP_CATEGORY_KINDS.includes(category?.kind) ? category.kind : "deduction";
+    const resolved = canonicalPayslipCategoryLabel(category?.label, hinted);
+    const builtinKind = BUILTIN_PAYSLIP_CATEGORIES.some((builtIn) => builtIn.kind === hinted);
+    if (resolved.builtinField && !builtinKind) return;
+    const kind = resolved.kind || hinted;
+    const label = resolved.label;
     if (!label) return;
     const id = String(category?.id || "").trim()
-      || (kind === "deduction" || kind === "extra" || kind === "parental" ? `${kind}-${label.toLowerCase()}` : kind);
-    const key = kind === "deduction" || kind === "extra" || kind === "parental" ? `${kind}:${label.toLowerCase()}` : kind;
+      || (kind === "deduction" || kind === "extra" || kind === "parental" ? `${kind}-${payslipLabelMatchKey(label)}` : kind);
+    const key = kind === "deduction" || kind === "extra" || kind === "parental"
+      ? `${kind}:${payslipLabelMatchKey(label)}`
+      : kind;
     if (seen.has(key)) return;
     seen.set(key, { id, label, kind });
   };
@@ -1343,9 +1493,9 @@ export function unusedBuiltinPayslipCategories(categories) {
 
 export function unusedMasterPayslipCategories(onSlip, master) {
   const usedIds = new Set((onSlip || []).map((item) => item.id));
-  const usedKeys = new Set((onSlip || []).map((item) => `${item.kind}:${String(item.label || "").trim().toLowerCase()}`));
+  const usedKeys = new Set((onSlip || []).map((item) => `${item.kind}:${payslipLabelMatchKey(item.label)}`));
   return (master || []).filter((item) => {
-    const key = `${item.kind}:${String(item.label || "").trim().toLowerCase()}`;
+    const key = `${item.kind}:${payslipLabelMatchKey(item.label)}`;
     return !usedIds.has(item.id) && !usedKeys.has(key);
   });
 }
@@ -1358,8 +1508,8 @@ export function payslipAmountForCategory(slip, category) {
   if (category.kind === "pension") return slip.reliefAtSourcePensionPence || 0;
   if (category.kind === "tax") return slip.taxPence || 0;
   if (category.kind === "ni") return slip.niPence || 0;
-  const label = String(category.label || "").trim().toLowerCase();
-  const row = (slip.otherDeductions || []).find((item) => String(item.label || "").trim().toLowerCase() === label);
+  const label = payslipLabelMatchKey(category.label);
+  const row = (slip.otherDeductions || []).find((item) => payslipLabelMatchKey(item.label) === label);
   return row?.amountPence || 0;
 }
 
@@ -1374,9 +1524,9 @@ export function withPayslipCategoryAmount(slip, category, amountPence) {
   else if (category.kind === "tax") next.taxPence = amountPence;
   else if (category.kind === "ni") next.niPence = amountPence;
   else {
-    const label = String(category.label || "").trim().toLowerCase();
+    const label = payslipLabelMatchKey(category.label);
     const rows = [...(next.otherDeductions || [])];
-    const at = rows.findIndex((item) => String(item.label || "").trim().toLowerCase() === label);
+    const at = rows.findIndex((item) => payslipLabelMatchKey(item.label) === label);
     const row = {
       label: category.label,
       amountPence,
@@ -1575,10 +1725,32 @@ export function payslipAsRead(slip) {
  * was ignored and the month reported £0, which looks exactly like a slip that
  * failed to save.
  */
-export function payslipIsNetOnly(slip) {
+/** Amounts that mean the slip is more than a lone net — not salary, which is contractual. */
+export function payslipHasEnteredAmounts(slip) {
+  if (!slip) return false;
+  if ((slip.bonusPence || 0) > 0) return true;
+  if ((slip.benefitsPence || 0) > 0) return true;
+  if ((slip.salarySacrificePensionPence || 0) > 0) return true;
+  if ((slip.reliefAtSourcePensionPence || 0) > 0) return true;
+  if ((slip.taxPence || 0) > 0) return true;
+  if ((slip.niPence || 0) > 0) return true;
+  return (slip.otherDeductions || []).some((row) => (row.amountPence || 0) > 0);
+}
+
+/** Stated net is what lands in the bank until gross is enough to work the arithmetic. */
+export function payslipUsesStatedNet(slip) {
   const stated = slip?.statedNetPence;
   if (!Number.isInteger(stated) || stated <= 0) return false;
   return payslipGrossPaidPence(slip) <= 0;
+}
+
+export function payslipIsNetOnly(slip) {
+  return payslipUsesStatedNet(slip) && !payslipHasEnteredAmounts(slip);
+}
+
+/** Detail is on the slip but gross paid is still missing — the net check needs it. */
+export function payslipNeedsGross(slip) {
+  return payslipUsesStatedNet(slip) && payslipHasEnteredAmounts(slip);
 }
 
 /**
@@ -1603,7 +1775,7 @@ export function payslipSaysNothing(slip) {
 
 export function payslipNetAsReadPence(slip) {
   // Nothing to do the slip's arithmetic on, so the net it prints is the answer.
-  if (payslipIsNetOnly(slip)) return slip.statedNetPence;
+  if (payslipUsesStatedNet(slip)) return slip.statedNetPence;
   return payslipNetPence(payslipAsRead(slip));
 }
 
@@ -1752,7 +1924,14 @@ export function payslipGrossReadingWarning(slip) {
 export function payslipNetHints(slip) {
   const warning = payslipGrossReadingWarning(slip);
   const check = payslipNetCheck(slip);
-  if (!check || check.matches) return warning ? [warning] : [];
+  const needsGross = payslipNeedsGross(slip)
+    ? "Add the gross the payslip shows — the net check needs it."
+    : "";
+  if (!check || check.matches) {
+    const hints = warning ? [warning] : [];
+    if (needsGross) hints.unshift(needsGross);
+    return hints;
+  }
   const difference = check.differencePence;
   const sacrifice = slip?.salarySacrificePensionPence || 0;
   const bonus = slip?.bonusPence || 0;
@@ -1776,6 +1955,7 @@ export function payslipNetHints(slip) {
   if (benefits > 0 && difference === -benefits) {
     hints.push("That is exactly the taxable benefit. A benefit in kind is never paid to you, so it does not belong in Gross — it counts for the £100k line only.");
   }
+  if (needsGross) hints.unshift(needsGross);
   if (!hints.length) {
     hints.push(difference > 0
       ? "The calculation pays out more than the slip does, so a deduction is probably missing from Categories."

@@ -10,8 +10,14 @@ import {
   payslipMonthsForNewSlip,
   monthsBetween,
   payslipIsNetOnly,
+  payslipNeedsGross,
+  payslipUsesStatedNet,
+  payslipHasEnteredAmounts,
   payslipHasDetail,
   payslipSaysNothing,
+  canonicalPayslipCategoryLabel,
+  normalizePayslipSlip,
+  payslipLabelMatchKey,
   payslipFillFromPrevious,
   payslipWithFills,
   withPayslipCategoryAmount,
@@ -1040,7 +1046,7 @@ test("the settings category list keeps the sheet column set after a slip is save
   rememberPayslipCategories(hh, []);
   const labels = hh.payslipCategories.map((item) => item.label);
   assert.ok(DEFAULT_PAYSLIP_CATEGORIES.every((item) => labels.includes(item.label)));
-  assert.ok(hh.payslipCategories.some((item) => item.kind === "parental" && item.label === "SMP"));
+  assert.ok(hh.payslipCategories.some((item) => item.kind === "parental" && item.label === "Statutory maternity (SMP)"));
   assert.ok(hh.payslipCategories.some((item) => item.label === "Jury service"));
 });
 
@@ -1699,7 +1705,49 @@ test("a slip with only its net typed is still the month's income", () => {
   // the same slip is still detail enough for the £100k line.
   assert.equal(payslipHasDetail(withSalary), true);
   // Whatever the gross is written as, it is the gross paid that decides.
-  assert.equal(payslipIsNetOnly({ ...netOnly, grossPence: 10, grossBeforeSacrifice: true, salarySacrificePensionPence: 10 }), true);
+  const sacrificeCancelsGross = {
+    ...netOnly, grossPence: 10, grossBeforeSacrifice: true, salarySacrificePensionPence: 10,
+  };
+  assert.equal(payslipUsesStatedNet(sacrificeCancelsGross), true);
+  assert.equal(payslipIsNetOnly(sacrificeCancelsGross), false);
+  assert.equal(payslipNetAsReadPence(sacrificeCancelsGross), 579778);
+
+  const detailNoGross = {
+    ...netOnly,
+    taxPence: 12000,
+    niPence: 800,
+    otherDeductions: [{ id: "smp", label: "SMP", amountPence: 50000, inNet: false }],
+  };
+  assert.equal(payslipIsNetOnly(detailNoGross), false);
+  assert.equal(payslipNeedsGross(detailNoGross), true);
+  assert.equal(payslipNetAsReadPence(detailNoGross), 579778);
+  assert.match(payslipNetHints(detailNoGross)[0], /gross the payslip shows/i);
+});
+
+test("payslip category aliases merge synonyms without changing net", () => {
+  assert.equal(
+    canonicalPayslipCategoryLabel("Statutory Maternity Pay").label,
+    "Statutory maternity (SMP)",
+  );
+  assert.equal(canonicalPayslipCategoryLabel("Enhanced Maternity").label, "Enhanced maternity");
+  assert.notEqual(
+    payslipLabelMatchKey("Statutory maternity (SMP)"),
+    payslipLabelMatchKey("Enhanced maternity"),
+  );
+  const slip = normalizePayslipSlip({
+    statedNetPence: 100000,
+    reliefAtSourcePensionPence: 1000,
+    otherDeductions: [
+      { id: "a", label: "SMP", amountPence: 2000, inNet: false },
+      { id: "b", label: "statutory maternity (SMP)", amountPence: 3000, inNet: false },
+      { id: "c", label: "Non Salary Sacrifice Pension", amountPence: 500 },
+      { id: "d", label: "Enhanced Maternity", amountPence: 7000, inNet: false },
+    ],
+  });
+  assert.equal(slip.otherDeductions.length, 2);
+  assert.equal(slip.otherDeductions.find((row) => row.label === "Statutory maternity (SMP)").amountPence, 5000);
+  assert.equal(slip.otherDeductions.find((row) => row.label === "Enhanced maternity").amountPence, 7000);
+  assert.equal(slip.reliefAtSourcePensionPence, 1500);
 });
 
 test("a slip that says nothing about what landed says so", () => {

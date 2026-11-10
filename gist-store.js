@@ -1,5 +1,5 @@
 import { householdHasData } from "./household.js";
-import { emptyStore, gistOneOffsNeedRewrite, parseStore, StoreError } from "./store.js";
+import { emptyStore, gistOneOffsNeedRewrite, gistPayslipsNeedRewrite, parseStore, StoreError } from "./store.js";
 
 export const GIST_DESCRIPTION = "tab.personal.v1";
 export const GIST_FILENAME = "tab.json";
@@ -37,11 +37,15 @@ export function parseGistContent(text, today = new Date()) {
 }
 
 export function parseGistDocument(text, today = new Date()) {
-  if (!text || !String(text).trim()) return { store: emptyStore(), oneOffsRewritten: false };
+  if (!text || !String(text).trim()) return { store: emptyStore(), oneOffsRewritten: false, payslipsRewritten: false };
   try {
     const raw = JSON.parse(text);
     const store = parseStore(raw, today);
-    return { store, oneOffsRewritten: gistOneOffsNeedRewrite(raw, store) };
+    return {
+      store,
+      oneOffsRewritten: gistOneOffsNeedRewrite(raw, store),
+      payslipsRewritten: gistPayslipsNeedRewrite(raw, store),
+    };
   } catch (error) {
     if (error instanceof StoreError) throw error;
     throw new GistError("The private gist is not valid JSON.");
@@ -138,7 +142,12 @@ export function createGistStore({
     const file = gist.files?.[filename];
     const hydrated = hasInlineContent(file) ? gist : await github(`/gists/${gist.id}`);
     const document = parseGistDocument(await readFileText(hydrated));
-    return { gist: hydrated, store: document.store, oneOffsRewritten: document.oneOffsRewritten };
+    return {
+      gist: hydrated,
+      store: document.store,
+      oneOffsRewritten: document.oneOffsRewritten,
+      payslipsRewritten: document.payslipsRewritten,
+    };
   }
 
   async function privatize(gist) {
@@ -155,7 +164,12 @@ export function createGistStore({
     const candidates = matchingGists(await listGists(), { description, filename });
     if (candidates.length === 0) {
       const created = await createGist();
-      return { gist: created, store: parseGistContent(await readFileText(created)), oneOffsRewritten: false };
+      return {
+        gist: created,
+        store: parseGistContent(await readFileText(created)),
+        oneOffsRewritten: false,
+        payslipsRewritten: false,
+      };
     }
 
     let newestEmpty = null;
@@ -181,7 +195,12 @@ export function createGistStore({
 
   async function read() {
     const loaded = await selectGist();
-    return { store: loaded.store, gistId: loaded.gist.id, oneOffsRewritten: Boolean(loaded.oneOffsRewritten) };
+    return {
+      store: loaded.store,
+      gistId: loaded.gist.id,
+      oneOffsRewritten: Boolean(loaded.oneOffsRewritten),
+      payslipsRewritten: Boolean(loaded.payslipsRewritten),
+    };
   }
 
   async function write(store, gistId) {

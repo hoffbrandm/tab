@@ -13,6 +13,8 @@ import {
   normalizeWeeklyCadence,
   PAYSLIP_CATEGORY_KINDS,
   PENSION_STATUSES,
+  normalizePayslipSlip,
+  normalizePayslipCategory,
   payslipCategoriesOf,
   seedSnapshotsFromUpdatedOn,
   tickedKeysFromHappenedDates,
@@ -226,9 +228,14 @@ function parseHousehold(value, today = new Date()) {
   const annualBills = list(value.annualBills).map(parseAnnualBill);
   const pots = list(value.pots).map(parsePot);
   const pensions = list(value.pensions).map(parsePension);
-  const payslips = list(value.payslips).map((item) => parsePayslip(item, personIds));
+  const payslips = list(value.payslips)
+    .map((item) => parsePayslip(item, personIds))
+    .map(normalizePayslipSlip);
   const payslipCategories = payslipCategoriesOf({
-    payslipCategories: list(value.payslipCategories).map(parsePayslipCategory),
+    payslipCategories: list(value.payslipCategories)
+      .map(parsePayslipCategory)
+      .map(normalizePayslipCategory)
+      .filter(Boolean),
     payslips,
   });
   const donations = list(value.donations).map(parseDonation);
@@ -600,6 +607,21 @@ export function gistOneOffsNeedRewrite(rawStore, parsedStore) {
     month: coerceMonthKey(item?.month) || String(item?.month || ""),
   }));
   return oneOffFingerprint(raw) !== oneOffFingerprint(parsedStore?.household?.oneOffs);
+}
+
+export function gistPayslipsNeedRewrite(rawStore, parsedStore) {
+  const raw = rawStore?.household;
+  const parsed = parsedStore?.household;
+  if (!raw) return false;
+  const rawShape = {
+    payslips: raw.payslips || [],
+    payslipCategories: raw.payslipCategories || [],
+  };
+  const parsedShape = {
+    payslips: parsed?.payslips || [],
+    payslipCategories: parsed?.payslipCategories || [],
+  };
+  return JSON.stringify(rawShape) !== JSON.stringify(parsedShape);
 }
 
 function parseAnnualBill(item) {
