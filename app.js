@@ -2105,11 +2105,7 @@ function payslipSignedEffectControl(category, effectPence) {
   }
   const positive = effectPence > 0;
   const flipped = payslipSignFlipIsOn(category.id, category, effectPence);
-  return `<button type="button" class="payslip-line-effect payslip-line-effect-toggle ${positive ? "plus" : "minus"}" data-action="payslip-flip-sign" data-id="${esc(category.id)}" aria-pressed="${flipped ? "true" : "false"}" aria-label="Flip sign">
-    <span class="payslip-line-effect-glyph" aria-hidden="true">±</span>
-    <span class="payslip-line-effect-amount">${positive ? "+" : "−"}${formatMoney(Math.abs(effectPence))}</span>
-    <span class="payslip-line-effect-hint">Tap to flip</span>
-  </button>`;
+  return `<button type="button" class="payslip-line-effect payslip-line-effect-toggle ${positive ? "plus" : "minus"}" data-action="payslip-flip-sign" data-id="${esc(category.id)}" aria-pressed="${flipped ? "true" : "false"}" aria-label="Flip sign" title="Flip sign"><span aria-hidden="true">± ${positive ? "+" : "−"}${formatMoney(Math.abs(effectPence))}</span></button>`;
 }
 
 function payslipCategoryField(category, slip) {
