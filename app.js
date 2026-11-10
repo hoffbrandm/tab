@@ -57,6 +57,10 @@ import {
   payslipNeedsGross,
   payslipSaysNothing,
   canonicalPayslipCategoryLabel,
+  migratePayslipCategoryKind,
+  payslipCategoryDisplaySide,
+  payslipCategoryOnTop,
+  payslipSuggestsTaxRefund,
   payslipNetCheck,
   payslipNetHints,
   payslipGrossPaidPence,
@@ -1302,7 +1306,7 @@ function payslipsScreen() {
                 ? `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · net only, no detail yet`
                 : payslipNeedsGross(slip)
                   ? `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · add the gross the payslip shows${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`
-                  : `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · gross ${formatMoney(slip.grossPence || slip.salaryPence)}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
+                  : `${confirmed ? "Confirmed" : "Forecast"} · lands ${labels.lands} · pay total ${formatMoney(payslipGrossPaidPence(slip))}${payslipNetCheck(slip)?.matches === false ? " · does not match the slip" : ""}`,
             amount: formatMoney(payslipNetAsReadPence(slip)),
           });
         }).join("") : emptyLines("Add a month when you have a slip — or a forecast row you do not treat as fact.", "add-payslip", "Add a payslip")}
@@ -1419,14 +1423,14 @@ function moreScreen() {
       </section>
       <section class="block">
         ${sectionHead("Payslip categories", "add-payslip-category-master", "Add")}
-        <p class="helper">The slip’s column set. Pick these and type the amount when you enter a payslip.</p>
+        <p class="helper">Names for pay and deduction lines on your slip.</p>
         <details class="room-help">
           <summary>${categories.length} categor${categories.length === 1 ? "y" : "ies"}</summary>
           ${categories.length ? categories.map((item) => lineRow({
             edit: "edit-payslip-category",
             id: item.id,
             title: item.label,
-            detail: payslipKindLabel(item.kind),
+            detail: payslipKindLabel(item.kind, item),
             amount: "",
           })).join("") : emptyLines("The usual slip columns live here. Add another if a new one appears.", "add-payslip-category-master", "Add a category")}
         </details>
@@ -1435,17 +1439,8 @@ function moreScreen() {
   });
 }
 
-function payslipKindLabel(kind) {
-  return {
-    bonus: "Paid, and taxed",
-    benefits: "Taxed; paid or not is read off your net",
-    extra: "Paid, adds to net",
-    sacrifice: "Deduction",
-    tax: "Deduction",
-    ni: "Deduction",
-    deduction: "Deduction",
-    parental: "On the slip · not in net",
-  }[kind] || "Deduction";
+function payslipKindLabel(kind, category = {}) {
+  return payslipCategoryDisplaySide(kind, category) === "pay" ? "Pay" : "Deduction";
 }
 
 function tabsScreen() {
@@ -1823,15 +1818,19 @@ function perDiemForm() {
 
 function payslipCategoryForm() {
   const item = modal.item || {};
-  const kind = item.kind || "deduction";
+  const side = payslipCategoryDisplaySide(item.kind || "deduction", item);
+  const builtin = ["bonus", "benefits", "sacrifice", "pension", "tax", "ni"].includes(item.kind);
   return `<form id="payslip-category-form">${modalHead(item.id ? "Edit category" : "Add a category")}
     <label>Name<input required maxlength="80" name="label" value="${esc(item.label)}" placeholder="Bonus, tax, gym…" /></label>
-    <label>On the slip<select name="kind">
-      <option value="extra" ${kind === "extra" || kind === "bonus" || kind === "benefits" ? "selected" : ""}>Extra — adds to net</option>
-      <option value="deduction" ${kind === "deduction" || kind === "sacrifice" || kind === "tax" || kind === "ni" ? "selected" : ""}>Deduction — leaves net</option>
-      <option value="parental" ${kind === "parental" ? "selected" : ""}>On the slip — not in net</option>
+    ${builtin ? `<p class="helper">Built-in line — its type is fixed.</p>` : `<label>Type<select name="side" data-action="payslip-cat-side">
+      <option value="pay" ${side === "pay" ? "selected" : ""}>Pay</option>
+      <option value="deduction" ${side === "deduction" ? "selected" : ""}>Deduction</option>
     </select></label>
-    <p class="helper">Net is gross through jury-service-class deductions. Parental pay is on the slip and outside that sum.</p>
+    <label class="check-row payslip-cat-ontop ${side === "pay" ? "" : "hidden"}" data-payslip-cat-ontop>
+      <input type="checkbox" name="onTop" ${item.onTop ? "checked" : ""} />
+      <span>Sits on top of the main pay total (e.g. cashplan funded)</span>
+    </label>`}
+    <p class="helper">Pay lines add up to gross. Deductions come off pay to give net.</p>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save category" : "Add category"}</button>
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-payslip-category">Delete category</button>' : ""}
@@ -1966,13 +1965,13 @@ function payslipForm() {
     </div>` : ""}
     ${moneyLabel("Salary", "salary", item.salaryPence)}
     ${moneyLabel("Gross", "gross", item.grossPence)}
-    ${formHelp("Gross is the Payments total on the slip — basic, bonus, and any parental pay — after any salary sacrifice has come off. Tax and NI go in Categories below. If your slip writes it another way, type the net it prints under Net and the app works out how to read it.")}
+    ${formHelp("Gross is the main pay total on your slip — after salary sacrifice if it already came off. Leave it blank and pay lines below can add up to gross instead. Tax, NI, and the rest belong under Categories. Type the net from the slip and the app checks the maths.")}
     <input type="hidden" name="grossBeforeSacrifice" value="${item.grossBeforeSacrifice ? "on" : ""}" />
     <input type="hidden" name="grossExcludesBonus" value="${item.grossExcludesBonus ? "on" : ""}" />
     <input type="hidden" name="benefitsPaid" value="${item.benefitsPaid ? "on" : ""}" />
     <section class="payslip-cats">
       <h3>Categories</h3>
-      <p class="helper">Pick a category and enter the amount. Net is calculated. Category names live under More.</p>
+      <p class="helper">Enter pay and deductions as they appear on the slip. Names you reuse live under More.</p>
       ${categories.length ? categories.map((category) => payslipCategoryField(category, item)).join("") : `<p class="helper">No categories on this slip yet.</p>`}
       ${available.length ? `<label>Add a category
         <select data-action="add-payslip-category">
@@ -2003,14 +2002,14 @@ function payslipNetBlock(live) {
   if (payslipIsNetOnly(live)) {
     return `<div class="payslip-net" data-payslip-net-block>
       <p class="payslip-net-line total"><span>Net</span><strong data-payslip-net>${formatMoney(live.statedNetPence)}</strong></p>
-      <p class="payslip-net-check ok">Taken from the slip. Add the gross and the deductions whenever, and they get checked against it.</p>
+      <p class="payslip-net-check ok">Taken from the slip. Add pay and deductions whenever — they get checked against this net.</p>
     </div>`;
   }
   const check = payslipNetCheck(live);
   const resolved = resolvedPayslipReading(live);
   const hints = payslipNetHints(live);
   return `<div class="payslip-net" data-payslip-net-block>
-    <p class="payslip-net-line"><span>Gross paid</span><strong>${formatMoney(payslipGrossPaidPence(live))}</strong></p>
+    <p class="payslip-net-line"><span>Pay total</span><strong>${formatMoney(payslipGrossPaidPence(live))}</strong></p>
     <p class="payslip-net-line"><span>Deductions</span><strong>−${formatMoney(payslipDeductionsPence(live))}</strong></p>
     <p class="payslip-net-line total"><span>Net</span><strong data-payslip-net>${formatMoney(payslipNetPence(live))}</strong></p>
     ${check
@@ -2060,9 +2059,17 @@ function payslipFormCategories(slip, personId) {
 
 function payslipCategoryField(category, slip) {
   const amount = payslipAmountForCategory(slip, category);
+  const taxRefund = category.kind === "tax" && (slip?.taxRefund || (slip?.taxPence || 0) < 0);
+  const taxDisplay = category.kind === "tax" ? Math.abs(slip?.taxPence || 0) : amount;
   return `<div class="payslip-cat-row" data-payslip-category="${esc(category.id)}">
-    <span class="payslip-cat-name">${esc(category.label)}<small>${esc(payslipKindLabel(category.kind))}</small></span>
-    ${moneyControl({ pence: amount, extra: `data-cat-amount="${esc(category.id)}"` })}
+    <span class="payslip-cat-name">${esc(category.label)}<small>${esc(payslipKindLabel(category.kind, category))}</small></span>
+    ${category.kind === "tax" ? `<label class="check-row payslip-tax-refund"><input type="checkbox" name="taxRefund" data-action="payslip-tax-refund" ${taxRefund ? "checked" : ""} /><span>Refund — adds to net</span></label>` : ""}
+    ${moneyControl({
+      pence: category.kind === "tax" ? taxDisplay : amount,
+      value: category.kind === "tax" && taxRefund ? signedFieldValue(-(slip?.taxPence || 0)) : undefined,
+      extra: `data-cat-amount="${esc(category.id)}"${category.kind === "tax" ? ' data-cat-signed="1"' : ""}`,
+      placeholder: category.kind === "tax" ? "0.00 or -0.00" : "0.00",
+    })}
     <button type="button" class="danger-link" data-action="remove-payslip-category" data-id="${esc(category.id)}">Remove</button>
   </div>`;
 }
@@ -2103,20 +2110,32 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
   };
   for (const category of categories || []) {
     const raw = form?.querySelector(`[data-cat-amount="${category.id}"]`)?.value;
-    const amount = raw == null ? payslipAmountForCategory(slip, category) : (parseMoneyAllowZero(raw) || 0);
+    const signed = category.kind === "tax";
+    const amount = raw == null
+      ? payslipAmountForCategory(slip, category)
+      : (signed ? parseSignedMoney(raw) : parseMoneyAllowZero(raw));
+    if (amount === null) continue;
     if (category.kind === "bonus") next.bonusPence = amount;
     else if (category.kind === "benefits") next.benefitsPence = amount;
     else if (category.kind === "sacrifice") next.salarySacrificePensionPence = amount;
     else if (category.kind === "pension") next.reliefAtSourcePensionPence = amount;
-    else if (category.kind === "tax") next.taxPence = amount;
+    else if (category.kind === "tax") {
+      if (amount < 0) {
+        next.taxPence = -amount;
+        next.taxRefund = true;
+      } else {
+        next.taxPence = amount;
+        next.taxRefund = form?.querySelector('[name="taxRefund"]')?.checked === true;
+      }
+    }
     else if (category.kind === "ni") next.niPence = amount;
     else {
       next.otherDeductions.push({
         id: category.id,
         label: category.label,
         amountPence: amount || 0,
-        ...(category.kind === "extra" ? { extra: true } : {}),
-        ...(category.kind === "parental" ? { inNet: false } : {}),
+        kind: migratePayslipCategoryKind(category.kind, category),
+        ...(payslipCategoryOnTop(category) ? { onTop: true } : {}),
       });
     }
   }
@@ -2622,6 +2641,10 @@ document.addEventListener("change", async (event) => {
     modal.slipCategories = defaultCategoriesForNewPayslip(household(), event.target.value);
     renderModal();
   }
+  if (action === "payslip-cat-side") {
+    document.querySelector("[data-payslip-cat-ontop]")?.classList.toggle("hidden", event.target.value !== "pay");
+  }
+  if (action === "payslip-tax-refund") updatePayslipNet();
 });
 
 document.addEventListener("submit", (event) => {
@@ -2658,6 +2681,7 @@ document.addEventListener("submit", (event) => {
 document.addEventListener("input", (event) => {
   if (event.target.closest("#transaction-form")) updateLiveSplit();
   if (event.target.closest("#payslip-form")) updatePayslipNet();
+  if (event.target.closest("#payslip-form") && event.target.type === "checkbox" && event.target.name === "taxRefund") updatePayslipNet();
   if (event.target.closest("#per-diem-form")) updatePerDiemRate();
   const field = event.target.dataset.action;
   if (field === "pending-amount" || field === "pending-note") updatePendingField(event.target);
@@ -3073,10 +3097,9 @@ async function savePayslipCategory(event) {
     return showFormError(error.message);
   }
   const existing = modal.item || {};
-  const special = ["bonus", "benefits", "sacrifice", "tax", "ni"].includes(existing.kind);
-  const kind = special ? existing.kind : (
-    data.get("kind") === "extra" ? "extra" : data.get("kind") === "parental" ? "parental" : "deduction"
-  );
+  const special = ["bonus", "benefits", "sacrifice", "pension", "tax", "ni"].includes(existing.kind);
+  const side = data.get("side") === "pay" ? "pay" : "deduction";
+  const kind = special ? existing.kind : side;
   const resolved = canonicalPayslipCategoryLabel(label, kind);
   if (resolved.builtinField) {
     return showFormError("That name belongs on the built-in Pension (relief at source) line, not as its own category.");
@@ -3084,8 +3107,10 @@ async function savePayslipCategory(event) {
   const payload = {
     id: existing.id || uid(),
     label: resolved.label,
-    kind: resolved.kind,
+    kind: special ? existing.kind : migratePayslipCategoryKind(resolved.kind, existing),
+    ...(side === "pay" && data.get("onTop") === "on" ? { onTop: true } : {}),
   };
+  if (!payload.onTop) delete payload.onTop;
   setBusy(event.target, true);
   const saved = await withStoreUpdate(() => {
     const hh = household();
@@ -3302,6 +3327,7 @@ async function savePayslip(event) {
     reliefAtSourcePensionPence: amounts.reliefAtSourcePensionPence,
     otherDeductions: amounts.otherDeductions,
     taxPence: amounts.taxPence,
+    taxRefund: Boolean(amounts.taxRefund),
     niPence: amounts.niPence,
     grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
     grossExcludesBonus: data.get("grossExcludesBonus") === "on",
@@ -3362,6 +3388,7 @@ function snapshotPayslipForm() {
   }, modal.slipCategories || [], form);
   modal.payslip = {
     ...amounts,
+    taxRefund: Boolean(amounts.taxRefund),
     personId: data.get("personId"),
     taxYear: data.get("taxYear"),
     periodMonth: data.get("periodMonth"),

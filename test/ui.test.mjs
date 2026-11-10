@@ -437,11 +437,9 @@ test("the £100k helper takes grossed-up Gift Aid off, and never adds it on", ()
   assert.match(app, /Grossed-up Gift Aid taken off/);
 });
 
-test("each payslip category says what it does to net", () => {
-  // "Benefit in kind" and "Cash allowance" are indistinguishable to anyone who
-  // does not already know payroll terms, and the form showed a bare name.
-  assert.match(app, /payslip-cat-name">\$\{esc\(category\.label\)\}<small>\$\{esc\(payslipKindLabel\(category\.kind\)\)\}<\/small>/);
-  assert.match(app, /benefits: "Taxed; paid or not is read off your net"/);
+test("each payslip category says Pay or Deduction", () => {
+  assert.match(app, /payslip-cat-name">\$\{esc\(category\.label\)\}<small>\$\{esc\(payslipKindLabel\(category\.kind, category\)\)\}<\/small>/);
+  assert.match(app, /return payslipCategoryDisplaySide\(kind, category\) === "pay" \? "Pay" : "Deduction"/);
   // The payslip's net settles the readings, so the picker is the fallback and
   // the form applies what it worked out rather than waiting to be tapped.
   assert.match(app, /if \(resolvedPayslipReading\(live\)\) return "";/);
@@ -451,7 +449,7 @@ test("each payslip category says what it does to net", () => {
 });
 
 test("the payslip form says what Gross means and checks it against the slip", () => {
-  assert.match(app, /Gross is the Payments total on the slip/);
+  assert.match(app, /Gross is the main pay total on your slip/);
   assert.match(app, /name="grossBeforeSacrifice"/);
   assert.match(app, /name="grossExcludesBonus"/);
   assert.match(app, /Which of these is the net on your payslip\?/);
@@ -473,7 +471,7 @@ test("the payslips list shows the live net, never a stale cached one", () => {
   // Net is the figure the month is built on, so it takes the amount column and
   // gross moves into the detail line — it was the other way round.
   assert.match(app, /amount: formatMoney\(payslipNetAsReadPence\(slip\)\)/);
-  assert.match(app, /gross \$\{formatMoney\(slip\.grossPence \|\| slip\.salaryPence\)\}/);
+  assert.match(app, /pay total \$\{formatMoney\(payslipGrossPaidPence\(slip\)\)\}/);
 });
 
 test("a month input is sized to a month, and an accordion looks like one", () => {

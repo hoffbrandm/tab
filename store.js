@@ -13,9 +13,11 @@ import {
   normalizeWeeklyCadence,
   PAYSLIP_CATEGORY_KINDS,
   PENSION_STATUSES,
+  migratePayslipCategoryKind,
   normalizePayslipSlip,
   normalizePayslipCategory,
   payslipCategoriesOf,
+  payslipCategoryOnTop,
   seedSnapshotsFromUpdatedOn,
   tickedKeysFromHappenedDates,
 } from "./household.js";
@@ -664,15 +666,19 @@ function parsePayslipCategory(item) {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     throw new StoreError("Each payslip category must be an object.");
   }
-  const kind = PAYSLIP_CATEGORY_KINDS.includes(item.kind)
+  const rawKind = PAYSLIP_CATEGORY_KINDS.includes(item.kind)
     ? item.kind
-    : (item.inNet === false || item.parental ? "parental" : "deduction");
-  const builtin = BUILTIN_PAYSLIP_CATEGORIES.find((entry) => entry.kind === kind && kind !== "deduction" && kind !== "parental");
-  return {
+    : (item.inNet === false || item.parental ? "pay" : "deduction");
+  const kind = migratePayslipCategoryKind(rawKind, item);
+  const builtin = BUILTIN_PAYSLIP_CATEGORIES.find((entry) => entry.id === item.id)
+    || BUILTIN_PAYSLIP_CATEGORIES.find((entry) => entry.kind === kind && !["pay", "deduction"].includes(kind));
+  const parsed = {
     id: requiredId(item.id || builtin?.id || `cat-${kind}`, "Payslip category"),
     label: requiredName(item.label || builtin?.label, "Payslip category"),
     kind,
   };
+  if (payslipCategoryOnTop(item) || builtin?.onTop) parsed.onTop = true;
+  return parsed;
 }
 
 function snapshotList(value, label, { includePending = false } = {}) {
@@ -743,7 +749,8 @@ function parsePayslip(slip, personIds) {
     grossBeforeSacrifice: Boolean(slip.grossBeforeSacrifice),
     grossExcludesBonus: Boolean(slip.grossExcludesBonus),
     otherDeductions,
-    taxPence: moneyPence(slip.taxPence, "Payslip tax"),
+    taxPence: payslipTaxPence(slip.taxPence, "Payslip tax"),
+    taxRefund: Boolean(slip.taxRefund),
     niPence: moneyPence(slip.niPence, "Payslip NI"),
     // netPence is derived and cached; statedNetPence is what the slip itself says.
     netPence: moneyPence(slip.netPence, "Payslip net"),
@@ -802,8 +809,9 @@ function parseDeduction(item) {
     label,
     amountPence: moneyPence(item.amountPence, "Deduction"),
   };
-  if (item.extra) parsed.extra = true;
-  if (item.inNet === false || item.parental || item.kind === "parental") parsed.inNet = false;
+  const kind = migratePayslipCategoryKind(item.kind || (item.extra || item.inNet === false ? "pay" : "deduction"), item);
+  parsed.kind = kind;
+  if (payslipCategoryOnTop(item)) parsed.onTop = true;
   return parsed;
 }
 
@@ -839,6 +847,14 @@ function signedPence(value, label) {
 function moneyPence(value, label) {
   const amount = value == null || value === "" ? 0 : value;
   if (!Number.isInteger(amount) || amount < 0) {
+    throw new StoreError(`${label} must be a whole number of pence.`);
+  }
+  return amount;
+}
+
+function payslipTaxPence(value, label) {
+  const amount = value == null || value === "" ? 0 : value;
+  if (!Number.isInteger(amount)) {
     throw new StoreError(`${label} must be a whole number of pence.`);
   }
   return amount;

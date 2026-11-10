@@ -18,6 +18,8 @@ import {
   canonicalPayslipCategoryLabel,
   normalizePayslipSlip,
   payslipLabelMatchKey,
+  payslipSuggestsTaxRefund,
+  payslipTaxEffectPence,
   payslipFillFromPrevious,
   payslipWithFills,
   withPayslipCategoryAmount,
@@ -1046,7 +1048,7 @@ test("the settings category list keeps the sheet column set after a slip is save
   rememberPayslipCategories(hh, []);
   const labels = hh.payslipCategories.map((item) => item.label);
   assert.ok(DEFAULT_PAYSLIP_CATEGORIES.every((item) => labels.includes(item.label)));
-  assert.ok(hh.payslipCategories.some((item) => item.kind === "parental" && item.label === "Statutory maternity (SMP)"));
+  assert.ok(hh.payslipCategories.some((item) => item.kind === "pay" && item.label === "Statutory maternity (SMP)"));
   assert.ok(hh.payslipCategories.some((item) => item.label === "Jury service"));
 });
 
@@ -1638,7 +1640,8 @@ test("a funded cashplan goes on and straight back off, netting to nothing", () =
   const labels = DEFAULT_PAYSLIP_CATEGORIES.map((c) => c.label);
   assert.ok(labels.includes("Cashplan funded"));
   assert.ok(labels.includes("Cashplan deducted"));
-  assert.equal(DEFAULT_PAYSLIP_CATEGORIES.find((c) => c.label === "Cashplan funded").kind, "extra");
+  assert.equal(DEFAULT_PAYSLIP_CATEGORIES.find((c) => c.label === "Cashplan funded").kind, "pay");
+  assert.equal(DEFAULT_PAYSLIP_CATEGORIES.find((c) => c.label === "Cashplan funded").onTop, true);
   assert.equal(DEFAULT_PAYSLIP_CATEGORIES.find((c) => c.label === "Cashplan deducted").kind, "deduction");
 });
 
@@ -1716,12 +1719,14 @@ test("a slip with only its net typed is still the month's income", () => {
     ...netOnly,
     taxPence: 12000,
     niPence: 800,
-    otherDeductions: [{ id: "smp", label: "SMP", amountPence: 50000, inNet: false }],
+    otherDeductions: [{ id: "smp", label: "SMP", amountPence: 50000, kind: "pay" }],
   };
   assert.equal(payslipIsNetOnly(detailNoGross), false);
-  assert.equal(payslipNeedsGross(detailNoGross), true);
-  assert.equal(payslipNetAsReadPence(detailNoGross), 579778);
-  assert.match(payslipNetHints(detailNoGross)[0], /gross the payslip shows/i);
+  assert.equal(payslipNeedsGross(detailNoGross), false);
+  assert.equal(payslipGrossPaidPence(detailNoGross), 50000);
+  assert.equal(payslipNetAsReadPence(detailNoGross), 50000 - 12000 - 800);
+  const deductionsOnly = { ...netOnly, taxPence: 12000, niPence: 800 };
+  assert.equal(payslipNeedsGross(deductionsOnly), true);
 });
 
 test("payslip category aliases merge synonyms without changing net", () => {
@@ -1748,6 +1753,31 @@ test("payslip category aliases merge synonyms without changing net", () => {
   assert.equal(slip.otherDeductions.find((row) => row.label === "Statutory maternity (SMP)").amountPence, 5000);
   assert.equal(slip.otherDeductions.find((row) => row.label === "Enhanced maternity").amountPence, 7000);
   assert.equal(slip.reliefAtSourcePensionPence, 1500);
+});
+
+test("pay lines with blank gross, options off, and tax refund match stated net", () => {
+  const slip = {
+    grossPence: 0,
+    statedNetPence: 184857,
+    benefitsPence: 60953,
+    taxPence: 46713,
+    taxRefund: true,
+    niPence: 2899,
+    otherDeductions: [
+      { id: "a", label: "Statutory maternity (SMP)", kind: "pay", amountPence: 85501 },
+      { id: "b", label: "Dental", kind: "deduction", amountPence: 3520 },
+      { id: "c", label: "Critical illness EE", kind: "deduction", amountPence: 685 },
+      { id: "d", label: "Critical illness DP", kind: "deduction", amountPence: 1206 },
+    ],
+  };
+  assert.equal(payslipGrossPaidPence(slip), 146454);
+  assert.equal(payslipTaxEffectPence(slip), -46713);
+  assert.equal(payslipNetPence(slip), 184857);
+  assert.equal(payslipNetCheck(slip)?.matches, true);
+  const misEntered = { ...slip, taxRefund: false };
+  assert.equal(payslipNetCheck(misEntered)?.matches, false);
+  assert.equal(payslipSuggestsTaxRefund(misEntered), true);
+  assert.equal(payslipNetPence({ ...slip, taxRefund: false, taxPence: -46713 }), 184857);
 });
 
 test("a slip that says nothing about what landed says so", () => {
@@ -1815,15 +1845,14 @@ test("a category's amount can be written back in, the way it is read out", () =>
   const categories = [
     { id: "tax", kind: "tax", label: "Tax" },
     { id: "gym", kind: "deduction", label: "Gym flex" },
-    { id: "smp", kind: "parental", label: "SMP" },
-    { id: "cf", kind: "extra", label: "Cashplan funded" },
+    { id: "smp", kind: "pay", label: "SMP" },
+    { id: "cf", kind: "pay", label: "Cashplan funded", onTop: true },
   ];
   let slip = {};
   for (const category of categories) slip = withPayslipCategoryAmount(slip, category, 1234);
   for (const category of categories) assert.equal(payslipAmountForCategory(slip, category), 1234);
-  // Parental pay stays out of net and an extra adds to it, as the kinds say.
-  assert.equal(slip.otherDeductions.find((row) => row.label === "SMP").inNet, false);
-  assert.equal(slip.otherDeductions.find((row) => row.label === "Cashplan funded").extra, true);
+  assert.equal(slip.otherDeductions.find((row) => row.label === "SMP").kind, "pay");
+  assert.equal(slip.otherDeductions.find((row) => row.label === "Cashplan funded").onTop, true);
   // Writing the same category again replaces it rather than adding a second.
   slip = withPayslipCategoryAmount(slip, categories[1], 99);
   assert.equal(slip.otherDeductions.filter((row) => row.label === "Gym flex").length, 1);
