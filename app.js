@@ -60,7 +60,9 @@ import {
   migratePayslipCategoryKind,
   payslipCategoryDisplaySide,
   payslipCategoryOnTop,
-  payslipSuggestsTaxRefund,
+  parsePayslipLineAmountInput,
+  payslipCategorySide,
+  payslipCategorySignedEffectPence,
   payslipNetCheck,
   payslipNetHints,
   payslipGrossPaidPence,
@@ -1440,7 +1442,7 @@ function moreScreen() {
 }
 
 function payslipKindLabel(kind, category = {}) {
-  return payslipCategoryDisplaySide(kind, category) === "pay" ? "Pay" : "Deduction";
+  return payslipCategoryDisplaySide(kind, category) === "pay" ? "In" : "Out";
 }
 
 function tabsScreen() {
@@ -1973,6 +1975,7 @@ function payslipForm() {
       <h3>Categories</h3>
       <p class="helper">Enter pay and deductions as they appear on the slip. Names you reuse live under More.</p>
       ${categories.length ? categories.map((category) => payslipCategoryField(category, item)).join("") : `<p class="helper">No categories on this slip yet.</p>`}
+      <p class="helper payslip-sign-help">Out lines come off net unless you type a plus or put a minus at the end (e.g. 467.13−); In lines add unless you type a minus.</p>
       ${available.length ? `<label>Add a category
         <select data-action="add-payslip-category">
           <option value="">Choose…</option>
@@ -2047,7 +2050,7 @@ function payslipFormCategories(slip, personId) {
   if (modal.slipCategories) return keepPayslipFormRows(modal.slipCategories);
   if (slip?.id) {
     const master = masterPayslipCategories(household());
-    const used = master.filter((category) => (payslipAmountForCategory(slip, category) || 0) > 0);
+    const used = master.filter((category) => (payslipAmountForCategory(slip, category) || 0) !== 0);
     modal.slipCategories = keepPayslipFormRows(used);
     return modal.slipCategories;
   }
@@ -2057,19 +2060,46 @@ function payslipFormCategories(slip, personId) {
   return modal.slipCategories;
 }
 
+function payslipCategoryParseSide(category) {
+  if (["bonus", "benefits"].includes(category.kind)) return "in";
+  if (category.kind === "sacrifice") return "sacrifice";
+  if (["tax", "ni", "pension"].includes(category.kind)) return "out";
+  return payslipCategorySide(category.kind, category);
+}
+
+function payslipCategoryFieldInputValue(category, storedPence) {
+  if (!Number.isInteger(storedPence) || storedPence === 0) return "";
+  if (category.kind === "sacrifice") return moneyFieldValue(Math.abs(storedPence));
+  if (["bonus", "benefits"].includes(category.kind)) {
+    return storedPence < 0 ? signedFieldValue(storedPence) : moneyFieldValue(storedPence);
+  }
+  const side = payslipCategoryParseSide(category);
+  if (side === "in") {
+    return storedPence < 0 ? signedFieldValue(storedPence) : moneyFieldValue(storedPence);
+  }
+  if (storedPence > 0) return `+${moneyFieldValue(storedPence)}`;
+  return moneyFieldValue(Math.abs(storedPence));
+}
+
+function payslipSignedEffectMarkup(pence) {
+  if (!Number.isInteger(pence) || pence === 0) return `<span class="payslip-line-effect muted" data-cat-effect-placeholder> </span>`;
+  const positive = pence > 0;
+  return `<span class="payslip-line-effect ${positive ? "plus" : "minus"}">${positive ? "+" : "−"}${formatMoney(Math.abs(pence))}</span>`;
+}
+
 function payslipCategoryField(category, slip) {
-  const amount = payslipAmountForCategory(slip, category);
-  const taxRefund = category.kind === "tax" && (slip?.taxRefund || (slip?.taxPence || 0) < 0);
-  const taxDisplay = category.kind === "tax" ? Math.abs(slip?.taxPence || 0) : amount;
+  const stored = payslipAmountForCategory(slip, category);
+  const effect = payslipCategorySignedEffectPence(category, stored);
   return `<div class="payslip-cat-row" data-payslip-category="${esc(category.id)}">
     <span class="payslip-cat-name">${esc(category.label)}<small>${esc(payslipKindLabel(category.kind, category))}</small></span>
-    ${category.kind === "tax" ? `<label class="check-row payslip-tax-refund"><input type="checkbox" name="taxRefund" data-action="payslip-tax-refund" ${taxRefund ? "checked" : ""} /><span>Refund — adds to net</span></label>` : ""}
-    ${moneyControl({
-      pence: category.kind === "tax" ? taxDisplay : amount,
-      value: category.kind === "tax" && taxRefund ? signedFieldValue(-(slip?.taxPence || 0)) : undefined,
-      extra: `data-cat-amount="${esc(category.id)}"${category.kind === "tax" ? ' data-cat-signed="1"' : ""}`,
-      placeholder: category.kind === "tax" ? "0.00 or -0.00" : "0.00",
-    })}
+    <div class="payslip-cat-amount">
+      ${moneyControl({
+        value: payslipCategoryFieldInputValue(category, stored),
+        extra: `data-cat-amount="${esc(category.id)}"`,
+        placeholder: "0.00",
+      })}
+      <span class="payslip-line-effect-wrap" data-cat-effect="${esc(category.id)}">${payslipSignedEffectMarkup(effect)}</span>
+    </div>
     <button type="button" class="danger-link" data-action="remove-payslip-category" data-id="${esc(category.id)}">Remove</button>
   </div>`;
 }
@@ -2110,24 +2140,23 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
   };
   for (const category of categories || []) {
     const raw = form?.querySelector(`[data-cat-amount="${category.id}"]`)?.value;
-    const signed = category.kind === "tax";
-    const amount = raw == null
-      ? payslipAmountForCategory(slip, category)
-      : (signed ? parseSignedMoney(raw) : parseMoneyAllowZero(raw));
-    if (amount === null) continue;
-    if (category.kind === "bonus") next.bonusPence = amount;
-    else if (category.kind === "benefits") next.benefitsPence = amount;
-    else if (category.kind === "sacrifice") next.salarySacrificePensionPence = amount;
-    else if (category.kind === "pension") next.reliefAtSourcePensionPence = amount;
-    else if (category.kind === "tax") {
-      if (amount < 0) {
-        next.taxPence = -amount;
-        next.taxRefund = true;
-      } else {
-        next.taxPence = amount;
-        next.taxRefund = form?.querySelector('[name="taxRefund"]')?.checked === true;
-      }
+    const parseSide = payslipCategoryParseSide(category);
+    let amount;
+    if (raw == null) {
+      amount = payslipAmountForCategory(slip, category);
+    } else if (parseSide === "sacrifice") {
+      const mag = parseMoneyAllowZero(raw);
+      if (mag === null) continue;
+      amount = Math.abs(mag);
+    } else {
+      amount = parsePayslipLineAmountInput(raw, parseSide === "in" ? "in" : "out");
+      if (amount === null) continue;
     }
+    if (category.kind === "bonus") next.bonusPence = Math.abs(amount);
+    else if (category.kind === "benefits") next.benefitsPence = Math.abs(amount);
+    else if (category.kind === "sacrifice") next.salarySacrificePensionPence = Math.abs(amount);
+    else if (category.kind === "pension") next.reliefAtSourcePensionPence = amount;
+    else if (category.kind === "tax") next.taxPence = amount;
     else if (category.kind === "ni") next.niPence = amount;
     else {
       next.otherDeductions.push({
@@ -2644,7 +2673,6 @@ document.addEventListener("change", async (event) => {
   if (action === "payslip-cat-side") {
     document.querySelector("[data-payslip-cat-ontop]")?.classList.toggle("hidden", event.target.value !== "pay");
   }
-  if (action === "payslip-tax-refund") updatePayslipNet();
 });
 
 document.addEventListener("submit", (event) => {
@@ -2681,7 +2709,6 @@ document.addEventListener("submit", (event) => {
 document.addEventListener("input", (event) => {
   if (event.target.closest("#transaction-form")) updateLiveSplit();
   if (event.target.closest("#payslip-form")) updatePayslipNet();
-  if (event.target.closest("#payslip-form") && event.target.type === "checkbox" && event.target.name === "taxRefund") updatePayslipNet();
   if (event.target.closest("#per-diem-form")) updatePerDiemRate();
   const field = event.target.dataset.action;
   if (field === "pending-amount" || field === "pending-note") updatePendingField(event.target);
@@ -3327,7 +3354,6 @@ async function savePayslip(event) {
     reliefAtSourcePensionPence: amounts.reliefAtSourcePensionPence,
     otherDeductions: amounts.otherDeductions,
     taxPence: amounts.taxPence,
-    taxRefund: Boolean(amounts.taxRefund),
     niPence: amounts.niPence,
     grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
     grossExcludesBonus: data.get("grossExcludesBonus") === "on",
@@ -3388,7 +3414,6 @@ function snapshotPayslipForm() {
   }, modal.slipCategories || [], form);
   modal.payslip = {
     ...amounts,
-    taxRefund: Boolean(amounts.taxRefund),
     personId: data.get("personId"),
     taxYear: data.get("taxYear"),
     periodMonth: data.get("periodMonth"),
@@ -3422,6 +3447,26 @@ function updatePayslipNet() {
     live = livePayslipFromForm(modal?.payslip || {}, modal?.slipCategories || []);
   }
   block.outerHTML = payslipNetBlock(live);
+  updatePayslipCategoryEffects(form);
+}
+
+function updatePayslipCategoryEffects(form = document.querySelector("#payslip-form")) {
+  if (!form) return;
+  for (const category of modal?.slipCategories || []) {
+    const input = form.querySelector(`[data-cat-amount="${category.id}"]`);
+    const wrap = form.querySelector(`[data-cat-effect="${category.id}"]`);
+    if (!input || !wrap) continue;
+    const parseSide = payslipCategoryParseSide(category);
+    let effect = 0;
+    if (parseSide === "sacrifice") {
+      const mag = parseMoneyAllowZero(input.value);
+      effect = mag ? -Math.abs(mag) : 0;
+    } else {
+      const parsed = parsePayslipLineAmountInput(input.value, parseSide === "in" ? "in" : "out");
+      effect = parsed === null ? 0 : payslipCategorySignedEffectPence(category, parsed);
+    }
+    wrap.innerHTML = payslipSignedEffectMarkup(effect);
+  }
 }
 
 function updatePendingField(input) {

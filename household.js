@@ -1,5 +1,7 @@
 /** Household money: UK pence, April tax years, Gift Aid at 25%. */
 
+import { parseMoneyToPence } from "./calculations.js";
+
 export const ANI_LIMIT_PENCE = 10_000_000;
 export const DEFAULT_PEOPLE = [
   { id: "person-you", name: "You" },
@@ -244,23 +246,65 @@ function payslipDerivedGrossFromPayLines(slip) {
   return total;
 }
 
-/** Tax as it affects net: a refund adds, ordinary tax comes off. */
-export function payslipTaxEffectPence(slip) {
-  const tax = slip?.taxPence ?? 0;
-  if (!Number.isInteger(tax)) return 0;
-  if (tax < 0) return tax;
-  if (slip?.taxRefund) return -tax;
-  return tax;
+/** In lines default plus; Out lines default minus. */
+export function payslipCategorySide(kind, category = {}) {
+  return payslipCategoryDisplaySide(kind, category) === "pay" ? "in" : "out";
 }
 
-/** True when flipping tax to a refund would make the worked net match the slip. */
-export function payslipSuggestsTaxRefund(slip) {
-  const stated = slip?.statedNetPence;
-  if (!Number.isInteger(stated) || stated <= 0) return false;
-  const tax = slip?.taxPence ?? 0;
-  if (!Number.isInteger(tax) || tax <= 0 || slip?.taxRefund) return false;
-  if (payslipNetPence(slip) === stated) return false;
-  return payslipNetPence({ ...slip, taxRefund: true }) === stated;
+/**
+ * Parse a payslip line amount. No sign uses the category default. A leading + or −
+ * overrides. On Out lines, a trailing − (e.g. 467.13−) flips to plus.
+ */
+export function parsePayslipLineAmountInput(raw, side) {
+  const isOut = side === "out" || side === "deduction";
+  let trimmed = String(raw || "").trim().replace(/^£\s?/, "");
+  if (!trimmed) return 0;
+  let trailingMinus = false;
+  if (/-$/.test(trimmed)) {
+    trailingMinus = true;
+    trimmed = trimmed.slice(0, -1).trim();
+  }
+  const leadingPlus = trimmed.startsWith("+");
+  const leadingMinus = trimmed.startsWith("-");
+  const core = trimmed.replace(/^[+-]/, "").trim();
+  const mag = parseMoneyToPence(core);
+  if (mag === null) return null;
+  if (leadingPlus) return mag;
+  if (leadingMinus) return -mag;
+  if (trailingMinus) return isOut ? mag : -mag;
+  return isOut ? -mag : mag;
+}
+
+export function payslipTaxNetEffect(slip) {
+  return slip?.taxPence ?? 0;
+}
+
+export function payslipNiNetEffect(slip) {
+  return slip?.niPence ?? 0;
+}
+
+export function payslipReliefAtSourceNetEffect(slip) {
+  return slip?.reliefAtSourcePensionPence ?? 0;
+}
+
+export function payslipRowNetEffect(row) {
+  const pence = row?.amountPence ?? 0;
+  if (!Number.isInteger(pence) || pence === 0) return 0;
+  const part = payslipRowPayPart(row);
+  if (part === "inGross" || part === "onTop") return Math.abs(pence);
+  if (pence < 0) return pence;
+  return -pence;
+}
+
+/** Signed effect on net for display beside the input. */
+export function payslipCategorySignedEffectPence(category, storedPence) {
+  if (!category) return 0;
+  const side = payslipCategorySide(category.kind, category);
+  if (["bonus", "benefits"].includes(category.kind)) return Math.abs(storedPence || 0);
+  if (["tax", "ni", "pension"].includes(category.kind)) return storedPence || 0;
+  if (category.kind === "sacrifice") return -Math.abs(storedPence || 0);
+  if (side === "in") return Math.abs(storedPence || 0);
+  return payslipRowNetEffect({ amountPence: storedPence, kind: "deduction" });
 }
 
 /**
@@ -271,10 +315,7 @@ export function payslipSuggestsTaxRefund(slip) {
 export function normalizePayslipSlip(slip) {
   if (!slip) return slip;
   const next = { ...slip };
-  if (Number.isInteger(next.taxPence) && next.taxPence < 0) {
-    next.taxRefund = true;
-    next.taxPence = -next.taxPence;
-  }
+  const taxRefund = next.taxRefund;
   let reliefAtSourcePensionPence = next.reliefAtSourcePensionPence || 0;
   const merged = new Map();
 
@@ -296,15 +337,29 @@ export function normalizePayslipSlip(slip) {
       existing.amountPence = (existing.amountPence || 0) + (normalized.amountPence || 0);
       continue;
     }
+    let amountPence = normalized.amountPence || 0;
+    if (kind === "deduction" && amountPence > 0) amountPence = -amountPence;
+    if (kind === "pay" && amountPence < 0) amountPence = -amountPence;
     merged.set(mapKey, {
       ...normalized,
       label: resolved.label,
       kind,
+      amountPence,
     });
   }
 
   next.reliefAtSourcePensionPence = reliefAtSourcePensionPence;
   next.otherDeductions = [...merged.values()];
+  if (taxRefund && Number.isInteger(next.taxPence) && next.taxPence > 0) {
+    // Tax refund on load keeps a positive signed effect on net.
+  } else if (Number.isInteger(next.taxPence) && next.taxPence > 0) {
+    next.taxPence = -next.taxPence;
+  }
+  delete next.taxRefund;
+  if (Number.isInteger(next.niPence) && next.niPence > 0) next.niPence = -next.niPence;
+  if (Number.isInteger(next.reliefAtSourcePensionPence) && next.reliefAtSourcePensionPence > 0) {
+    next.reliefAtSourcePensionPence = -next.reliefAtSourcePensionPence;
+  }
   return next;
 }
 
@@ -1694,9 +1749,9 @@ export function payslipFillFromPrevious(current, previous, categories) {
     if (amountPence > 0) fills.push({ field, amountPence });
   }
   for (const category of categories || []) {
-    if (payslipAmountForCategory(current, category) > 0) continue;
+    if ((payslipAmountForCategory(current, category) || 0) !== 0) continue;
     const amountPence = payslipAmountForCategory(previous, category);
-    if (amountPence > 0) fills.push({ category, amountPence });
+    if (amountPence !== 0) fills.push({ category, amountPence });
   }
   // The tax code is the field that changes least of all, and it is not money.
   if (!String(current?.taxCode || "").trim() && String(previous.taxCode || "").trim()) {
@@ -1858,10 +1913,10 @@ export function payslipHasEnteredAmounts(slip) {
   if ((slip.bonusPence || 0) > 0) return true;
   if ((slip.benefitsPence || 0) > 0) return true;
   if ((slip.salarySacrificePensionPence || 0) > 0) return true;
-  if ((slip.reliefAtSourcePensionPence || 0) > 0) return true;
-  if ((slip.taxPence || 0) !== 0 || slip?.taxRefund) return true;
-  if ((slip.niPence || 0) > 0) return true;
-  return (slip.otherDeductions || []).some((row) => (row.amountPence || 0) > 0);
+  if ((slip.reliefAtSourcePensionPence || 0) !== 0) return true;
+  if ((slip.taxPence || 0) !== 0) return true;
+  if ((slip.niPence || 0) !== 0) return true;
+  return (slip.otherDeductions || []).some((row) => (row.amountPence || 0) !== 0);
 }
 
 /** Stated net is what lands in the bank until gross is enough to work the arithmetic. */
@@ -1936,13 +1991,28 @@ function payslipReadingLabel(grossBeforeSacrifice, grossExcludesBonus, benefitsP
  * (paid out of pay, unlike a sacrifice), and the deduction rows.
  */
 export function payslipDeductionsPence(slip) {
-  return payslipTaxEffectPence(slip)
-    + (slip?.niPence || 0)
-    + (slip?.reliefAtSourcePensionPence || 0)
-    + sumPence(
-      (slip?.otherDeductions || []).filter((row) => payslipRowPayPart(row) === null),
-      (row) => row.amountPence,
-    );
+  const effects = [
+    payslipTaxNetEffect(slip),
+    payslipNiNetEffect(slip),
+    payslipReliefAtSourceNetEffect(slip),
+    ...(slip?.otherDeductions || [])
+      .filter((row) => payslipRowPayPart(row) === null)
+      .map((row) => payslipRowNetEffect(row)),
+  ];
+  return effects.filter((pence) => pence < 0).reduce((sum, pence) => sum - pence, 0);
+}
+
+/** Money that Out lines add to net (refunds), as a positive display amount. */
+export function payslipRefundsPence(slip) {
+  const effects = [
+    payslipTaxNetEffect(slip),
+    payslipNiNetEffect(slip),
+    payslipReliefAtSourceNetEffect(slip),
+    ...(slip?.otherDeductions || [])
+      .filter((row) => payslipRowPayPart(row) === null)
+      .map((row) => payslipRowNetEffect(row)),
+  ];
+  return effects.filter((pence) => pence > 0).reduce((sum, pence) => sum + pence, 0);
 }
 
 /** Pay lines added on top of the main total (e.g. funded cashplan). */
@@ -1987,12 +2057,29 @@ export function grossIsSalaryOverTwelve(slip) {
   return Math.abs(gross - Math.round(salary / 12)) <= 1;
 }
 
+function payslipAddSignedLineEffects(slip) {
+  let net = 0;
+  net += payslipTaxNetEffect(slip);
+  net += payslipNiNetEffect(slip);
+  net += payslipReliefAtSourceNetEffect(slip);
+  for (const row of slip?.otherDeductions || []) {
+    const part = payslipRowPayPart(row);
+    if (part === "inGross" || part === "onTop") continue;
+    if (part === null) net += payslipRowNetEffect(row);
+  }
+  return net;
+}
+
 export function payslipNetPence(slip) {
   if (!slip) return 0;
   const typedGross = slip?.grossPence || 0;
-  let net = payslipGrossPaidPence(slip) + payslipAdditionsPence(slip) - payslipDeductionsPence(slip);
-  // Benefits are already in derived pay when Gross is blank; only add again when Gross is typed.
-  if (typedGross > 0) net += payslipBenefitsInNetPence(slip);
+  if (typedGross > 0) {
+    let net = payslipGrossPaidPence(slip) + payslipAdditionsPence(slip) + payslipBenefitsInNetPence(slip);
+    net += payslipAddSignedLineEffects(slip);
+    return net;
+  }
+  let net = payslipGrossPaidPence(slip) + payslipAdditionsPence(slip);
+  net += payslipAddSignedLineEffects(slip);
   return net;
 }
 
@@ -2088,9 +2175,6 @@ export function payslipNetHints(slip) {
     hints.push("That is exactly the taxable benefit. A benefit in kind is never paid to you, so it does not belong in Gross — it counts for the £100k line only.");
   }
   if (needsGross) hints.unshift(needsGross);
-  if (payslipSuggestsTaxRefund(slip)) {
-    hints.unshift("Tax looks like a refund — turn on Refund under Tax, or type the amount with a minus sign.");
-  }
   if (!hints.length) {
     hints.push(difference > 0
       ? "The calculation pays out more than the slip does, so a deduction is probably missing from Categories."
@@ -2100,7 +2184,7 @@ export function payslipNetHints(slip) {
 }
 
 export function usedPayslipCategories(slip, categories) {
-  return (categories || []).filter((category) => (payslipAmountForCategory(slip, category) || 0) > 0);
+  return (categories || []).filter((category) => (payslipAmountForCategory(slip, category) || 0) !== 0);
 }
 
 export function previousPayslipForPerson(household, personId, beforeMonth = "") {
@@ -2307,7 +2391,7 @@ export function payslipAniPence(payslip) {
   const slip = payslipAsRead(payslip);
   return payslipTaxablePayPence(slip)
     + (slip.benefitsPence || 0)
-    - basicRateGrossUpPence(slip.reliefAtSourcePensionPence || 0);
+    - basicRateGrossUpPence(Math.abs(slip.reliefAtSourcePensionPence || 0));
 }
 
 /**

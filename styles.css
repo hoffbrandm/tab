@@ -382,12 +382,21 @@ label, fieldset {
 label > input,
 label > select,
 label > textarea,
-label > .money-input,
 fieldset > input,
 fieldset > select {
   /* Block so a narrow control — a day, a month — still starts its own line
      instead of sitting beside its label. */
   display: block;
+  margin-top: 7px;
+}
+/* Money controls in labels need a row layout, not the block flow used for plain inputs. */
+label > .money-input,
+fieldset > .money-input {
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
   margin-top: 7px;
 }
 /* The segmented control lays itself out; it needs the spacing, not the box. */
@@ -420,6 +429,7 @@ select { appearance: auto; }
 
 .money-input {
   display: flex;
+  flex-flow: row nowrap;
   align-items: center;
   min-width: 0;
   min-height: 51px;
@@ -429,26 +439,33 @@ select { appearance: auto; }
   overflow: hidden;
 }
 .money-input .money-prefix {
-  flex: none;
-  display: inline-flex;
+  flex: 0 0 auto;
+  display: flex;
   align-items: center;
-  padding: 0 6px 0 13px;
+  padding: 0 2px 0 12px;
   font-size: 1.12rem;
+  font-weight: 650;
   color: var(--muted);
-  line-height: 1;
+  line-height: 1.2;
+  white-space: nowrap;
   pointer-events: none;
 }
 .money-input input {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  display: block;
   min-width: 0;
-  width: auto;
+  width: 0;
+  max-width: 100%;
   border: 0;
   background: transparent;
-  min-height: 51px;
-  padding: 0 12px 0 0;
+  min-height: 0;
+  height: auto;
+  margin: 0;
+  padding: 0 12px 0 2px;
   border-radius: 0;
-  font-size: 1.22rem;
+  font-size: 1.12rem;
   font-weight: 750;
+  line-height: 1.2;
 }
 /* An empty amount was set in the same bold as a typed one, so a placeholder
    0.00 read as a figure someone had entered. */
@@ -995,10 +1012,17 @@ legend { padding: 0; margin-bottom: 7px; }
 .home-add-card .money-input input,
 .pending-row .money-input input,
 .card-balance-row .money-input input {
-  min-height: 46px;
+  min-height: 0;
   width: auto;
   border: 0;
-  padding-left: 8px;
+  padding: 0 10px 0 2px;
+  font-size: 1rem;
+}
+.home-add-card .money-input .money-prefix,
+.pending-row .money-input .money-prefix,
+.card-balance-row .money-input .money-prefix {
+  padding: 0 2px 0 10px;
+  font-size: 1rem;
 }
 .home-section {
   margin-top: 10px;
@@ -1063,12 +1087,37 @@ legend { padding: 0; margin-bottom: 7px; }
 }
 .payslip-cat-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px auto;
-  gap: 10px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 9.5rem) auto;
+  gap: 8px 10px;
+  align-items: start;
 }
 .payslip-cat-name { font-weight: 750; display: grid; gap: 1px; min-width: 0; }
 .payslip-cat-name small { color: var(--muted); font-weight: 650; font-size: 0.72rem; }
+.payslip-cat-amount {
+  display: grid;
+  gap: 2px;
+  justify-items: stretch;
+  align-content: start;
+  min-width: 0;
+}
+.payslip-line-effect-wrap {
+  min-height: 1.1em;
+  display: flex;
+  justify-content: flex-end;
+  align-items: baseline;
+  padding: 0 12px 0 0;
+}
+.payslip-line-effect {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+.payslip-line-effect.plus { color: #0d7a45; }
+.payslip-line-effect.minus { color: var(--danger, #b42318); }
+.payslip-line-effect.muted { visibility: hidden; }
+.payslip-sign-help { margin-top: 2px; }
 .payslip-net {
   margin: 8px 0 14px;
   padding: 12px 14px;
@@ -1391,4 +1440,19 @@ legend { padding: 0; margin-bottom: 7px; }
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* Label block rules must not win over money fields — prefix and digits share one row. */
+label > .money-input,
+fieldset > .money-input,
+.payslip-cat-amount > .money-input {
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: center;
+}
+label > .money-input input,
+fieldset > .money-input input,
+.payslip-cat-amount > .money-input input,
+.money-input input {
+  min-height: 0;
 }

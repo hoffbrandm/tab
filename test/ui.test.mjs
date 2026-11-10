@@ -19,11 +19,16 @@ test("money input prefix is in-flow and never overlaid on the digits", () => {
   const prefix = rule(".money-input .money-prefix");
   const input = rule(".money-input input");
   assert.match(box, /display:\s*flex/);
+  assert.match(box, /flex-flow:\s*row nowrap/);
   assert.doesNotMatch(prefix, /position:\s*absolute/);
-  assert.match(prefix, /flex:\s*none/);
-  assert.match(input, /width:\s*auto/);
+  assert.match(prefix, /flex:\s*0 0 auto/);
+  assert.match(input, /width:\s*0/);
+  assert.match(input, /min-height:\s*0/);
   assert.match(input, /border:\s*0/);
-  assert.match(prefix, /padding:\s*0 6px 0 13px/);
+  assert.match(prefix, /align-items:\s*center/);
+  assert.match(css, /label > \.money-input,\s*\nfieldset > \.money-input/);
+  assert.match(css, /label > \.money-input[^}]*display:\s*flex/);
+  assert.match(css, /flex-flow:\s*row nowrap/);
   assert.match(app, /class="money-prefix"/);
   assert.doesNotMatch(app, /<div class="money-input"><span>£<\/span>/);
   assert.match(css, /\.home-add-card > input/);
@@ -437,9 +442,9 @@ test("the £100k helper takes grossed-up Gift Aid off, and never adds it on", ()
   assert.match(app, /Grossed-up Gift Aid taken off/);
 });
 
-test("each payslip category says Pay or Deduction", () => {
+test("each payslip category says In or Out", () => {
   assert.match(app, /payslip-cat-name">\$\{esc\(category\.label\)\}<small>\$\{esc\(payslipKindLabel\(category\.kind, category\)\)\}<\/small>/);
-  assert.match(app, /return payslipCategoryDisplaySide\(kind, category\) === "pay" \? "Pay" : "Deduction"/);
+  assert.match(app, /return payslipCategoryDisplaySide\(kind, category\) === "pay" \? "In" : "Out"/);
   // The payslip's net settles the readings, so the picker is the fallback and
   // the form applies what it worked out rather than waiting to be tapped.
   assert.match(app, /if \(resolvedPayslipReading\(live\)\) return "";/);

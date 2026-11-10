@@ -745,13 +745,12 @@ function parsePayslip(slip, personIds) {
     benefitsPence: moneyPence(slip.benefitsPence, "Payslip benefits") || moneyPence(slip.allowancePence, "Payslip benefits"),
     benefitsPaid: Boolean(slip.benefitsPaid) || moneyPence(slip.allowancePence, "Payslip benefits") > 0,
     salarySacrificePensionPence: moneyPence(slip.salarySacrificePensionPence, "Payslip salary sacrifice"),
-    reliefAtSourcePensionPence: moneyPence(slip.reliefAtSourcePensionPence, "Payslip relief-at-source pension"),
+    reliefAtSourcePensionPence: payslipSignedMoneyPence(slip.reliefAtSourcePensionPence, "Payslip relief-at-source pension"),
     grossBeforeSacrifice: Boolean(slip.grossBeforeSacrifice),
     grossExcludesBonus: Boolean(slip.grossExcludesBonus),
     otherDeductions,
     taxPence: payslipTaxPence(slip.taxPence, "Payslip tax"),
-    taxRefund: Boolean(slip.taxRefund),
-    niPence: moneyPence(slip.niPence, "Payslip NI"),
+    niPence: payslipSignedMoneyPence(slip.niPence, "Payslip NI"),
     // netPence is derived and cached; statedNetPence is what the slip itself says.
     netPence: moneyPence(slip.netPence, "Payslip net"),
     statedNetPence: moneyPence(slip.statedNetPence, "Payslip stated net"),
@@ -807,7 +806,7 @@ function parseDeduction(item) {
   const parsed = {
     id: requiredId(item.id, "Deduction"),
     label,
-    amountPence: moneyPence(item.amountPence, "Deduction"),
+    amountPence: signedPence(item.amountPence, "Deduction"),
   };
   const kind = migratePayslipCategoryKind(item.kind || (item.extra || item.inNet === false ? "pay" : "deduction"), item);
   parsed.kind = kind;
@@ -853,6 +852,14 @@ function moneyPence(value, label) {
 }
 
 function payslipTaxPence(value, label) {
+  const amount = value == null || value === "" ? 0 : value;
+  if (!Number.isInteger(amount)) {
+    throw new StoreError(`${label} must be a whole number of pence.`);
+  }
+  return amount;
+}
+
+function payslipSignedMoneyPence(value, label) {
   const amount = value == null || value === "" ? 0 : value;
   if (!Number.isInteger(amount)) {
     throw new StoreError(`${label} must be a whole number of pence.`);
