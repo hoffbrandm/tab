@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cashflowForMonth, emptyHousehold, oneOffsForMonth } from "../household.js";
+import { cashflowForMonth, emptyHousehold, oneOffsForMonth, payslipNetPence } from "../household.js";
 import { emptyStore, gistOneOffsNeedRewrite, gistPayslipsNeedRewrite, parseStore, StoreError } from "../store.js";
 
 const friend = {
@@ -406,7 +406,7 @@ test("monthlies keep a working-day due roll and pots keep snapshots", () => {
   assert.ok(parsed.household.payslipCategories.some((item) => item.kind === "bonus"));
 });
 
-test("parental-pay categories stay outside net when parsed", () => {
+test("pay categories load as Pay when parsed", () => {
   const parsed = parseStore({
     version: 1,
     friends: [],
@@ -433,8 +433,9 @@ test("parental-pay categories stay outside net when parsed", () => {
       }],
     },
   });
-  assert.equal(parsed.household.payslipCategories.find((item) => item.id === "smp").kind, "parental");
-  assert.equal(parsed.household.payslips[0].otherDeductions[0].inNet, false);
+  assert.equal(parsed.household.payslipCategories.find((item) => item.id === "smp").kind, "pay");
+  assert.equal(parsed.household.payslips[0].otherDeductions[0].kind, "pay");
+  assert.equal(payslipNetPence(parsed.household.payslips[0]), 300000);
 });
 
 test("pendings keep a note and month", () => {

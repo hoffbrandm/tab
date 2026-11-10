@@ -401,12 +401,14 @@ function importPayslips(grid, household, report) {
     const forecast = /temp|forecast|future\s+leave|future leave/i.test(note);
     const otherDeductions = deductionCols.map((item) => {
       const label = item.label.replace(/\b\w/g, (char) => char.toUpperCase());
-      const parental = isParentalPayLabel(item.label);
+      const pay = isParentalPayLabel(item.label);
+      const onTop = /cashplan funded/i.test(label);
       return {
         id: uid(),
         label,
         amountPence: moneyToPence(cells[item.index]),
-        ...(parental ? { inNet: false } : {}),
+        kind: pay ? "pay" : "deduction",
+        ...(onTop ? { onTop: true } : {}),
       };
     }).filter((item) => item.amountPence);
     household.payslips.push({
@@ -435,9 +437,10 @@ function importPayslips(grid, household, report) {
   }
   rememberPayslipCategories(household, [
     ...deductionCols.map((item) => ({
-      id: `${isParentalPayLabel(item.label) ? "parental" : "deduction"}-${item.label.toLowerCase().replace(/\s+/g, "-")}`,
+      id: `${isParentalPayLabel(item.label) ? "pay" : "deduction"}-${item.label.toLowerCase().replace(/\s+/g, "-")}`,
       label: item.label.replace(/\b\w/g, (char) => char.toUpperCase()),
-      kind: isParentalPayLabel(item.label) ? "parental" : "deduction",
+      kind: isParentalPayLabel(item.label) ? "pay" : "deduction",
+      ...(/cashplan funded/i.test(item.label) ? { onTop: true } : {}),
     })),
   ]);
 }
