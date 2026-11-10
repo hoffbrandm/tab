@@ -382,12 +382,20 @@ label, fieldset {
 label > input,
 label > select,
 label > textarea,
-label > .money-input,
 fieldset > input,
 fieldset > select {
   /* Block so a narrow control — a day, a month — still starts its own line
      instead of sitting beside its label. */
   display: block;
+  margin-top: 7px;
+}
+/* Money fields lay out prefix + digits in a row; block here stacked £ on its own line. */
+label > .money-input,
+fieldset > .money-input {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
   margin-top: 7px;
 }
 /* The segmented control lays itself out; it needs the spacing, not the box. */
@@ -430,12 +438,14 @@ select { appearance: auto; }
 }
 .money-input .money-prefix {
   flex: none;
-  display: inline-flex;
+  display: flex;
+  align-self: stretch;
   align-items: center;
-  padding: 0 6px 0 13px;
+  padding: 0 2px 0 12px;
   font-size: 1.12rem;
+  font-weight: 650;
   color: var(--muted);
-  line-height: 1;
+  line-height: 1.2;
   pointer-events: none;
 }
 .money-input input {
@@ -444,11 +454,14 @@ select { appearance: auto; }
   width: auto;
   border: 0;
   background: transparent;
-  min-height: 51px;
-  padding: 0 12px 0 0;
+  align-self: stretch;
+  min-height: 0;
+  height: auto;
+  padding: 0 12px 0 2px;
   border-radius: 0;
-  font-size: 1.22rem;
+  font-size: 1.12rem;
   font-weight: 750;
+  line-height: 1.2;
 }
 /* An empty amount was set in the same bold as a typed one, so a placeholder
    0.00 read as a figure someone had entered. */
@@ -995,10 +1008,17 @@ legend { padding: 0; margin-bottom: 7px; }
 .home-add-card .money-input input,
 .pending-row .money-input input,
 .card-balance-row .money-input input {
-  min-height: 46px;
+  min-height: 0;
   width: auto;
   border: 0;
-  padding-left: 8px;
+  padding: 0 10px 0 2px;
+  font-size: 1rem;
+}
+.home-add-card .money-input .money-prefix,
+.pending-row .money-input .money-prefix,
+.card-balance-row .money-input .money-prefix {
+  padding: 0 2px 0 10px;
+  font-size: 1rem;
 }
 .home-section {
   margin-top: 10px;
@@ -1071,16 +1091,24 @@ legend { padding: 0; margin-bottom: 7px; }
 .payslip-cat-name small { color: var(--muted); font-weight: 650; font-size: 0.72rem; }
 .payslip-cat-amount {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   justify-items: stretch;
+  align-content: start;
   min-width: 0;
 }
-.payslip-line-effect-wrap { min-height: 1.1em; }
+.payslip-line-effect-wrap {
+  min-height: 1.1em;
+  display: flex;
+  justify-content: flex-end;
+  align-items: baseline;
+  padding: 0 12px 0 0;
+}
 .payslip-line-effect {
   font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: -0.01em;
   white-space: nowrap;
+  line-height: 1.2;
 }
 .payslip-line-effect.plus { color: #0d7a45; }
 .payslip-line-effect.minus { color: var(--danger, #b42318); }
