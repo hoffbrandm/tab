@@ -111,7 +111,7 @@ test("a repeated deduction id is repaired, not thrown at the whole household", (
   ]);
   assert.deepEqual(repaired.map((row) => row.id), ["dental", "dental-2"]);
   // Nothing is lost: both rows keep their label and their amount.
-  assert.deepEqual(repaired.map((row) => [row.label, row.amountPence]), [["Gym flex", 4000], ["Dental", 1800]]);
+  assert.deepEqual(repaired.map((row) => [row.label, row.amountPence]), [["Gym flex", -4000], ["Dental", -1800]]);
 
   // A repeated label is one row either way — two would take two amounts for the
   // one figure, and the amount read back is the first of them regardless.
@@ -120,7 +120,7 @@ test("a repeated deduction id is repaired, not thrown at the whole household", (
     { id: "b", label: "dental ", amountPence: 9999 },
   ]);
   assert.equal(oneLabel.length, 1);
-  assert.equal(oneLabel[0].amountPence, 1800);
+  assert.equal(oneLabel[0].amountPence, -1800);
 
   // And the repair is stable, so a saved household does not keep changing.
   const store = parseStore({

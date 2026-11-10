@@ -1063,12 +1063,29 @@ legend { padding: 0; margin-bottom: 7px; }
 }
 .payslip-cat-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px auto;
-  gap: 10px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 9.5rem) auto;
+  gap: 8px 10px;
+  align-items: start;
 }
 .payslip-cat-name { font-weight: 750; display: grid; gap: 1px; min-width: 0; }
 .payslip-cat-name small { color: var(--muted); font-weight: 650; font-size: 0.72rem; }
+.payslip-cat-amount {
+  display: grid;
+  gap: 4px;
+  justify-items: stretch;
+  min-width: 0;
+}
+.payslip-line-effect-wrap { min-height: 1.1em; }
+.payslip-line-effect {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.payslip-line-effect.plus { color: #0d7a45; }
+.payslip-line-effect.minus { color: var(--danger, #b42318); }
+.payslip-line-effect.muted { visibility: hidden; }
+.payslip-sign-help { margin-top: 2px; }
 .payslip-net {
   margin: 8px 0 14px;
   padding: 12px 14px;

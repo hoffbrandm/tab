@@ -18,8 +18,8 @@ import {
   canonicalPayslipCategoryLabel,
   normalizePayslipSlip,
   payslipLabelMatchKey,
-  payslipSuggestsTaxRefund,
-  payslipTaxEffectPence,
+  parsePayslipLineAmountInput,
+  payslipTaxNetEffect,
   payslipFillFromPrevious,
   payslipWithFills,
   withPayslipCategoryAmount,
@@ -730,8 +730,8 @@ test("payslip net is the slip's own arithmetic: gross paid less deductions", () 
     bonusPence: 20000,
     benefitsPence: 5000,
     salarySacrificePensionPence: 30000,
-    taxPence: 60000,
-    niPence: 20000,
+    taxPence: -60000,
+    niPence: -20000,
     otherDeductions: [
       { id: "gym", label: "Gym flex", amountPence: 4000 },
       { id: "cycle", label: "Cycle scheme", amountPence: 8000 },
@@ -765,8 +765,8 @@ test("Home In uses calculated payslip net, not a typed take-home leftover", () =
     people: [{ id: "you", name: "You" }],
     payslips: [slipFor("you", "2026-08", 999999, {
       grossPence: 300000,
-      taxPence: 40000,
-      niPence: 20000,
+      taxPence: -40000,
+      niPence: -20000,
       netPence: 999999,
     })],
   };
@@ -1040,8 +1040,8 @@ test("the settings category list keeps the sheet column set after a slip is save
   const hh = {
     ...emptyHousehold(),
     payslips: [{
-      taxPence: 4000,
-      niPence: 2000,
+      taxPence: -4000,
+      niPence: -2000,
       otherDeductions: [{ id: "smp", label: "SMP", amountPence: 5000, inNet: false }],
     }],
   };
@@ -1067,7 +1067,7 @@ test("a new payslip defaults to the previous month’s used categories", () => {
       personId: "you",
       periodMonth: "2026-08",
       bonusPence: 25000,
-      taxPence: 60000,
+      taxPence: -60000,
       otherDeductions: [{ id: "gym", label: "Gym", amountPence: 4000 }],
     }],
   };
@@ -1345,8 +1345,8 @@ test("the net on the slip is checked against the net these figures produce", () 
   const base = {
     grossPence: 350000,
     salarySacrificePensionPence: 20000,
-    taxPence: 60000,
-    niPence: 28000,
+    taxPence: -60000,
+    niPence: -28000,
     otherDeductions: [{ id: "cycle", label: "Cycle scheme", amountPence: 4000 }],
   };
   assert.equal(payslipNetPence(base), 258000);
@@ -1381,7 +1381,7 @@ test("the net on the slip is checked against the net these figures produce", () 
 });
 
 test("a notional benefit counts for the £100k line and never for take-home", () => {
-  const slip = { grossPence: 400000, benefitsPence: 60000, taxPence: 80000, niPence: 20000, benefitsPaid: false };
+  const slip = { grossPence: 400000, benefitsPence: 60000, taxPence: -80000, niPence: -20000, benefitsPaid: false };
   // A benefit in kind is notional. It is taxed but never paid.
   assert.equal(payslipNetPence(slip), 300000);
   assert.equal(payslipTaxablePayPence(slip), 400000);
@@ -1396,9 +1396,9 @@ test("a notional benefit counts for the £100k line and never for take-home", ()
 test("a relief-at-source pension comes off pay, and off ANI grossed up", () => {
   const slip = {
     grossPence: 500000,
-    taxPence: 80000,
-    niPence: 30000,
-    reliefAtSourcePensionPence: 20000,
+    taxPence: -80000,
+    niPence: -30000,
+    reliefAtSourcePensionPence: -20000,
   };
   // It is paid out of pay, unlike a sacrifice, so take-home drops by the £200.
   assert.equal(payslipNetPence(slip), 370000);
@@ -1408,7 +1408,7 @@ test("a relief-at-source pension comes off pay, and off ANI grossed up", () => {
 
   // A sacrifice of the same size never reached taxable pay, so it needs no
   // second deduction — the two must not be modelled the same way.
-  const sacrificed = { grossPence: 500000, taxPence: 80000, niPence: 30000, salarySacrificePensionPence: 20000 };
+  const sacrificed = { grossPence: 500000, taxPence: -80000, niPence: -30000, salarySacrificePensionPence: 20000 };
   assert.equal(payslipNetPence(sacrificed), 390000);
   assert.equal(payslipAniPence(sacrificed), 500000);
 });
@@ -1425,8 +1425,8 @@ test("every way of reading Gross is offered with its own net", () => {
     grossPence: 350000,
     bonusPence: 50000,
     salarySacrificePensionPence: 20000,
-    taxPence: 60000,
-    niPence: 28000,
+    taxPence: -60000,
+    niPence: -28000,
     statedNetPence: 242000,
   };
   const readings = payslipNetReadings(slip);
@@ -1447,7 +1447,7 @@ test("every way of reading Gross is offered with its own net", () => {
   assert.equal(byId["pre-sacrifice-with-bonus"].current, false);
 
   // Nothing ambiguous to offer when there is no bonus and no sacrifice.
-  assert.equal(payslipNetReadings({ grossPence: 350000, taxPence: 60000 }).length, 1);
+  assert.equal(payslipNetReadings({ grossPence: 350000, taxPence: -60000 }).length, 1);
   // One fact in play means one either-or.
   assert.equal(payslipNetReadings({ grossPence: 350000, salarySacrificePensionPence: 20000 }).length, 2);
 });
@@ -1456,8 +1456,8 @@ test("a gross that leaves the bonus out counts it once, in net and in ANI", () =
   const slip = {
     grossPence: 350000,
     bonusPence: 50000,
-    taxPence: 60000,
-    niPence: 28000,
+    taxPence: -60000,
+    niPence: -28000,
     grossExcludesBonus: true,
   };
   assert.equal(payslipGrossPaidPence(slip), 400000);
@@ -1589,7 +1589,7 @@ test("every built-in category maps to its own kind, whatever the order", () => {
   // tax as the pension. Nothing about the list's order may matter again.
   const slip = {
     bonusPence: 7, benefitsPence: 5, salarySacrificePensionPence: 100,
-    reliefAtSourcePensionPence: 400, taxPence: 200, niPence: 300,
+    reliefAtSourcePensionPence: -400, taxPence: -200, niPence: -300,
   };
   const byKind = Object.fromEntries(payslipCategoriesOf({ payslips: [slip] }).map((c) => [c.kind, c.label]));
   assert.deepEqual(byKind, {
@@ -1608,7 +1608,7 @@ test("every built-in category maps to its own kind, whatever the order", () => {
 test("a benefit is taxed either way; the payslip's net says if it is money", () => {
   // Nobody should have to know "benefit in kind" from "cash allowance" to enter
   // their own pay. Both are the payslip's "Benefits"; the net settles which.
-  const base = { salaryPence: 11657300, grossPence: 971442, taxPence: 302445, niPence: 37290, benefitsPence: 60953 };
+  const base = { salaryPence: 11657300, grossPence: 971442, taxPence: -302445, niPence: -37290, benefitsPence: 60953 };
   const notional = { ...base, benefitsPaid: false };
   const paid = { ...base, benefitsPaid: true };
   // A payslip that prints "Benefits" is nearly always printing money that was
@@ -1629,7 +1629,7 @@ test("a funded cashplan goes on and straight back off, netting to nothing", () =
   // app takes it as two lines rather than making anyone net it off by hand.
   const slip = {
     salaryPence: 12000000, grossPence: 1000000, salarySacrificePensionPence: 151700,
-    taxPence: 234806, niPence: 33716, statedNetPence: 579778,
+    taxPence: -234806, niPence: -33716, statedNetPence: 579778,
     otherDeductions: [
       { id: "cf", label: "Cashplan funded", amountPence: 652, extra: true },
       { id: "cd", label: "Cashplan deducted", amountPence: 652 },
@@ -1690,7 +1690,7 @@ test("a slip with only its net typed is still the month's income", () => {
 
   // A gross on the slip means there is arithmetic to do, so the net is worked
   // out rather than taken on trust.
-  const detailed = { ...netOnly, grossPence: 1000000, taxPence: 234806, niPence: 33716 };
+  const detailed = { ...netOnly, grossPence: 1000000, taxPence: -234806, niPence: -33716 };
   assert.equal(payslipIsNetOnly(detailed), false);
   assert.equal(payslipHasDetail(detailed), true);
   assert.equal(payslipNetAsReadPence(detailed), 1000000 - 234806 - 33716);
@@ -1717,15 +1717,15 @@ test("a slip with only its net typed is still the month's income", () => {
 
   const detailNoGross = {
     ...netOnly,
-    taxPence: 12000,
-    niPence: 800,
+    taxPence: -12000,
+    niPence: -800,
     otherDeductions: [{ id: "smp", label: "SMP", amountPence: 50000, kind: "pay" }],
   };
   assert.equal(payslipIsNetOnly(detailNoGross), false);
   assert.equal(payslipNeedsGross(detailNoGross), false);
   assert.equal(payslipGrossPaidPence(detailNoGross), 50000);
   assert.equal(payslipNetAsReadPence(detailNoGross), 50000 - 12000 - 800);
-  const deductionsOnly = { ...netOnly, taxPence: 12000, niPence: 800 };
+  const deductionsOnly = { ...netOnly, taxPence: -12000, niPence: -800 };
   assert.equal(payslipNeedsGross(deductionsOnly), true);
 });
 
@@ -1752,40 +1752,57 @@ test("payslip category aliases merge synonyms without changing net", () => {
   assert.equal(slip.otherDeductions.length, 2);
   assert.equal(slip.otherDeductions.find((row) => row.label === "Statutory maternity (SMP)").amountPence, 5000);
   assert.equal(slip.otherDeductions.find((row) => row.label === "Enhanced maternity").amountPence, 7000);
-  assert.equal(slip.reliefAtSourcePensionPence, 1500);
+  assert.equal(slip.reliefAtSourcePensionPence, -1500);
 });
 
 test("pay lines with blank gross, options off, and tax refund match stated net", () => {
-  const slip = {
+  const rows = [
+    { id: "a", label: "Statutory maternity (SMP)", kind: "pay", amountPence: 85501 },
+    { id: "b", label: "Dental", kind: "deduction", amountPence: 3520 },
+    { id: "c", label: "Critical illness EE", kind: "deduction", amountPence: 685 },
+    { id: "d", label: "Critical illness DP", kind: "deduction", amountPence: 1206 },
+  ];
+  const legacy = normalizePayslipSlip({
     grossPence: 0,
     statedNetPence: 184857,
     benefitsPence: 60953,
     taxPence: 46713,
     taxRefund: true,
-    niPence: 2899,
-    otherDeductions: [
-      { id: "a", label: "Statutory maternity (SMP)", kind: "pay", amountPence: 85501 },
-      { id: "b", label: "Dental", kind: "deduction", amountPence: 3520 },
-      { id: "c", label: "Critical illness EE", kind: "deduction", amountPence: 685 },
-      { id: "d", label: "Critical illness DP", kind: "deduction", amountPence: 1206 },
-    ],
-  };
-  assert.equal(payslipGrossPaidPence(slip), 146454);
-  assert.equal(payslipTaxEffectPence(slip), -46713);
-  assert.equal(payslipNetPence(slip), 184857);
-  assert.equal(payslipNetCheck(slip)?.matches, true);
-  const misEntered = { ...slip, taxRefund: false };
-  assert.equal(payslipNetCheck(misEntered)?.matches, false);
-  assert.equal(payslipSuggestsTaxRefund(misEntered), true);
-  assert.equal(payslipNetPence({ ...slip, taxRefund: false, taxPence: -46713 }), 184857);
+    niPence: -2899,
+    otherDeductions: rows,
+  });
+  assert.equal(payslipGrossPaidPence(legacy), 146454);
+  assert.equal(payslipTaxNetEffect(legacy), 46713);
+  assert.equal(payslipNetPence(legacy), 184857);
+  assert.equal(payslipNetCheck(legacy)?.matches, true);
+  assert.equal(parsePayslipLineAmountInput("+467.13", "out"), 46713);
+  assert.equal(parsePayslipLineAmountInput("467.13-", "out"), 46713);
+  assert.equal(parsePayslipLineAmountInput("467.13", "out"), -46713);
+  const fromPlus = applySignedFixtureTax("+467.13", rows);
+  const fromTrailing = applySignedFixtureTax("467.13-", rows);
+  assert.equal(payslipNetPence(fromPlus), 184857);
+  assert.equal(payslipNetPence(fromTrailing), 184857);
 });
+
+function applySignedFixtureTax(taxInput, otherDeductions) {
+  const taxPence = parsePayslipLineAmountInput(taxInput, "out");
+  const normalizedRows = normalizePayslipSlip({ grossPence: 0, otherDeductions }).otherDeductions;
+  return {
+    grossPence: 0,
+    statedNetPence: 184857,
+    benefitsPence: 60953,
+    taxPence,
+    niPence: -2899,
+    otherDeductions: normalizedRows,
+  };
+}
 
 test("a slip that says nothing about what landed says so", () => {
   // £0 on Home is indistinguishable from a slip that never saved, so the list
   // names the one thing that would fix it rather than leaving it to be guessed.
   assert.equal(payslipSaysNothing({}), true);
   assert.equal(payslipSaysNothing({ salaryPence: 6600000 }), true, "a salary alone is not a payment");
-  assert.equal(payslipSaysNothing({ taxPence: 1000, niPence: 500 }), true, "deductions alone are not either");
+  assert.equal(payslipSaysNothing({ taxPence: -1000, niPence: -500 }), true, "deductions alone are not either");
   assert.equal(payslipSaysNothing({ statedNetPence: 64010 }), false);
   assert.equal(payslipSaysNothing({ grossPence: 64010 }), false);
   assert.equal(payslipSaysNothing({ salaryPence: 6600000, statedNetPence: 64010 }), false);
@@ -1820,18 +1837,18 @@ test("last month's figures are borrowed only where this month's are blank", () =
     { id: "gym", kind: "deduction", label: "Gym flex" },
   ];
   const previous = {
-    salaryPence: 9600000, grossPence: 800000, taxPence: 168000, niPence: 30000, taxCode: "1257L",
+    salaryPence: 9600000, grossPence: 800000, taxPence: -168000, niPence: -30000, taxCode: "1257L",
     otherDeductions: [{ id: "gym", label: "Gym flex", amountPence: 4000 }],
   };
-  const current = { grossPence: 812000, niPence: 31000, otherDeductions: [] };
+  const current = { grossPence: 812000, niPence: -31000, otherDeductions: [] };
   const { fills } = payslipFillFromPrevious(current, previous, categories);
   assert.deepEqual(fills.map((fill) => fill.field || fill.category.label), ["salaryPence", "Tax", "Gym flex", "taxCode"]);
 
   const filled = payslipWithFills(current, fills);
   assert.equal(filled.grossPence, 812000, "a typed gross is left alone");
-  assert.equal(filled.niPence, 31000, "a typed NI is left alone");
+  assert.equal(filled.niPence, -31000, "a typed NI is left alone");
   assert.equal(filled.salaryPence, 9600000);
-  assert.equal(filled.taxPence, 168000);
+  assert.equal(filled.taxPence, -168000);
   assert.equal(filled.taxCode, "1257L");
   assert.equal(payslipAmountForCategory(filled, categories[2]), 4000);
 
@@ -1905,7 +1922,7 @@ test("a stored slip is read the way its own net says, without being reopened", (
   const slip = {
     id: "m", personId: "m", periodMonth: "2026-07", moneyLandsMonth: "2026-08", confirmed: true,
     salaryPence: 12000000, grossPence: 1000000, salarySacrificePensionPence: 151700,
-    taxPence: 234806, niPence: 33716, statedNetPence: 579778,
+    taxPence: -234806, niPence: -33716, statedNetPence: 579778,
     grossBeforeSacrifice: false, // saved wrong: reads £1,517 a month too high
   };
   assert.equal(payslipNetPence(slip), 731478);
@@ -1939,7 +1956,7 @@ test("a stored slip is read the way its own net says, without being reopened", (
 
 test("typing the payslip's net settles every reading at once", () => {
   const slip = {
-    salaryPence: 11657300, grossPence: 971442, taxPence: 302445, niPence: 37290,
+    salaryPence: 11657300, grossPence: 971442, taxPence: -302445, niPence: -37290,
     benefitsPence: 60953, otherDeductions: [{ id: "d", label: "Dental", amountPence: 5411 }],
   };
   // Two readings exist because there is a benefit; the stated net picks one.
@@ -1963,7 +1980,7 @@ test("typing the payslip's net settles every reading at once", () => {
 test("gross typed as salary ÷ 12 with an untaken sacrifice is called out", () => {
   // Nothing catches this unless a net is typed, and left alone it overstates
   // net by the whole sacrifice every month.
-  const slip = { salaryPence: 12000000, grossPence: 1000000, salarySacrificePensionPence: 151700, taxPence: 234806, niPence: 33716 };
+  const slip = { salaryPence: 12000000, grossPence: 1000000, salarySacrificePensionPence: 151700, taxPence: -234806, niPence: -33716 };
   assert.match(payslipGrossReadingWarning(slip), /salary ÷ 12/);
   assert.equal(payslipNetPence(slip), 731478);
   // Either fix silences it, and both land on the same net.
