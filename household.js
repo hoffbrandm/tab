@@ -255,6 +255,61 @@ export function payslipCategorySide(kind, category = {}) {
  * Parse a payslip line amount. No sign uses the category default. A leading + or −
  * overrides. On Out lines, a trailing − (e.g. 467.13−) flips to plus.
  */
+export function payslipCategoryParseSideForKind(kind, category = {}) {
+  if (["bonus", "benefits"].includes(kind)) return "in";
+  if (kind === "sacrifice") return "sacrifice";
+  if (["tax", "ni", "pension"].includes(kind)) return "out";
+  return payslipCategorySide(kind, category) === "in" ? "in" : "out";
+}
+
+/** Category lines where a sign flip chip applies (not salary sacrifice / lump-sum pay). */
+export function payslipCategorySupportsSignFlip(category) {
+  if (!category?.kind) return false;
+  return !["bonus", "benefits", "sacrifice"].includes(category.kind);
+}
+
+export function payslipLineHasExplicitSign(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return false;
+  return /^[+-]/.test(trimmed) || /-$/.test(trimmed);
+}
+
+/**
+ * Parse a category amount: explicit +/- in the field wins; otherwise use the
+ * category default, optionally flipped (tap chip on phone).
+ */
+export function payslipParseCategoryLineAmount(raw, category, { signFlipped = false } = {}) {
+  if (!category) return null;
+  const side = payslipCategoryParseSideForKind(category.kind, category);
+  if (side === "sacrifice") {
+    const trimmed = String(raw || "").trim().replace(/^£\s?/, "");
+    const mag = parseMoneyToPence(trimmed.replace(/^[+-]/, ""));
+    if (mag === null) return null;
+    return mag ? Math.abs(mag) : 0;
+  }
+  if (payslipLineHasExplicitSign(raw)) {
+    return parsePayslipLineAmountInput(raw, side === "in" ? "in" : "out");
+  }
+  const trimmed = String(raw || "").trim().replace(/^£\s?/, "");
+  if (!trimmed) return 0;
+  const mag = parseMoneyToPence(trimmed);
+  if (mag === null) return null;
+  if (!mag) return 0;
+  const defaultEffect = parsePayslipLineAmountInput(trimmed, side === "in" ? "in" : "out");
+  return signFlipped ? -defaultEffect : defaultEffect;
+}
+
+/** True when the stored effect is the flipped (opposite) sign for this magnitude. */
+export function payslipCategorySignIsFlipped(category, effectPence) {
+  if (!payslipCategorySupportsSignFlip(category)) return false;
+  if (!Number.isInteger(effectPence) || effectPence === 0) return false;
+  const side = payslipCategoryParseSideForKind(category.kind, category);
+  const mag = Math.abs(effectPence);
+  const plain = (mag / 100).toFixed(2);
+  const defaultEffect = parsePayslipLineAmountInput(plain, side === "in" ? "in" : "out");
+  return effectPence !== defaultEffect;
+}
+
 export function parsePayslipLineAmountInput(raw, side) {
   const isOut = side === "out" || side === "deduction";
   let trimmed = String(raw || "").trim().replace(/^£\s?/, "");

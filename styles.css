@@ -1101,11 +1101,11 @@ legend { padding: 0; margin-bottom: 7px; }
   min-width: 0;
 }
 .payslip-line-effect-wrap {
-  min-height: 1.1em;
+  min-height: 44px;
   display: flex;
   justify-content: flex-end;
-  align-items: baseline;
-  padding: 0 12px 0 0;
+  align-items: center;
+  padding: 0 4px 0 0;
 }
 .payslip-line-effect {
   font-size: 0.78rem;
@@ -1113,6 +1113,43 @@ legend { padding: 0; margin-bottom: 7px; }
   letter-spacing: -0.01em;
   white-space: nowrap;
   line-height: 1.2;
+}
+.payslip-line-effect-toggle {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  min-height: 44px;
+  min-width: 44px;
+  margin: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.payslip-line-effect-toggle:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.payslip-line-effect-toggle:active {
+  background: rgba(23, 29, 26, 0.06);
+}
+.payslip-line-effect-glyph {
+  font-size: 0.82rem;
+  font-weight: 900;
+  opacity: 0.55;
+  line-height: 1;
+}
+.payslip-line-effect-hint {
+  font-size: 0.65rem;
+  font-weight: 650;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+  text-transform: none;
 }
 .payslip-line-effect.plus { color: #0d7a45; }
 .payslip-line-effect.minus { color: var(--danger, #b42318); }
