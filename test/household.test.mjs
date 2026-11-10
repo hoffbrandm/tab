@@ -19,6 +19,8 @@ import {
   normalizePayslipSlip,
   payslipLabelMatchKey,
   parsePayslipLineAmountInput,
+  payslipParseCategoryLineAmount,
+  payslipCategorySignIsFlipped,
   payslipTaxNetEffect,
   payslipFillFromPrevious,
   payslipWithFills,
@@ -1782,7 +1784,28 @@ test("pay lines with blank gross, options off, and tax refund match stated net",
   const fromTrailing = applySignedFixtureTax("467.13-", rows);
   assert.equal(payslipNetPence(fromPlus), 184857);
   assert.equal(payslipNetPence(fromTrailing), 184857);
+  const taxCat = { id: "tax", kind: "tax", label: "Tax" };
+  assert.equal(payslipParseCategoryLineAmount("467.13", taxCat), -46713);
+  assert.equal(payslipParseCategoryLineAmount("467.13", taxCat, { signFlipped: true }), 46713);
+  assert.equal(payslipCategorySignIsFlipped(taxCat, 46713), true);
+  assert.equal(payslipCategorySignIsFlipped(taxCat, -46713), false);
+  const fromFlip = applySignedFixtureTaxFlip(rows);
+  assert.equal(payslipNetPence(fromFlip), 184857);
 });
+
+function applySignedFixtureTaxFlip(otherDeductions) {
+  const taxCat = { id: "tax", kind: "tax", label: "Tax" };
+  const taxPence = payslipParseCategoryLineAmount("467.13", taxCat, { signFlipped: true });
+  const normalizedRows = normalizePayslipSlip({ grossPence: 0, otherDeductions }).otherDeductions;
+  return {
+    grossPence: 0,
+    statedNetPence: 184857,
+    benefitsPence: 60953,
+    taxPence,
+    niPence: -2899,
+    otherDeductions: normalizedRows,
+  };
+}
 
 function applySignedFixtureTax(taxInput, otherDeductions) {
   const taxPence = parsePayslipLineAmountInput(taxInput, "out");

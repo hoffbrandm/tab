@@ -61,6 +61,10 @@ import {
   payslipCategoryDisplaySide,
   payslipCategoryOnTop,
   parsePayslipLineAmountInput,
+  payslipParseCategoryLineAmount,
+  payslipLineHasExplicitSign,
+  payslipCategorySignIsFlipped,
+  payslipCategorySupportsSignFlip,
   payslipCategorySide,
   payslipCategorySignedEffectPence,
   payslipNetCheck,
@@ -1975,7 +1979,7 @@ function payslipForm() {
       <h3>Categories</h3>
       <p class="helper">Enter pay and deductions as they appear on the slip. Names you reuse live under More.</p>
       ${categories.length ? categories.map((category) => payslipCategoryField(category, item)).join("") : `<p class="helper">No categories on this slip yet.</p>`}
-      <p class="helper payslip-sign-help">Out lines come off net unless you type a plus or put a minus at the end (e.g. 467.13−); In lines add unless you type a minus.</p>
+      <p class="helper payslip-sign-help">Out lines come off, In lines add. Tap the amount underneath to flip one, e.g. for a tax refund.</p>
       ${available.length ? `<label>Add a category
         <select data-action="add-payslip-category">
           <option value="">Choose…</option>
@@ -2069,6 +2073,9 @@ function payslipCategoryParseSide(category) {
 
 function payslipCategoryFieldInputValue(category, storedPence) {
   if (!Number.isInteger(storedPence) || storedPence === 0) return "";
+  if (payslipCategorySupportsSignFlip(category)) {
+    return moneyFieldValue(Math.abs(storedPence));
+  }
   if (category.kind === "sacrifice") return moneyFieldValue(Math.abs(storedPence));
   if (["bonus", "benefits"].includes(category.kind)) {
     return storedPence < 0 ? signedFieldValue(storedPence) : moneyFieldValue(storedPence);
@@ -2081,10 +2088,24 @@ function payslipCategoryFieldInputValue(category, storedPence) {
   return moneyFieldValue(Math.abs(storedPence));
 }
 
-function payslipSignedEffectMarkup(pence) {
-  if (!Number.isInteger(pence) || pence === 0) return `<span class="payslip-line-effect muted" data-cat-effect-placeholder> </span>`;
-  const positive = pence > 0;
-  return `<span class="payslip-line-effect ${positive ? "plus" : "minus"}">${positive ? "+" : "−"}${formatMoney(Math.abs(pence))}</span>`;
+function payslipSignFlipIsOn(categoryId, category, effectPence = 0) {
+  if (modal?.payslipSignFlips && Object.prototype.hasOwnProperty.call(modal.payslipSignFlips, categoryId)) {
+    return Boolean(modal.payslipSignFlips[categoryId]);
+  }
+  return payslipCategorySignIsFlipped(category, effectPence);
+}
+
+function payslipSignedEffectControl(category, effectPence) {
+  if (!Number.isInteger(effectPence) || effectPence === 0) {
+    return `<span class="payslip-line-effect muted" data-cat-effect-placeholder> </span>`;
+  }
+  if (!payslipCategorySupportsSignFlip(category)) {
+    const positive = effectPence > 0;
+    return `<span class="payslip-line-effect ${positive ? "plus" : "minus"}">${positive ? "+" : "−"}${formatMoney(Math.abs(effectPence))}</span>`;
+  }
+  const positive = effectPence > 0;
+  const flipped = payslipSignFlipIsOn(category.id, category, effectPence);
+  return `<button type="button" class="payslip-line-effect payslip-line-effect-toggle ${positive ? "plus" : "minus"}" data-action="payslip-flip-sign" data-id="${esc(category.id)}" aria-pressed="${flipped ? "true" : "false"}" aria-label="Flip sign" title="Flip sign"><span aria-hidden="true">± ${positive ? "+" : "−"}${formatMoney(Math.abs(effectPence))}</span></button>`;
 }
 
 function payslipCategoryField(category, slip) {
@@ -2098,7 +2119,7 @@ function payslipCategoryField(category, slip) {
         extra: `data-cat-amount="${esc(category.id)}"`,
         placeholder: "0.00",
       })}
-      <span class="payslip-line-effect-wrap" data-cat-effect="${esc(category.id)}">${payslipSignedEffectMarkup(effect)}</span>
+      <span class="payslip-line-effect-wrap" data-cat-effect="${esc(category.id)}">${payslipSignedEffectControl(category, effect)}</span>
     </div>
     <button type="button" class="danger-link" data-action="remove-payslip-category" data-id="${esc(category.id)}">Remove</button>
   </div>`;
@@ -2149,7 +2170,8 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
       if (mag === null) continue;
       amount = Math.abs(mag);
     } else {
-      amount = parsePayslipLineAmountInput(raw, parseSide === "in" ? "in" : "out");
+      const signFlipped = payslipCategorySignFlippedFromForm(category, form);
+      amount = payslipParseCategoryLineAmount(raw, category, { signFlipped });
       if (amount === null) continue;
     }
     if (category.kind === "bonus") next.bonusPence = Math.abs(amount);
@@ -2509,6 +2531,18 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     removeListedItem("pendings", id, "pending row");
+  }
+  if (action === "payslip-flip-sign") {
+    event.preventDefault();
+    event.stopPropagation();
+    const catId = target.dataset.id || target.closest("[data-id]")?.dataset.id;
+    if (!catId) return;
+    snapshotPayslipSignFlips();
+    const on = Boolean(modal?.payslipSignFlips?.[catId]);
+    modal.payslipSignFlips = { ...(modal.payslipSignFlips || {}), [catId]: !on };
+    updatePayslipCategoryEffects();
+    updatePayslipNet();
+    return;
   }
   if (action === "remove-payslip-category") {
     event.preventDefault();
@@ -3399,6 +3433,7 @@ async function saveDonation(event) {
 function snapshotPayslipForm() {
   const form = document.querySelector("#payslip-form");
   if (!form || !modal || modal.kind !== "payslip") return;
+  snapshotPayslipSignFlips(form);
   const data = new FormData(form);
   const readMoney = (name) => {
     const value = parseMoneyAllowZero(data.get(name));
@@ -3450,6 +3485,26 @@ function updatePayslipNet() {
   updatePayslipCategoryEffects(form);
 }
 
+function payslipCategorySignFlippedFromForm(category, form = document.querySelector("#payslip-form")) {
+  if (!payslipCategorySupportsSignFlip(category)) return false;
+  const explicit = payslipLineHasExplicitSign(form?.querySelector(`[data-cat-amount="${category.id}"]`)?.value);
+  if (explicit) return false;
+  const button = form?.querySelector(`[data-action="payslip-flip-sign"][data-id="${category.id}"]`);
+  if (button) return button.getAttribute("aria-pressed") === "true";
+  return Boolean(modal?.payslipSignFlips?.[category.id]);
+}
+
+function snapshotPayslipSignFlips(form = document.querySelector("#payslip-form")) {
+  if (!form || modal?.kind !== "payslip") return;
+  const flips = { ...(modal.payslipSignFlips || {}) };
+  for (const category of modal?.slipCategories || []) {
+    if (!payslipCategorySupportsSignFlip(category)) continue;
+    const button = form.querySelector(`[data-action="payslip-flip-sign"][data-id="${category.id}"]`);
+    if (button) flips[category.id] = button.getAttribute("aria-pressed") === "true";
+  }
+  modal.payslipSignFlips = flips;
+}
+
 function updatePayslipCategoryEffects(form = document.querySelector("#payslip-form")) {
   if (!form) return;
   for (const category of modal?.slipCategories || []) {
@@ -3462,10 +3517,15 @@ function updatePayslipCategoryEffects(form = document.querySelector("#payslip-fo
       const mag = parseMoneyAllowZero(input.value);
       effect = mag ? -Math.abs(mag) : 0;
     } else {
-      const parsed = parsePayslipLineAmountInput(input.value, parseSide === "in" ? "in" : "out");
+      const signFlipped = payslipCategorySignFlippedFromForm(category, form);
+      const parsed = payslipParseCategoryLineAmount(input.value, category, { signFlipped });
       effect = parsed === null ? 0 : payslipCategorySignedEffectPence(category, parsed);
+      if (payslipLineHasExplicitSign(input.value) && parsed !== null && payslipCategorySupportsSignFlip(category)) {
+        const flipped = payslipCategorySignIsFlipped(category, parsed);
+        modal.payslipSignFlips = { ...(modal.payslipSignFlips || {}), [category.id]: flipped };
+      }
     }
-    wrap.innerHTML = payslipSignedEffectMarkup(effect);
+    wrap.innerHTML = payslipSignedEffectControl(category, effect);
   }
 }
 
