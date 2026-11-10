@@ -60,6 +60,7 @@ import {
   migratePayslipCategoryKind,
   payslipCategoryDisplaySide,
   payslipCategoryOnTop,
+  payslipSuggestsTaxRefund,
   payslipNetCheck,
   payslipNetHints,
   payslipGrossPaidPence,
@@ -2058,9 +2059,17 @@ function payslipFormCategories(slip, personId) {
 
 function payslipCategoryField(category, slip) {
   const amount = payslipAmountForCategory(slip, category);
+  const taxRefund = category.kind === "tax" && (slip?.taxRefund || (slip?.taxPence || 0) < 0);
+  const taxDisplay = category.kind === "tax" ? Math.abs(slip?.taxPence || 0) : amount;
   return `<div class="payslip-cat-row" data-payslip-category="${esc(category.id)}">
     <span class="payslip-cat-name">${esc(category.label)}<small>${esc(payslipKindLabel(category.kind, category))}</small></span>
-    ${moneyControl({ pence: amount, extra: `data-cat-amount="${esc(category.id)}"` })}
+    ${category.kind === "tax" ? `<label class="check-row payslip-tax-refund"><input type="checkbox" name="taxRefund" data-action="payslip-tax-refund" ${taxRefund ? "checked" : ""} /><span>Refund — adds to net</span></label>` : ""}
+    ${moneyControl({
+      pence: category.kind === "tax" ? taxDisplay : amount,
+      value: category.kind === "tax" && taxRefund ? signedFieldValue(-(slip?.taxPence || 0)) : undefined,
+      extra: `data-cat-amount="${esc(category.id)}"${category.kind === "tax" ? ' data-cat-signed="1"' : ""}`,
+      placeholder: category.kind === "tax" ? "0.00 or -0.00" : "0.00",
+    })}
     <button type="button" class="danger-link" data-action="remove-payslip-category" data-id="${esc(category.id)}">Remove</button>
   </div>`;
 }
@@ -2101,12 +2110,24 @@ function applyPayslipCategoryAmounts(slip, categories, form = document.querySele
   };
   for (const category of categories || []) {
     const raw = form?.querySelector(`[data-cat-amount="${category.id}"]`)?.value;
-    const amount = raw == null ? payslipAmountForCategory(slip, category) : (parseMoneyAllowZero(raw) || 0);
+    const signed = category.kind === "tax";
+    const amount = raw == null
+      ? payslipAmountForCategory(slip, category)
+      : (signed ? parseSignedMoney(raw) : parseMoneyAllowZero(raw));
+    if (amount === null) continue;
     if (category.kind === "bonus") next.bonusPence = amount;
     else if (category.kind === "benefits") next.benefitsPence = amount;
     else if (category.kind === "sacrifice") next.salarySacrificePensionPence = amount;
     else if (category.kind === "pension") next.reliefAtSourcePensionPence = amount;
-    else if (category.kind === "tax") next.taxPence = amount;
+    else if (category.kind === "tax") {
+      if (amount < 0) {
+        next.taxPence = -amount;
+        next.taxRefund = true;
+      } else {
+        next.taxPence = amount;
+        next.taxRefund = form?.querySelector('[name="taxRefund"]')?.checked === true;
+      }
+    }
     else if (category.kind === "ni") next.niPence = amount;
     else {
       next.otherDeductions.push({
@@ -2623,6 +2644,7 @@ document.addEventListener("change", async (event) => {
   if (action === "payslip-cat-side") {
     document.querySelector("[data-payslip-cat-ontop]")?.classList.toggle("hidden", event.target.value !== "pay");
   }
+  if (action === "payslip-tax-refund") updatePayslipNet();
 });
 
 document.addEventListener("submit", (event) => {
@@ -2659,6 +2681,7 @@ document.addEventListener("submit", (event) => {
 document.addEventListener("input", (event) => {
   if (event.target.closest("#transaction-form")) updateLiveSplit();
   if (event.target.closest("#payslip-form")) updatePayslipNet();
+  if (event.target.closest("#payslip-form") && event.target.type === "checkbox" && event.target.name === "taxRefund") updatePayslipNet();
   if (event.target.closest("#per-diem-form")) updatePerDiemRate();
   const field = event.target.dataset.action;
   if (field === "pending-amount" || field === "pending-note") updatePendingField(event.target);
@@ -3304,6 +3327,7 @@ async function savePayslip(event) {
     reliefAtSourcePensionPence: amounts.reliefAtSourcePensionPence,
     otherDeductions: amounts.otherDeductions,
     taxPence: amounts.taxPence,
+    taxRefund: Boolean(amounts.taxRefund),
     niPence: amounts.niPence,
     grossBeforeSacrifice: data.get("grossBeforeSacrifice") === "on",
     grossExcludesBonus: data.get("grossExcludesBonus") === "on",
@@ -3364,6 +3388,7 @@ function snapshotPayslipForm() {
   }, modal.slipCategories || [], form);
   modal.payslip = {
     ...amounts,
+    taxRefund: Boolean(amounts.taxRefund),
     personId: data.get("personId"),
     taxYear: data.get("taxYear"),
     periodMonth: data.get("periodMonth"),

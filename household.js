@@ -244,6 +244,25 @@ function payslipDerivedGrossFromPayLines(slip) {
   return total;
 }
 
+/** Tax as it affects net: a refund adds, ordinary tax comes off. */
+export function payslipTaxEffectPence(slip) {
+  const tax = slip?.taxPence ?? 0;
+  if (!Number.isInteger(tax)) return 0;
+  if (tax < 0) return tax;
+  if (slip?.taxRefund) return -tax;
+  return tax;
+}
+
+/** True when flipping tax to a refund would make the worked net match the slip. */
+export function payslipSuggestsTaxRefund(slip) {
+  const stated = slip?.statedNetPence;
+  if (!Number.isInteger(stated) || stated <= 0) return false;
+  const tax = slip?.taxPence ?? 0;
+  if (!Number.isInteger(tax) || tax <= 0 || slip?.taxRefund) return false;
+  if (payslipNetPence(slip) === stated) return false;
+  return payslipNetPence({ ...slip, taxRefund: true }) === stated;
+}
+
 /**
  * On load: canonicalise category labels, merge alias duplicates on one slip,
  * and move relief-at-source pension aliases onto the pension field. Totals stay
@@ -252,6 +271,10 @@ function payslipDerivedGrossFromPayLines(slip) {
 export function normalizePayslipSlip(slip) {
   if (!slip) return slip;
   const next = { ...slip };
+  if (Number.isInteger(next.taxPence) && next.taxPence < 0) {
+    next.taxRefund = true;
+    next.taxPence = -next.taxPence;
+  }
   let reliefAtSourcePensionPence = next.reliefAtSourcePensionPence || 0;
   const merged = new Map();
 
@@ -1836,7 +1859,7 @@ export function payslipHasEnteredAmounts(slip) {
   if ((slip.benefitsPence || 0) > 0) return true;
   if ((slip.salarySacrificePensionPence || 0) > 0) return true;
   if ((slip.reliefAtSourcePensionPence || 0) > 0) return true;
-  if ((slip.taxPence || 0) > 0) return true;
+  if ((slip.taxPence || 0) !== 0 || slip?.taxRefund) return true;
   if ((slip.niPence || 0) > 0) return true;
   return (slip.otherDeductions || []).some((row) => (row.amountPence || 0) > 0);
 }
@@ -1913,7 +1936,7 @@ function payslipReadingLabel(grossBeforeSacrifice, grossExcludesBonus, benefitsP
  * (paid out of pay, unlike a sacrifice), and the deduction rows.
  */
 export function payslipDeductionsPence(slip) {
-  return (slip?.taxPence || 0)
+  return payslipTaxEffectPence(slip)
     + (slip?.niPence || 0)
     + (slip?.reliefAtSourcePensionPence || 0)
     + sumPence(
@@ -1966,7 +1989,11 @@ export function grossIsSalaryOverTwelve(slip) {
 
 export function payslipNetPence(slip) {
   if (!slip) return 0;
-  return payslipGrossPaidPence(slip) + payslipAdditionsPence(slip) + payslipBenefitsInNetPence(slip) - payslipDeductionsPence(slip);
+  const typedGross = slip?.grossPence || 0;
+  let net = payslipGrossPaidPence(slip) + payslipAdditionsPence(slip) - payslipDeductionsPence(slip);
+  // Benefits are already in derived pay when Gross is blank; only add again when Gross is typed.
+  if (typedGross > 0) net += payslipBenefitsInNetPence(slip);
+  return net;
 }
 
 /**
@@ -2061,10 +2088,13 @@ export function payslipNetHints(slip) {
     hints.push("That is exactly the taxable benefit. A benefit in kind is never paid to you, so it does not belong in Gross — it counts for the £100k line only.");
   }
   if (needsGross) hints.unshift(needsGross);
+  if (payslipSuggestsTaxRefund(slip)) {
+    hints.unshift("Tax looks like a refund — turn on Refund under Tax, or type the amount with a minus sign.");
+  }
   if (!hints.length) {
     hints.push(difference > 0
       ? "The calculation pays out more than the slip does, so a deduction is probably missing from Categories."
-      : "The calculation pays out less than the slip does, so a deduction is probably too large, or Gross is too low.");
+      : "The calculation pays out less than the slip does, so a deduction is probably too large, or pay total is too low.");
   }
   return hints;
 }

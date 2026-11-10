@@ -749,7 +749,8 @@ function parsePayslip(slip, personIds) {
     grossBeforeSacrifice: Boolean(slip.grossBeforeSacrifice),
     grossExcludesBonus: Boolean(slip.grossExcludesBonus),
     otherDeductions,
-    taxPence: moneyPence(slip.taxPence, "Payslip tax"),
+    taxPence: payslipTaxPence(slip.taxPence, "Payslip tax"),
+    taxRefund: Boolean(slip.taxRefund),
     niPence: moneyPence(slip.niPence, "Payslip NI"),
     // netPence is derived and cached; statedNetPence is what the slip itself says.
     netPence: moneyPence(slip.netPence, "Payslip net"),
@@ -846,6 +847,14 @@ function signedPence(value, label) {
 function moneyPence(value, label) {
   const amount = value == null || value === "" ? 0 : value;
   if (!Number.isInteger(amount) || amount < 0) {
+    throw new StoreError(`${label} must be a whole number of pence.`);
+  }
+  return amount;
+}
+
+function payslipTaxPence(value, label) {
+  const amount = value == null || value === "" ? 0 : value;
+  if (!Number.isInteger(amount)) {
     throw new StoreError(`${label} must be a whole number of pence.`);
   }
   return amount;

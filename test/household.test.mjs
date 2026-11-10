@@ -18,6 +18,8 @@ import {
   canonicalPayslipCategoryLabel,
   normalizePayslipSlip,
   payslipLabelMatchKey,
+  payslipSuggestsTaxRefund,
+  payslipTaxEffectPence,
   payslipFillFromPrevious,
   payslipWithFills,
   withPayslipCategoryAmount,
@@ -1751,6 +1753,31 @@ test("payslip category aliases merge synonyms without changing net", () => {
   assert.equal(slip.otherDeductions.find((row) => row.label === "Statutory maternity (SMP)").amountPence, 5000);
   assert.equal(slip.otherDeductions.find((row) => row.label === "Enhanced maternity").amountPence, 7000);
   assert.equal(slip.reliefAtSourcePensionPence, 1500);
+});
+
+test("pay lines with blank gross, options off, and tax refund match stated net", () => {
+  const slip = {
+    grossPence: 0,
+    statedNetPence: 184857,
+    benefitsPence: 60953,
+    taxPence: 46713,
+    taxRefund: true,
+    niPence: 2899,
+    otherDeductions: [
+      { id: "a", label: "Statutory maternity (SMP)", kind: "pay", amountPence: 85501 },
+      { id: "b", label: "Dental", kind: "deduction", amountPence: 3520 },
+      { id: "c", label: "Critical illness EE", kind: "deduction", amountPence: 685 },
+      { id: "d", label: "Critical illness DP", kind: "deduction", amountPence: 1206 },
+    ],
+  };
+  assert.equal(payslipGrossPaidPence(slip), 146454);
+  assert.equal(payslipTaxEffectPence(slip), -46713);
+  assert.equal(payslipNetPence(slip), 184857);
+  assert.equal(payslipNetCheck(slip)?.matches, true);
+  const misEntered = { ...slip, taxRefund: false };
+  assert.equal(payslipNetCheck(misEntered)?.matches, false);
+  assert.equal(payslipSuggestsTaxRefund(misEntered), true);
+  assert.equal(payslipNetPence({ ...slip, taxRefund: false, taxPence: -46713 }), 184857);
 });
 
 test("a slip that says nothing about what landed says so", () => {
