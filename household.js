@@ -1634,6 +1634,94 @@ export function potHistorySeries(pots) {
   });
 }
 
+/*
+ * Pensions keep a dated value the way pots do: one figure per month, each
+ * carrying the day it was typed, so the row shows the latest figure and the
+ * history can be drawn. A pension saved before values existed has no
+ * `snapshots` key at all; the workbook import used to fold "YYYY-MM-DD · £N.NN"
+ * into the note, so that pair seeds the first entry. Once `snapshots` is an
+ * array — even an empty one — the note is never read again, so removing a
+ * seeded entry sticks. The note itself is always left as it was.
+ */
+const PENSION_NOTE_VALUE = /(\d{4}-\d{2}-\d{2})\s*·\s*£(\d+(?:\.\d{1,2})?)(?!\d)/;
+
+export function pensionLegacySnapshots(pension, today = new Date()) {
+  if (Array.isArray(pension?.snapshots)) return pension.snapshots;
+  if (Number.isInteger(pension?.amountPence)) {
+    const updatedOn = isIsoDate(pension.updatedOn) ? pension.updatedOn : isoDateOf(today);
+    return upsertMonthSnapshot([], { month: updatedOn.slice(0, 7), amountPence: pension.amountPence, updatedOn });
+  }
+  const match = PENSION_NOTE_VALUE.exec(String(pension?.note || ""));
+  if (match && isIsoDate(match[1])) {
+    const amountPence = parseMoneyToPence(match[2]);
+    if (Number.isInteger(amountPence) && amountPence >= 0) {
+      return upsertMonthSnapshot([], { month: match[1].slice(0, 7), amountPence, updatedOn: match[1] });
+    }
+  }
+  return [];
+}
+
+function isoDateOf(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+/** The newest logged entry, or null when the pension has no value yet. */
+export function pensionLatest(pension) {
+  const snaps = Array.isArray(pension?.snapshots) ? pension.snapshots : [];
+  if (!snaps.length) return null;
+  return [...snaps].sort((a, b) => a.month.localeCompare(b.month)).at(-1);
+}
+
+export function pensionValuePence(pension) {
+  const latest = pensionLatest(pension);
+  return latest ? latest.amountPence : null;
+}
+
+export function pensionsTotalPence(pensions) {
+  return (pensions || []).reduce((sum, item) => sum + (pensionValuePence(item) ?? 0), 0);
+}
+
+export function pensionsWithValues(pensions) {
+  return (pensions || []).filter((item) => pensionLatest(item));
+}
+
+/**
+ * The fields a pension carries after its history changes: the list itself and
+ * the latest figure mirrored onto the pension, as a pot keeps amountPence and
+ * updatedOn beside its snapshots. No entries left means no figure, not £0.
+ */
+export function pensionFieldsFromSnapshots(snapshots) {
+  const sorted = [...(snapshots || [])].sort((a, b) => a.month.localeCompare(b.month));
+  const latest = sorted.at(-1);
+  if (!latest) return { snapshots: [], amountPence: undefined, updatedOn: undefined };
+  return { snapshots: sorted, amountPence: latest.amountPence, updatedOn: latest.updatedOn || `${latest.month}-01` };
+}
+
+/** Add or replace the entry for a date's month, optionally moving one from another month. */
+export function setPensionValue(pension, { date, amountPence, replaceMonth } = {}) {
+  if (!isIsoDate(date)) throw new Error("Pick the date the value is from.");
+  if (!Number.isInteger(amountPence) || amountPence < 0) throw new Error("Enter a valid value, such as 12500.00.");
+  let snapshots = Array.isArray(pension?.snapshots) ? [...pension.snapshots] : [];
+  if (replaceMonth) snapshots = snapshots.filter((item) => item.month !== replaceMonth);
+  snapshots = upsertMonthSnapshot(snapshots, { month: date.slice(0, 7), amountPence, updatedOn: date });
+  return pensionFieldsFromSnapshots(snapshots);
+}
+
+export function removePensionValue(pension, month) {
+  const snapshots = (Array.isArray(pension?.snapshots) ? pension.snapshots : []).filter((item) => item.month !== month);
+  return pensionFieldsFromSnapshots(snapshots);
+}
+
+/** Newest first, each with the change since the entry before it. */
+export function pensionHistoryRows(pension) {
+  const sorted = [...(Array.isArray(pension?.snapshots) ? pension.snapshots : [])]
+    .sort((a, b) => a.month.localeCompare(b.month));
+  return sorted.map((snap, index) => ({
+    ...snap,
+    changePence: index ? snap.amountPence - sorted[index - 1].amountPence : null,
+  })).reverse();
+}
+
 /**
  * The rows a payslip form may show: real categories, each at most once. A form
  * that listed the same category twice would take two amounts for one figure and

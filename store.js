@@ -19,6 +19,8 @@ import {
   payslipCategoriesOf,
   payslipCategoryOnTop,
   seedSnapshotsFromUpdatedOn,
+  pensionLegacySnapshots,
+  pensionFieldsFromSnapshots,
   tickedKeysFromHappenedDates,
 } from "./household.js";
 
@@ -229,7 +231,7 @@ function parseHousehold(value, today = new Date()) {
   const fromSavings = list(value.fromSavings).map(parseFromSavings);
   const annualBills = list(value.annualBills).map(parseAnnualBill);
   const pots = list(value.pots).map(parsePot);
-  const pensions = list(value.pensions).map(parsePension);
+  const pensions = list(value.pensions).map((item) => parsePension(item, today));
   const payslips = list(value.payslips)
     .map((item) => parsePayslip(item, personIds))
     .map(normalizePayslipSlip);
@@ -700,7 +702,7 @@ function snapshotList(value, label, { includePending = false } = {}) {
   return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
 }
 
-function parsePension(pension) {
+function parsePension(pension, today = new Date()) {
   if (!pension || typeof pension !== "object" || Array.isArray(pension)) {
     throw new StoreError("Each pension must be an object.");
   }
@@ -710,12 +712,24 @@ function parsePension(pension) {
   }
   const note = String(pension.note || "").trim();
   if (note.length > 120) throw new StoreError("Pension note is too long.");
-  return {
+  const parsed = {
     id: requiredId(pension.id, "Pension"),
     name: requiredName(pension.name, "Pension"),
     status,
     note,
   };
+  // Older pensions were a name and status only; they load with an empty
+  // history (or one entry seeded from an imported note) and nothing is dropped.
+  if (pension.amountPence != null) moneyPence(pension.amountPence, "Pension value");
+  if (pension.updatedOn) optionalDate(pension.updatedOn, "Pension");
+  const snapshots = snapshotList(pensionLegacySnapshots({ ...pension, note }, today), "Pension");
+  const fields = pensionFieldsFromSnapshots(snapshots);
+  parsed.snapshots = fields.snapshots;
+  if (fields.snapshots.length) {
+    parsed.amountPence = fields.amountPence;
+    parsed.updatedOn = fields.updatedOn;
+  }
+  return parsed;
 }
 
 function parsePayslip(slip, personIds) {

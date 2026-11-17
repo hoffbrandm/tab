@@ -82,6 +82,12 @@ import {
   pendingsForMonth,
   potHistorySeries,
   potsNeedCurrentMonthLog,
+  pensionHistoryRows,
+  pensionLatest,
+  pensionsTotalPence,
+  pensionsWithValues,
+  removePensionValue,
+  setPensionValue,
   rememberPayslipCategories,
   unusedMasterPayslipCategories,
   upsertMonthSnapshot,
@@ -460,7 +466,7 @@ const MORE_ROOMS = [
   ["weeklies", "Weeklies", "The rules that make the slots you tick on Home"],
   ["monthlies", "Monthlies", "Standing bills, and the month's per diem"],
   ["annual", "Annual", "Renewals and once-a-year bills, saved monthly"],
-  ["pots", "Pots", "What you hold, and pension names"],
+  ["pots", "Pots", "What you hold, and your pensions over time"],
   ["payslips", "Payslips", "Net pay per person, per month"],
   ["ani", "£100k", "Adjusted net income against the childcare cliff"],
   ["giving", "Giving", "Donations and Gift Aid"],
@@ -1214,8 +1220,8 @@ function potsScreen() {
     : "";
   return shell({
     title: "Pots.",
-    lede: "What you hold today, and pension names.",
-    help: "Named pots and today’s figure, logged month by month so the line can be drawn. Pensions are names and status only — no policy or NI numbers.",
+    lede: "What you hold today, and your pensions.",
+    help: "Named pots and pensions with today’s figure, logged month by month so the line can be drawn. Updating a figure keeps the earlier months. No policy or NI numbers.",
     back: "",
     extra: hh.pots.length ? `<div class="dash single"><div class="stat"><span>Pots total</span><strong>${formatMoney(total)}</strong></div></div>${potHistoryGraphic(hh.pots)}${reminder}` : "",
     body: `
@@ -1231,13 +1237,21 @@ function potsScreen() {
       </section>
       <section class="block">
         ${sectionHead("Pensions", "add-pension", "Add")}
-        ${hh.pensions.length ? hh.pensions.map((item) => lineRow({
-          edit: "edit-pension",
-          id: item.id,
-          title: item.name,
-          detail: `${pensionLabel(item.status)}${item.note ? ` · ${item.note}` : ""}`,
-          amount: "",
-        })).join("") : emptyLines("Optional. Name and status only.", "add-pension", "Add a pension name")}
+        ${pensionsSummary(hh.pensions)}
+        ${hh.pensions.length ? hh.pensions.map((item) => {
+          const latest = pensionLatest(item);
+          return lineRow({
+            edit: "edit-pension",
+            id: item.id,
+            title: item.name,
+            detail: [
+              pensionLabel(item.status),
+              latest ? `Updated ${dateLabel(latest.updatedOn || `${latest.month}-01`)}` : "Add today’s value",
+              item.note,
+            ].filter(Boolean).join(" · "),
+            amount: latest ? formatMoney(latest.amountPence) : "",
+          });
+        }).join("") : emptyLines("Optional. Add each pension and today’s value.", "add-pension", "Add a pension")}
       </section>
     `,
   });
@@ -1248,10 +1262,35 @@ function pensionLabel(status) {
 }
 
 function potHistoryGraphic(pots) {
-  const series = potHistorySeries(pots);
+  return historyGraphic(potHistorySeries(pots), {
+    label: "Pot values over time",
+    empty: "A line appears here once a pot has more than one month logged.",
+    caption: "Increase and decrease across logged months.",
+  });
+}
+
+/**
+ * Pensions draw on the same chart as pots. A pension added later than another
+ * has no figure for the earlier months, so its line starts at its first entry
+ * instead of climbing from £0, and a key names each line when there are several.
+ */
+function pensionsSummary(pensions) {
+  const valued = pensionsWithValues(pensions);
+  if (!valued.length) return "";
+  const stat = `<div class="dash single"><div class="stat"><span>Pensions total</span><strong>${formatMoney(pensionsTotalPence(pensions))}</strong></div></div>`;
+  return `${stat}${historyGraphic(potHistorySeries(valued), {
+    label: "Pension values over time",
+    empty: "A line appears here once a pension has more than one month logged.",
+    caption: "Latest value each month.",
+    skipMissing: true,
+    legend: valued.length > 1,
+  })}`;
+}
+
+function historyGraphic(series, { label, empty, caption, skipMissing = false, legend = false }) {
   const months = series[0]?.points.map((point) => point.month) || [];
   if (months.length < 2) {
-    return `<p class="helper">A line appears here once a pot has more than one month logged.</p>`;
+    return `<p class="helper">${esc(empty)}</p>`;
   }
   const values = series.flatMap((item) => item.points.map((point) => point.amountPence).filter((value) => value != null));
   const max = Math.max(1, ...values);
@@ -1264,19 +1303,30 @@ function potHistoryGraphic(pots) {
   const yFor = (value) => pad.top + innerH - ((value || 0) / max) * innerH;
   const colors = ["#16715c", "#ad4e42", "#3d4f8c", "#8a5a1f", "#5b4b8a", "#2f6f7a"];
   const polylines = series.map((item, seriesIndex) => {
-    const points = item.points
-      .map((point, index) => `${xFor(index).toFixed(1)},${yFor(point.amountPence).toFixed(1)}`)
+    const color = colors[seriesIndex % colors.length];
+    const drawn = item.points
+      .map((point, index) => ({ point, index }))
+      .filter(({ point }) => !skipMissing || point.amountPence != null);
+    const points = drawn
+      .map(({ point, index }) => `${xFor(index).toFixed(1)},${yFor(point.amountPence).toFixed(1)}`)
       .join(" ");
-    return `<polyline fill="none" stroke="${colors[seriesIndex % colors.length]}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" points="${points}"></polyline>`;
+    const dots = skipMissing
+      ? drawn.filter(({ point }) => point.recorded)
+        .map(({ point, index }) => `<circle cx="${xFor(index).toFixed(1)}" cy="${yFor(point.amountPence).toFixed(1)}" r="2.6" fill="${color}"></circle>`).join("")
+      : "";
+    return `<polyline fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" points="${points}"></polyline>${dots}`;
   }).join("");
   const first = months[0];
   const last = months[months.length - 1];
+  const key = legend
+    ? `<ul class="chart-key">${series.map((item, index) => `<li><span class="chart-key-swatch" style="background:${colors[index % colors.length]}"></span>${esc(item.name)}</li>`).join("")}</ul>`
+    : "";
   return `<figure class="pot-chart">
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Pot values over time">${polylines}
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(label)}">${polylines}
       <text x="${pad.left}" y="${height - 6}" class="pot-chart-label">${esc(monthLabel(first))}</text>
       <text x="${width - pad.right}" y="${height - 6}" text-anchor="end" class="pot-chart-label">${esc(monthLabel(last))}</text>
-    </svg>
-    <figcaption class="helper">Increase and decrease across logged months.</figcaption>
+    </svg>${key}
+    <figcaption class="helper">${esc(caption)}</figcaption>
   </figure>`;
 }
 
@@ -1569,6 +1619,7 @@ function modalMarkup() {
     annual: annualForm,
     pot: potForm,
     pension: pensionForm,
+    "pension-value": pensionValueForm,
     payslip: payslipForm,
     donation: donationForm,
   };
@@ -1934,14 +1985,53 @@ function potForm() {
 
 function pensionForm() {
   const item = modal.item || {};
-  return `<form id="pension-form">${modalHead(item.id ? "Edit pension" : "Add a pension name")}
+  const latest = pensionLatest(item);
+  const history = pensionHistoryRows(item);
+  return `<form id="pension-form">${modalHead(item.id ? "Update pension" : "Add a pension")}
     <label>Name<input required maxlength="80" name="name" value="${esc(item.name)}" placeholder="Workplace pension" /></label>
     <label>Status<select name="status">${PENSION_STATUSES.map((status) => `<option value="${status}" ${status === (item.status || "active") ? "selected" : ""}>${pensionLabel(status)}</option>`).join("")}</select></label>
+    ${moneyLabel(item.id ? "Today’s value" : "Value", "amount", 0, { placeholder: latest ? moneyFieldValue(latest.amountPence) : "0.00" })}
+    <label>Value on<input type="date" name="valueOn" value="${today()}" max="${today()}" /></label>
     <label>Note <span class="optional">optional</span><input maxlength="120" name="note" value="${esc(item.note)}" placeholder="Active membership, nothing else" /></label>
-    <p class="helper">Names and status only. Do not store NI or policy numbers here.</p>
+    ${formHelp("Leave the value blank to change only the name, status or note. A value is kept against its month, as pots are: earlier months stay in the history, and a second figure in the same month replaces that month’s. Do not store NI or policy numbers here.")}
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">${item.id ? "Save" : "Add pension"}</button>
+    ${item.id ? pensionHistoryBlock(item, history) : ""}
     ${item.id ? '<button class="danger-link" type="button" data-action="confirm-delete-pension">Delete pension</button>' : ""}
+  </form>`;
+}
+
+function pensionHistoryBlock(item, history) {
+  if (!history.length) return `<p class="helper">No values yet. Type today’s value above and save.</p>`;
+  const chart = history.length > 1
+    ? historyGraphic(potHistorySeries([item]), {
+      label: `${item.name} value over time`,
+      empty: "",
+      caption: "Value at each logged month.",
+      skipMissing: true,
+    })
+    : "";
+  return `<section class="pension-history" aria-label="Value history">
+    <h3>History</h3>
+    ${chart}
+    ${history.map((entry) => `<button class="pension-history-row" type="button" data-action="edit-pension-value" data-id="${esc(entry.month)}">
+      <span class="line-copy"><strong>${esc(monthLabel(entry.month))}</strong><small>${esc(entry.updatedOn ? `Value on ${dateLabel(entry.updatedOn)}` : "Logged month")}${entry.changePence == null ? "" : ` · ${entry.changePence >= 0 ? "+" : "−"}${esc(formatMoney(Math.abs(entry.changePence)))}`}</small></span>
+      <span class="line-amount">${esc(formatMoney(entry.amountPence))}</span>
+    </button>`).join("")}
+    <p class="helper">Tap an entry to correct or remove it.</p>
+  </section>`;
+}
+
+function pensionValueForm() {
+  const pension = findIn("pensions", modal.pensionId) || {};
+  const entry = (pension.snapshots || []).find((item) => item.month === modal.month) || {};
+  return `<form id="pension-value-form">${modalHead(`${pension.name || "Pension"} · ${monthLabel(modal.month)}`)}
+    ${moneyLabel("Value", "amount", entry.amountPence, { required: true })}
+    <label>Value on<input required type="date" name="valueOn" value="${esc(entry.updatedOn || `${modal.month}-01`)}" max="${today()}" /></label>
+    <p class="form-error" id="form-error"></p>
+    <button class="primary wide" type="submit">Save entry</button>
+    <button class="secondary wide" type="button" data-action="back-to-pension">Back</button>
+    <button class="danger-link" type="button" data-action="confirm-delete-pension-value">Remove this entry</button>
   </form>`;
 }
 
@@ -2440,6 +2530,11 @@ document.addEventListener("click", async (event) => {
   if (action === "edit-pot") openItem("pot", "pots", id);
   if (action === "add-pension") openItem("pension");
   if (action === "edit-pension") openItem("pension", "pensions", id);
+  if (action === "edit-pension-value" && modal?.item?.id) {
+    modal = { kind: "pension-value", pensionId: modal.item.id, month: id };
+    renderModal();
+  }
+  if (action === "back-to-pension" && modal?.pensionId) openItem("pension", "pensions", modal.pensionId);
   if (action === "add-payslip") openItem("payslip");
   if (action === "edit-payslip") openItem("payslip", "payslips", id);
   if (action === "add-donation") openItem("donation");
@@ -2575,7 +2670,11 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-delete-fromsavings") askDelete("fromsavings", modal.item.id, "this transfer in");
   if (action === "confirm-delete-annual") askDelete("annual", modal.item.id, "this annual bill");
   if (action === "confirm-delete-pot") askDelete("pot", modal.item.id, "this pot");
-  if (action === "confirm-delete-pension") askDelete("pension", modal.item.id, "this pension name");
+  if (action === "confirm-delete-pension") askDelete("pension", modal.item.id, "this pension", "The pension and its value history are removed.");
+  if (action === "confirm-delete-pension-value") {
+    modal = { kind: "delete", target: "pension-value", id: modal.pensionId, month: modal.month, label: `the ${monthLabel(modal.month)} value`, copy: "Only this month’s figure goes. The pension and its other months stay." };
+    renderModal();
+  }
   if (action === "fill-payslip-from-last") {
     snapshotPayslipForm();
     const current = modal.payslip || {};
@@ -2650,10 +2749,16 @@ document.addEventListener("click", async (event) => {
       if (targetModal.target === "annual") hh.annualBills = hh.annualBills.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "pot") hh.pots = hh.pots.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "pension") hh.pensions = hh.pensions.filter((item) => item.id !== targetModal.id);
+      if (targetModal.target === "pension-value") {
+        const pension = hh.pensions.find((item) => item.id === targetModal.id);
+        if (!pension) throw new Error("That pension is gone.");
+        Object.assign(pension, removePensionValue(pension, targetModal.month));
+      }
       if (targetModal.target === "payslip") hh.payslips = hh.payslips.filter((item) => item.id !== targetModal.id);
       if (targetModal.target === "donation") hh.donations = hh.donations.filter((item) => item.id !== targetModal.id);
     });
-    if (saved) { closeModal(); showToast("Deleted"); }
+    if (saved && targetModal.target === "pension-value") { openItem("pension", "pensions", targetModal.id); showToast("Entry removed"); }
+    else if (saved) { closeModal(); showToast("Deleted"); }
     else showToast(sync.message || "Could not delete");
   }
   if (action === "sign-out") signOut();
@@ -2733,6 +2838,7 @@ document.addEventListener("submit", (event) => {
     "annual-form": saveAnnual,
     "pot-form": savePot,
     "pension-form": savePension,
+    "pension-value-form": savePensionValue,
     "payslip-form": savePayslip,
     "donation-form": saveDonation,
   };
@@ -3343,12 +3449,55 @@ async function savePension(event) {
     list: "pensions",
     toastAdd: "Pension added",
     toastEdit: "Pension updated",
-    build: (data) => ({
-      name: requireName(data.get("name"), "name"),
-      status: data.get("status") || "active",
-      note: String(data.get("note") || "").trim(),
-    }),
+    build: (data) => {
+      const payload = {
+        name: requireName(data.get("name"), "name"),
+        status: data.get("status") || "active",
+        note: String(data.get("note") || "").trim(),
+      };
+      const typed = String(data.get("amount") || "").trim();
+      if (typed) {
+        const date = String(data.get("valueOn") || "") || today();
+        if (date > today()) throw new Error("The value date cannot be in the future.");
+        Object.assign(payload, setPensionValue(modal.item || {}, { date, amountPence: requireMoney(typed, "value") }));
+      } else if (!modal.item?.id) {
+        payload.snapshots = [];
+      }
+      return payload;
+    },
   });
+}
+
+async function savePensionValue(event) {
+  event.preventDefault();
+  const data = new FormData(event.target);
+  const { pensionId, month } = modal;
+  let amountPence;
+  let date;
+  try {
+    amountPence = requireMoney(data.get("amount"), "value");
+    date = String(data.get("valueOn") || "");
+    if (!date) throw new Error("Pick the date the value is from.");
+    if (date > today()) throw new Error("The value date cannot be in the future.");
+    const pension = findIn("pensions", pensionId);
+    const clash = date.slice(0, 7) !== month && (pension?.snapshots || []).some((item) => item.month === date.slice(0, 7));
+    if (clash) throw new Error(`${monthLabel(date.slice(0, 7))} already has a value. Edit that entry instead.`);
+  } catch (error) {
+    return showFormError(error.message);
+  }
+  setBusy(event.target, true);
+  const saved = await withStoreUpdate(() => {
+    const pension = household().pensions.find((item) => item.id === pensionId);
+    if (!pension) throw new Error("That pension is gone.");
+    Object.assign(pension, setPensionValue(pension, { date, amountPence, replaceMonth: month }));
+  });
+  if (!saved) {
+    showFormError(sync.message || "Could not save.");
+    setBusy(event.target, false);
+    return;
+  }
+  openItem("pension", "pensions", pensionId);
+  showToast("Entry updated");
 }
 
 async function savePayslip(event) {

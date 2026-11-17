@@ -1442,6 +1442,27 @@ legend { padding: 0; margin-bottom: 7px; }
 .pot-chart svg { display: block; width: 100%; height: auto; }
 .pot-chart-label { fill: var(--muted); font-size: 9px; font-weight: 700; }
 .pot-reminder { margin: 0 0 10px; }
+.chart-key { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 0; padding: 0; font-size: 0.82rem; color: var(--ink); }
+.chart-key li { display: flex; align-items: center; gap: 6px; }
+.chart-key-swatch { width: 12px; height: 4px; border-radius: 2px; flex: none; }
+.pension-history { margin: 18px 0 4px; }
+.pension-history h3 { margin: 0 0 8px; font-size: 1rem; }
+.pension-history-row {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  padding: 11px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.pension-history .helper { margin: 8px 0 0; }
 .extra-fields { margin: 0; }
 .extra-fields p { margin: 12px 0 14px; }
 .hidden { display: none !important; }
