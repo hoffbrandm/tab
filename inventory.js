@@ -9,6 +9,20 @@
  * that returns the same shape can replace them without touching the screens.
  */
 
+import { levenshtein, normalise, phraseScore, singular, tokens, wordSimilarity } from "./inventory-text.js";
+import {
+  addMishearAlias,
+  autocorrectDictation,
+  consolidateInventory,
+  findExistingByName,
+  mergeTwoItems,
+  nearDuplicatePairs,
+  normaliseItemKey,
+  rankItemsEnhanced,
+} from "./inventory-match.js";
+
+export { addMishearAlias, consolidateInventory, findExistingByName, mergeTwoItems, nearDuplicatePairs, normaliseItemKey, rankItemsEnhanced, suggestItemNames } from "./inventory-match.js";
+
 export const INVENTORY_FILENAME = "inventory.json";
 export const STOCK_LEVELS = ["plenty", "low", "out"];
 export const STOCK_LABELS = { plenty: "Plenty", low: "Low", out: "Run out" };
@@ -108,19 +122,27 @@ export function inventoryToContent(inventory) {
 }
 
 /** Save what was said: new item or an existing one, with a line of history. */
-export function applyUpdate(inventory, change, { now = new Date(), id } = {}) {
+export function applyUpdate(inventory, change, { now = new Date(), id, forceNew = false } = {}) {
   const at = now.toISOString();
   const items = inventory.items;
-  const existing = change.itemId ? items.find((item) => item.id === change.itemId) : null;
+  let existing = change.itemId ? items.find((item) => item.id === change.itemId) : null;
+  if (!existing && !forceNew && change.name) {
+    const found = findExistingByName(inventory, change.name);
+    if (found) existing = found.item;
+  }
   const location = cleanString(change.location, 160);
   const stock = STOCK_LEVELS.includes(change.stock) ? change.stock : "plenty";
   if (existing) {
     const before = structuredClone(existing);
-    existing.name = cleanString(change.name, 80) || existing.name;
+    const nextName = cleanString(change.name, 80);
+    if (nextName && normaliseItemKey(nextName) !== normaliseItemKey(existing.name)) existing.name = nextName;
     if (change.location != null) existing.location = location;
     existing.stock = stock;
     if (change.note != null) existing.note = cleanString(change.note, 200);
-    if (Array.isArray(change.aliases)) existing.aliases = change.aliases.map((alias) => cleanString(alias, 60)).filter(Boolean).slice(0, 10);
+    let aliases = Array.isArray(change.aliases) ? change.aliases : existing.aliases;
+    if (Array.isArray(change.aliases)) aliases = change.aliases;
+    if (change.learnAlias) aliases = addMishearAlias(existing, change.learnAlias, existing.name);
+    if (Array.isArray(aliases)) existing.aliases = aliases.map((alias) => cleanString(alias, 60)).filter(Boolean).slice(0, 10);
     existing.updatedAt = at;
     existing.history = [{ at, location: existing.location, stock: existing.stock }, ...(existing.history || [])].slice(0, HISTORY_LIMIT);
     return { item: existing, before };
@@ -131,7 +153,10 @@ export function applyUpdate(inventory, change, { now = new Date(), id } = {}) {
     location,
     stock,
     note: cleanString(change.note, 200),
-    aliases: Array.isArray(change.aliases) ? change.aliases.map((alias) => cleanString(alias, 60)).filter(Boolean).slice(0, 10) : [],
+    aliases: [
+      ...(Array.isArray(change.aliases) ? change.aliases.map((alias) => cleanString(alias, 60)).filter(Boolean) : []),
+      ...(change.learnAlias ? [cleanString(change.learnAlias, 60)] : []),
+    ].filter(Boolean).slice(0, 10),
     createdAt: at,
     updatedAt: at,
     history: [{ at, location, stock }],
@@ -181,81 +206,7 @@ export function knownLocations(inventory) {
 
 /* ------------------------------------------------------------ text tools */
 
-const STOPWORDS = new Set("a an the some any our my your his her their this that these those of for to and or with is are was were be been it its them they there here please just spare extra new old more".split(" "));
-
-export function normalise(text) {
-  return String(text || "")
-    .toLowerCase()
-    .replace(/[’‘`]/g, "'")
-    .replace(/&/g, " and ")
-    .replace(/[“”"()[\]{}*_#@~^|\\/]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export function singular(word) {
-  if (word.length <= 3) return word;
-  if (/ies$/.test(word) && word.length > 4) return `${word.slice(0, -3)}y`;
-  if (/(ches|shes|xes|sses|zzes)$/.test(word)) return word.slice(0, -2);
-  if (/ves$/.test(word) && word.length > 5) return `${word.slice(0, -3)}f`;
-  if (/[^su]s$/.test(word)) return word.slice(0, -1);
-  return word;
-}
-
-export function tokens(text) {
-  return normalise(text)
-    .replace(/[^a-z0-9' -]/g, " ")
-    .replace(/-/g, " ")
-    .split(" ")
-    .map((word) => word.replace(/^'+|'+$/g, "").replace(/'s$/, ""))
-    .filter((word) => word && !STOPWORDS.has(word))
-    .map(singular);
-}
-
-export function levenshtein(a, b) {
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  let prev = Array.from({ length: b.length + 1 }, (_, index) => index);
-  for (let i = 1; i <= a.length; i += 1) {
-    const row = [i];
-    for (let j = 1; j <= b.length; j += 1) {
-      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-    }
-    prev = row;
-  }
-  return prev[b.length];
-}
-
-/** How alike two words are: exact, a prefix ("screwdriv"), or a near-typo ("hoks"). */
-export function wordSimilarity(a, b) {
-  if (a === b) return 1;
-  if (a.length >= 3 && b.length >= 3 && (a.startsWith(b) || b.startsWith(a))) {
-    return Math.min(a.length, b.length) >= 4 ? 0.9 : 0.75;
-  }
-  // One word inside a compound: "glue" in "superglue", "bag" stays out (too short).
-  if (Math.min(a.length, b.length) >= 4 && (a.includes(b) || b.includes(a))) return 0.8;
-  const longest = Math.max(a.length, b.length);
-  if (longest < 4) return 0;
-  const ratio = 1 - levenshtein(a, b) / longest;
-  return ratio >= 0.74 ? ratio * 0.9 : 0;
-}
-
-/**
- * How well what was said names an item. Weighted to what was said: "hooks"
- * fully covered by "small picture hooks" scores 0.8, while "coat hooks"
- * against it scores about 0.45 because "coat" is not there.
- */
-export function phraseScore(said, name) {
-  const q = Array.isArray(said) ? said : tokens(said);
-  const n = Array.isArray(name) ? name : tokens(name);
-  if (!q.length || !n.length) return 0;
-  if (q.join(" ") === n.join(" ")) return 1;
-  const best = (word, pool) => pool.reduce((top, other) => Math.max(top, wordSimilarity(word, other)), 0);
-  const coverQ = q.reduce((sum, word) => sum + best(word, n), 0) / q.length;
-  const coverN = n.reduce((sum, word) => sum + best(word, q), 0) / n.length;
-  return Math.min(0.99, 0.7 * coverQ + 0.3 * coverN);
-}
+export { levenshtein, normalise, phraseScore, singular, tokens, wordSimilarity } from "./inventory-text.js";
 
 function itemNameScore(saidTokens, item) {
   const names = [item.name, ...(item.aliases || [])];
@@ -264,11 +215,7 @@ function itemNameScore(saidTokens, item) {
 
 /** Existing items ranked against a spoken name. */
 export function rankItems(text, items) {
-  const said = tokens(text);
-  return items
-    .map((item) => ({ item, score: itemNameScore(said, item) }))
-    .filter((row) => row.score > 0.3)
-    .sort((a, b) => b.score - a.score);
+  return rankItemsEnhanced(text, items);
 }
 
 /* -------------------------------------------------------- stock phrases */
@@ -474,7 +421,7 @@ function withoutStock(clause, phrase) {
 export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
   const said = cleanString(text, 600);
   const items = inventory?.items || [];
-  let t = normalise(said).replace(FILLERS, " ").replace(/\s+/g, " ").trim();
+  let t = autocorrectDictation(normalise(said).replace(FILLERS, " ").replace(/\s+/g, " ").trim(), { items });
   const stock = detectStock(t);
   let count = stock?.count ?? null;
 
@@ -574,9 +521,9 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
   } else if (!pronoun) {
     candidates = rankItems(itemText, items).slice(0, 4);
     const [top, second] = candidates;
-    if (top && top.score >= 0.75) {
+    if (top && top.score >= 0.72) {
       item = top.item;
-      ambiguous = Boolean(second && second.score >= 0.7 && top.score - second.score < 0.12);
+      ambiguous = Boolean(second && second.score >= 0.68 && top.score - second.score < 0.12);
       if (ambiguous) {
         // Close call: the one touched most recently is the likelier one in hand.
         const close = candidates.filter((row) => row.score >= 0.7 && top.score - row.score < 0.12);

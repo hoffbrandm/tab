@@ -1548,6 +1548,25 @@ textarea:focus-visible { outline: 3px solid #9bd9c6; outline-offset: 2px; }
   gap: 10px;
   margin-bottom: 14px;
 }
+.inv-near-dup { margin: 8px 0 4px; }
+.inv-near-dup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+}
+.inv-mic-optional {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  font-size: 0.86rem;
+  font-weight: 650;
+  color: var(--muted);
+}
 .inv-speak {
   display: flex;
   align-items: center;
