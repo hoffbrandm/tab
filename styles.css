@@ -1697,4 +1697,18 @@ textarea:focus-visible { outline: 3px solid #9bd9c6; outline-offset: 2px; }
 .inv-history { margin: 6px 0 0; padding-left: 18px; font-weight: 500; line-height: 1.5; }
 .inv-history span { color: var(--muted); }
 .inv-smart { margin-top: 18px; }
+.inv-understanding { font-size: 0.82rem; color: var(--muted); margin: 0 0 6px; }
+.inv-progress {
+  height: 6px;
+  border-radius: 4px;
+  background: #e4e3dd;
+  margin: 8px 0 12px;
+  overflow: hidden;
+}
+.inv-progress span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+  transition: width 0.2s ease;
+}
 .dock-item { overflow-wrap: anywhere; }

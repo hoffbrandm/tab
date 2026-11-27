@@ -130,6 +130,24 @@ import {
 import { createInventoryStore, createMemoryInventoryStore } from "./inventory-store.js";
 import { loadSemantic, onSemanticState, semanticScores, semanticState } from "./inventory-semantic.js";
 import { listen, speechErrorMessage, speechSupported } from "./inventory-speech.js";
+import {
+  AI_MODEL_IDS,
+  AI_PROVIDER_IDS,
+  readAiSettings,
+  smartUnderstandingAvailable,
+  writeAiSettings,
+} from "./inventory-ai-settings.js";
+import { proposalFromShortcutJson, testInventoryAiKey, understandSearchSmart, understandUpdateSmart } from "./inventory-ai.js";
+import {
+  connectionIsCellular,
+  ensureOnDeviceEngine,
+  ONDEVICE_MODEL_LABEL,
+  ONDEVICE_MODEL_SIZE,
+  onDeviceState,
+  onOnDeviceState,
+  unloadOnDeviceEngine,
+  webGpuUsable,
+} from "./inventory-ondevice.js";
 
 const LOCAL_KEY = "tab.personal.v1";
 const INV_BROWSER_MIC_KEY = "tab.inventory.browserMic";
@@ -182,10 +200,14 @@ const inventoryQueue = createPersistQueue({
 });
 
 function parseHash() {
-  const hash = location.hash.replace(/^#\/?/, "");
-  const match = hash.match(/^friend\/([\w-]+)$/);
-  if (match) return { name: "friend", friendId: match[1] };
-  return SCREENS.includes(hash) ? { name: hash } : { name: "home" };
+  const raw = location.hash.replace(/^#\/?/, "");
+  const [path, queryString] = raw.split("?");
+  const query = queryString ? new URLSearchParams(queryString) : null;
+  const match = path.match(/^friend\/([\w-]+)$/);
+  if (match) return { name: "friend", friendId: match[1], query };
+  const base = path.split("/")[0];
+  if (SCREENS.includes(base)) return { name: base, query };
+  return { name: "home", query };
 }
 
 function hashFor(next) {
@@ -1532,6 +1554,20 @@ function moreScreen() {
         })).join("")}
       </section>
       <section class="block">
+        ${sectionHead("Inventory")}
+        ${lineRow({
+          edit: "inv-ai-settings",
+          id: "",
+          title: "Smart understanding",
+          detail: readAiSettings(localStorage).onDeviceInstalled
+            ? `${ONDEVICE_MODEL_LABEL} on this device`
+            : smartUnderstandingAvailable(readAiSettings(localStorage))
+              ? "Cloud fallback configured"
+              : "On-device model (opt-in) for dictated updates",
+          amount: "<span class=\"line-chevron\" aria-hidden=\"true\">›</span>",
+        })}
+      </section>
+      <section class="block">
         ${sectionHead("Payslip categories", "add-payslip-category-master", "Add")}
         <p class="helper">Names for pay and deduction lines on your slip.</p>
         <details class="room-help">
@@ -1678,6 +1714,7 @@ function modalMarkup() {
     donation: donationForm,
     "inv-update": inventoryUpdateForm,
     "inv-item": inventoryItemForm,
+    "inv-ai-settings": inventoryAiSettingsForm,
   };
   return kinds[modal.kind] ? kinds[modal.kind]() : "";
 }
@@ -2540,6 +2577,25 @@ document.addEventListener("click", async (event) => {
     closeModal();
     setScreen({ name: id });
   }
+  if (action === "inv-ai-settings") {
+    event.preventDefault();
+    openInventoryAiSettings();
+  }
+  if (action === "inv-ondevice-download") {
+    event.preventDefault();
+    startOnDeviceDownload();
+  }
+  if (action === "inv-ondevice-remove") {
+    event.preventDefault();
+    unloadOnDeviceEngine({ storage: localStorage }).then(() => {
+      showToast("On-device model removed");
+      renderModal();
+    });
+  }
+  if (action === "inv-ai-test-key") {
+    event.preventDefault();
+    testCloudKeyFromModal();
+  }
   if (action === "go-month") {
     // Same floor as the arrows: the months listed all start at this one, and a
     // stale one in the markup must not take the app backwards.
@@ -2936,6 +2992,7 @@ document.addEventListener("submit", (event) => {
     "donation-form": saveDonation,
     "inv-update-form": saveInventoryUpdate,
     "inv-item-form": saveInventoryItem,
+    "inv-ai-settings-form": saveInventoryAiSettings,
     "inv-search-form": (submitted) => {
       submitted.preventDefault();
       const input = submitted.target.querySelector("#inv-search");
@@ -3913,6 +3970,10 @@ async function loadInventory() {
     inventoryState = { name: "error", message: error.message || "The inventory could not be opened." };
   }
   if (boot.name === "ready" && screen.name === "inventory" && !modal) render();
+  if (inventoryState.name === "ready") {
+    maybeLoadOnDevice();
+    tryOpenInventoryShortcut();
+  }
 }
 
 async function persistInventory() {
@@ -4096,8 +4157,21 @@ let searchTicket = 0;
 async function runInventorySearch(text) {
   inventorySearch.text = text;
   const ticket = ++searchTicket;
-  const parsed = understandSearch(text);
-  inventorySearch.found = { ...searchItems(inventory, parsed), query: parsed.query, place: parsed.place };
+  const settings = readAiSettings(localStorage);
+  const smart = await understandSearchSmart(text, inventory, { settings, fetchImpl: fetch });
+  const parsed = smart.parsed;
+  inventorySearch.source = smart.source;
+  inventorySearch.found = { ...searchItems(inventory, parsed), query: parsed.query, place: parsed.place, aiMatches: smart.matches };
+  if (smart.matches?.length) {
+    const byName = new Map(inventory.items.map((item) => [item.name, item]));
+    inventorySearch.found.results = smart.matches
+      .map((row, index) => {
+        const item = byName.get(row.item);
+        return item ? { item, score: 1 - index * 0.05 } : null;
+      })
+      .filter(Boolean);
+    inventorySearch.found.mode = "search";
+  }
   refreshInventoryResults();
   if (semanticState() !== "ready" || parsed.place || !text.trim()) return;
   const scores = await semanticScores(parsed.query || text, inventory.items);
@@ -4208,8 +4282,23 @@ async function proposeUpdate(text) {
     renderModal({ focus: false });
     return;
   }
-  const proposal = understandUpdate(said, inventory, { lastItemId: lastInventoryItemId });
-  proposal.heardItemName = proposal.name;
+  const settings = readAiSettings(localStorage);
+  modal.phase = "think";
+  modal.text = said;
+  modal.error = "";
+  renderModal({ focus: false });
+  const smart = await understandUpdateSmart(said, inventory, {
+    settings,
+    lastItemId: lastInventoryItemId,
+    fetchImpl: fetch,
+  });
+  if (modal?.text !== said) return;
+  const proposal = smart.proposal;
+  proposal.heardItemName = proposal.itemText || proposal.name;
+  proposal.understandingSource = smart.source;
+  proposal.understandingFallback = smart.fallback;
+  proposal.understandingNote = smart.fallbackNote || "";
+  proposal.aiProposals = smart.proposals || [proposal];
   if (proposal.isNew && !proposal.forceNew) {
     const found = findExistingByName(inventory, proposal.name);
     if (found) {
@@ -4266,7 +4355,148 @@ function locationField(value, { suggestions = [], placeholder = "e.g. Cupboard u
     ${chips.length ? `<div class="inv-chips" aria-label="Places used before">${chips.map((place) => `<button type="button" class="inv-chip" data-action="inv-place" data-extra="${esc(place)}">${esc(place)}</button>`).join("")}</div>` : ""}`;
 }
 
+function understandingSourceLabel(source, fallback) {
+  if (source === "on-device") return "Understood on this device";
+  if (source === "cloud") return "Understood by AI (cloud fallback)";
+  if (source === "shortcut") return "From Shortcuts";
+  return fallback ? "Basic matching" : "Basic matching";
+}
+
+function openInventoryAiSettings() {
+  modal = {
+    kind: "inv-ai-settings",
+    settings: readAiSettings(localStorage),
+    testMessage: "",
+    downloadText: "",
+    progress: null,
+  };
+  onOnDeviceState(() => { if (modal?.kind === "inv-ai-settings") renderModal({ focus: false }); });
+  renderModal();
+}
+
+async function startOnDeviceDownload() {
+  if (!modal || modal.kind !== "inv-ai-settings") return;
+  const settings = readAiSettings(localStorage);
+  if (connectionIsCellular() && !settings.allowCellularDownload) {
+    modal.downloadText = "On mobile data. Turn on “Allow download on mobile data” or use Wi‑Fi.";
+    renderModal({ focus: false });
+    return;
+  }
+  if (!webGpuUsable()) {
+    modal.downloadText = "WebGPU is not available in this browser. Use basic matching or iOS 26+ standalone Safari.";
+    renderModal({ focus: false });
+    return;
+  }
+  modal.downloadText = "Downloading…";
+  modal.progress = { text: "Starting…", progress: 0 };
+  renderModal({ focus: false });
+  try {
+    await ensureOnDeviceEngine({
+      storage: localStorage,
+      onProgress: (report) => {
+        modal.progress = { text: report.text, progress: report.progress ?? 0 };
+        renderModal({ focus: false });
+      },
+    });
+    modal.downloadText = "Model ready for offline use.";
+    modal.progress = null;
+    showToast("On-device model ready");
+  } catch (error) {
+    modal.downloadText = String(error.message || error);
+    modal.progress = null;
+  }
+  renderModal({ focus: false });
+}
+
+async function testCloudKeyFromModal() {
+  if (modal?.kind !== "inv-ai-settings") return;
+  const form = document.getElementById("inv-ai-settings-form");
+  const data = new FormData(form);
+  const provider = data.get("cloudProvider");
+  const apiKey = String(data.get("cloudApiKey") || "");
+  modal.testMessage = "Checking…";
+  renderModal({ focus: false });
+  const result = await testInventoryAiKey({ provider, apiKey, fetchImpl: fetch });
+  modal.testMessage = result.message;
+  renderModal({ focus: false });
+}
+
+function maybeLoadOnDevice() {
+  const settings = readAiSettings(localStorage);
+  if (!settings.onDeviceInstalled || !webGpuUsable() || onDeviceState() === "ready" || onDeviceState() === "downloading") return;
+  ensureOnDeviceEngine({ storage: localStorage }).catch(() => {});
+}
+
+function tryOpenInventoryShortcut() {
+  const add = screen.query?.get("add");
+  if (!add || screen.name !== "inventory" || !inventoryReady()) return;
+  try {
+    const proposal = proposalFromShortcutJson(decodeURIComponent(add), inventory, "From Shortcuts");
+    proposal.understandingSource = "shortcut";
+    modal = { kind: "inv-update", phase: "confirm", text: add, proposal, error: "" };
+    renderModal();
+    history.replaceState(null, "", "#/inventory");
+    screen = parseHash();
+  } catch {
+    showToast("Could not read shortcut payload");
+  }
+}
+
+function inventoryAiSettingsForm() {
+  const settings = modal.settings || readAiSettings(localStorage);
+  const gpu = webGpuUsable();
+  const ods = onDeviceState();
+  const progress = modal.progress;
+  return `<form id="inv-ai-settings-form">${modalHead("Smart understanding")}
+    <p class="helper">Primary path is an on-device model via WebGPU — names and places only, cached on this phone. Cloud API keys are optional fallback only.</p>
+    <p class="helper">${gpu ? "WebGPU: available" : "WebGPU: not available here — rules matching only until you use a WebGPU browser (e.g. iOS 26 home-screen app)."}</p>
+    <section class="block">
+      <h3>On this device</h3>
+      <p class="helper"><strong>${esc(ONDEVICE_MODEL_LABEL)}</strong> · ${esc(ONDEVICE_MODEL_SIZE)} download · ${settings.onDeviceInstalled ? (ods === "ready" ? "Ready" : ods) : "Not downloaded"}</p>
+      ${progress ? `<p class="helper inv-dl-status" role="status">${esc(progress.text)} ${Math.round((progress.progress || 0) * 100)}%</p><div class="inv-progress" aria-hidden="true"><span style="width:${Math.round((progress.progress || 0) * 100)}%"></span></div>` : ""}
+      ${modal.downloadText ? `<p class="helper">${esc(modal.downloadText)}</p>` : ""}
+      <label class="check-row"><input type="checkbox" name="allowCellularDownload" ${settings.allowCellularDownload ? "checked" : ""} /><span>Allow download on mobile data</span></label>
+      ${!settings.onDeviceInstalled || ods !== "ready"
+    ? `<button type="button" class="primary wide" data-action="inv-ondevice-download">Download model</button>`
+    : `<button type="button" class="secondary wide" data-action="inv-ondevice-remove">Remove downloaded model</button>`}
+    </section>
+    <details class="room-help form-help">
+      <summary>Cloud fallback (optional)</summary>
+      <p class="helper">Only used if the on-device model is unavailable. Keys stay in localStorage on this device — never in your gist.</p>
+      <label class="check-row"><input type="checkbox" name="cloudFallback" ${settings.cloudFallback ? "checked" : ""} /><span>Use cloud when on-device fails</span></label>
+      <label>Provider<select name="cloudProvider">
+        <option value="anthropic" ${settings.cloudProvider === "anthropic" ? "selected" : ""}>Anthropic (${AI_MODEL_IDS.anthropic})</option>
+        <option value="gemini" ${settings.cloudProvider === "gemini" ? "selected" : ""}>Google Gemini (${AI_MODEL_IDS.gemini})</option>
+      </select></label>
+      <label>API key <span class="optional">optional</span><input type="password" name="cloudApiKey" autocomplete="off" spellcheck="false" value="${esc(settings.cloudApiKey)}" /></label>
+      <button type="button" class="secondary wide" data-action="inv-ai-test-key">Test key</button>
+      ${modal.testMessage ? `<p class="helper">${esc(modal.testMessage)}</p>` : ""}
+    </details>
+    <button class="primary wide" type="submit">Save</button>
+  </form>`;
+}
+
+function saveInventoryAiSettings(event) {
+  event.preventDefault();
+  const data = new FormData(event.target);
+  writeAiSettings(localStorage, {
+    allowCellularDownload: Boolean(data.get("allowCellularDownload")),
+    cloudFallback: Boolean(data.get("cloudFallback")),
+    cloudProvider: String(data.get("cloudProvider") || "anthropic"),
+    cloudApiKey: String(data.get("cloudApiKey") || ""),
+  });
+  closeModal();
+  showToast("Smart understanding saved");
+  render();
+}
+
 function inventoryUpdateForm() {
+  if (modal.phase === "think") {
+    return `<form id="inv-update-form">${modalHead("Update")}
+      <p class="helper">Working out what you said…</p>
+      <p class="inv-heard">“${esc(modal.text)}”</p>
+    </form>`;
+  }
   if (modal.phase !== "confirm") {
     const browserMic = invBrowserMicOn() && speechSupported(window);
     return `<form id="inv-update-form">${modalHead("Update")}
@@ -4285,8 +4515,10 @@ function inventoryUpdateForm() {
   const status = matched
     ? `${p.autoMatched ? "Matched existing" : "Updating"} <strong>${esc(matched.name)}</strong>${matched.location ? ` · was in ${esc(matched.location)}` : ""}`
     : "New item";
+  const matchLabel = understandingSourceLabel(p.understandingSource, p.understandingFallback);
   return `<form id="inv-update-form">${modalHead("Check and save")}
     ${p.needsSplit ? `<p class="form-error" role="alert">Sounds like more than one item — save this one, then say the other separately.</p>` : ""}
+  <p class="helper inv-understanding">${esc(matchLabel)}${p.understandingFallback && p.understandingNote ? ` · ${esc(p.understandingNote)}` : ""}</p>
     <p class="inv-heard">“${esc(modal.text)}” <button type="button" class="text-button" data-action="inv-reword">Change</button></p>
     <div>
       <label>Item<input name="name" required maxlength="80" value="${esc(p.name)}" autocomplete="off" autocapitalize="words" enterkeyhint="done" list="inv-name-suggest" aria-describedby="inv-name-hint" />
@@ -4370,16 +4602,32 @@ function saveInventoryUpdate(event) {
     if (found) existing = found.item;
   }
   const learnAlias = p.heardItemName && normaliseItemKey(p.heardItemName) !== normaliseItemKey(p.name) ? p.heardItemName : "";
-  saveInventoryChange({
-    itemId: existing?.id || null,
-    name: p.name,
-    // "Here" left blank keeps the place it had rather than wiping it.
-    location: p.location.trim() || existing?.location || "",
-    stock: p.stock,
-    note: p.note,
-    learnAlias,
-    forceNew: Boolean(p.forceNew && !existing),
-  }, existing ? "Updated" : "Added");
+  const rows = p.aiProposals?.length > 1 ? p.aiProposals : [p];
+  const ok = changeInventory(() => {
+    for (const row of rows) {
+      let ex = row.itemId ? inventoryItem(row.itemId) : null;
+      if (!ex && !row.forceNew) {
+        const found = findExistingByName(inventory, row.name);
+        if (found) ex = found.item;
+      }
+      const alias = row === p ? learnAlias : "";
+      applyUpdate(inventory, {
+        itemId: ex?.id || null,
+        name: row.name,
+        location: row.location.trim() || ex?.location || "",
+        stock: row.stock,
+        note: row.note,
+        learnAlias: alias,
+        forceNew: Boolean(row.forceNew && !ex),
+      });
+    }
+  });
+  if (!ok) return;
+  lastInventoryItemId = inventory.items.at(-1)?.id || lastInventoryItemId;
+  modal = null;
+  if (inventorySearch.text.trim()) runInventorySearch(inventorySearch.text);
+  render();
+  showToast(rows.length > 1 ? `Saved ${rows.length} items` : `${existing ? "Updated" : "Added"} ${p.name}`);
 }
 
 function saveInventoryItem(event) {

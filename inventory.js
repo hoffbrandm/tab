@@ -9,7 +9,7 @@
  * that returns the same shape can replace them without touching the screens.
  */
 
-import { levenshtein, normalise, phraseScore, singular, tokens, wordSimilarity } from "./inventory-text.js";
+import { formatDisplayName, levenshtein, normalise, phraseScore, singular, tokens, wordSimilarity } from "./inventory-text.js";
 import {
   addMishearAlias,
   autocorrectDictation,
@@ -206,7 +206,7 @@ export function knownLocations(inventory) {
 
 /* ------------------------------------------------------------ text tools */
 
-export { levenshtein, normalise, phraseScore, singular, tokens, wordSimilarity } from "./inventory-text.js";
+export { formatDisplayName, levenshtein, normalise, phraseScore, singular, tokens, wordSimilarity } from "./inventory-text.js";
 
 function itemNameScore(saidTokens, item) {
   const names = [item.name, ...(item.aliases || [])];
@@ -227,7 +227,7 @@ const OF_THEM = "(?: of (?:them|those|these|'em|it|the [a-z ]+?))?";
 // Order matters: "running out" and "nearly run out" are low, not out.
 const STOCK_RULES = [
   ["low", new RegExp(`\\b(?:running (?:out|low)|run(?:ning)? short|getting low|nearly (?:run |ran )?(?:out|gone|finished|empty)|almost (?:run |ran )?(?:out|gone|finished|empty)|not (?:got )?(?:many|much|enough|a lot)(?: left)?|only (?:got |have |got about |about )?(?:a couple|a few|a handful|a little|a bit|\\bone\\b|\\btwo\\b|\\bthree\\b|${NUM}|the one)${OF_THEM}(?: left| remaining)?|just (?:a couple|a few|\\bone\\b|\\btwo\\b|${NUM})${OF_THEM} left|(?:a couple|a few|a handful|${NUM})${OF_THEM} (?:left|remaining)|last (?:one|few|couple|pack|packet|box|bottle|roll|bag|tin|tube)|need (?:to (?:buy|get|order) )?(?:more|some more)|need to (?:buy|get|order|restock)|(?:should|must) (?:buy|get|order) (?:more|some)|(?:buy|get|order) more|we'?ve (?:only )?got a couple|we have (?:only )?a couple|there(?:'s| is| are) (?:only )?a couple|low (?:on|stock)|\\blow\\b|few left|hardly any)`), "low"],
-  ["out", /\b(?:(?:have |we've |we have |'ve )?(?:run|ran) out|out of (?:stock|them|those|these|it)|we(?:'re| are) out|none left|no more(?: left)?|nothing left|none at all|all gone|(?:all )?used up|used (?:them|it|those|these) (?:all )?up|used (?:all of )?(?:them|it) all|used the last(?:\s+of)?|finished (?:them|it|those|the lot)|(?:is|are|it's|they're) finished|\bfinished\b|(?:is|are|it's|they're) empty|there(?:'s| is| are) none|(?:got|have) none|zero left|none\b)/, "out"],
+  ["out", /\b(?:(?:have |we've |we have |'ve )?(?:run|ran) out|out of (?:stock|them|those|these|it)|we(?:'re| are) out|none left|no more(?: left)?|nothing left|none at all|all gone|(?:all )?used up|used (?:them|it|those|these) (?:all )?up|used (?:all of )?(?:them|it) all|used the last(?:\s+of)?|finished (?:them|it|those|the lot)|(?:is|are|it's|they're) finished|\bfinished\b|(?:is|are|it's|they're) empty|there(?:'s| is| are) none|(?:got|have) none|zero left|none\b|(?:don't|do not|dont) have any|(?:haven't|have not) got any|we(?:'re| are) empty|out of stock)/, "out"],
   ["plenty", /\b(?:loads|plenty|lots|a lot|tons|heaps|masses|hundreds|half (?:a |the )?(?:box|pack|packet|bag|roll|tin|tub|bottle|tube)|full (?:box|pack|bag|set|tub|tin)|stocked up|restocked|topped up|well stocked|bought (?:more|loads|lots|some|a new|new)|new (?:box|pack|packet|bag|set|roll)|a good (?:amount|number|supply|few)|more than enough|enough|a load|a ton|shed ?loads|loads left|we're fine|we are fine|good for now|all good)\b/, "plenty"],
 ];
 
@@ -297,7 +297,9 @@ const PART_ARTICLES = /^(?:(?:the|a|an|this|that|these|those|our|my|one of the|o
 const ROOM_WORDS = /\b(?:upstairs|downstairs|loft|attic|garage|shed|kitchen|utility|hall|hallway|landing|bathroom|ensuite|en suite|bedroom|nursery|office|study|lounge|living room|dining room|playroom|conservatory|garden|porch|cellar|basement|car|boot|room)\b/;
 const FURNITURE_WORDS = /\b(?:cupboard|wardrobe|closet|cabinet|shelf|shelves|shelving|unit|dresser|desk|sideboard|chest|bookcase|rack|fridge|freezer|larder|pantry|airing|stairs|sink|bed|table|counter|worktop|island|cot|sofa)\b/;
 const CONTAINER_WORDS = /\b(?:box|tub|bag|tin|jar|basket|crate|drawer|caddy|case|pouch|tray|bin|bucket|organiser|organizer|pot|container|envelope|folder|file|toolbox|holdall)\b/;
-const LOCATION_CUT = /\s*\b(?:because|cos|cause|so that|so we|so i|so they|for now|for later|just in case|in case|to keep|which is|which are|where we|you know|right|we have|we've|we're|i have|i've|there's|there is|there are|about|roughly|around)\b.*$/;
+const LOCATION_CUT = /\s*\b(?:because|cos|cause|so that|so we|so i|so they|for now|for later|just in case|in case|to keep|which is|which are|where we|you know|right|we have|we've|we're|i have|i've|there's|there is|there are|about|roughly|around|,?\s*but\s+we\b|,?\s*and\s+we\b|,?\s*but\s+it's\b|,?\s*but\s+they're\b)\b.*$/i;
+const BELONGS_IN = /^(?:it|they|this|that)?\s*(?:belongs?|belonging|lives?|goes?)\s+(?:in|at|inside|into)\s+(?:the\s+)?(.+)$/i;
+const IT_IS_IN = /^(?:it|they|this|that)\s+(?:is|are|'s|'re)\s+(?:in|at|inside|into)\s+(?:the\s+)?(.+)$/i;
 
 function capitalise(text) {
   return text ? text[0].toUpperCase() + text.slice(1) : text;
@@ -323,6 +325,7 @@ function cleanItemPhrase(text) {
   item = item.replace(/\s+(?:left|remaining)(?:\s+of\s+them)?$/g, "").trim();
   item = item.replace(/\s+(?:back|away|over|down|up|again|now|as well|too|here|there|safely)$/g, "").trim();
   item = item.replace(/\s+(?:back|away)$/, "").trim();
+  item = item.replace(/'s$/i, "").trim();
   return item;
 }
 
@@ -402,8 +405,45 @@ export function matchLocation(location, known) {
 }
 
 function splitClauses(text) {
-  const boundary = /\s*[,;.!?]+\s*|\s+(?:and|but|so|cos|because)\s+(?=(?:we|we've|we have|we're|there|there's|there are|only|i've|i have|it's|they're|got|just|not|nearly|almost|running|loads|plenty|lots|none|all|need|i think|they are|it is|that's)\b)/;
+  const boundary = /\s*[,;.!?]+\s*|\s+(?:and|but|so|cos|because)\s+(?=(?:we|we've|we have|we're|there|there's|there are|only|i've|i have|it's|they're|got|just|not|nearly|almost|running|loads|plenty|lots|none|all|need|i think|they are|it is|that's|it|they)\b)/i;
   return text.split(boundary).map((part) => part.trim()).filter(Boolean);
+}
+
+/** Terse natural language: "hooks, it belongs in the office, but we don't have any". */
+function parseCommaNaturalLanguage(t) {
+  const parts = t.split(/\s*,\s*/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const hasBelongClause = parts.slice(1).some((part) => BELONGS_IN.test(part) || IT_IS_IN.test(part));
+  if (!hasBelongClause) return null;
+  if (VERB_LEAD.test(t) && /\b(?:put|moved|placed|stashed|took|left|stored)\b/.test(t)) return null;
+  let itemText = parts[0];
+  let locationRaw = "";
+  let stock = detectStock(t);
+  for (const part of parts.slice(1)) {
+    const local = detectStock(part);
+    const stripped = local ? withoutStock(part, local.phrase) : part;
+    if (local && !stripped) {
+      stock = stock || local;
+      continue;
+    }
+    const belong = stripped.match(BELONGS_IN) || stripped.match(IT_IS_IN);
+    if (belong) {
+      const place = belong[1].replace(LOCATION_CUT, "").trim();
+      if (place) locationRaw = `in ${place}`;
+      if (local) stock = stock || local;
+      continue;
+    }
+    const prep = stripped.match(/^(?:in|at|into|inside|on)\s+(?:the\s+)?(.+)$/i);
+    if (prep && !locationRaw) {
+      locationRaw = stripped.replace(LOCATION_CUT, "").trim();
+      if (local) stock = stock || local;
+      continue;
+    }
+    if (local) stock = stock || local;
+  }
+  itemText = cleanItemPhrase(itemText);
+  if (!itemText) return null;
+  return { itemText, locationRaw, stock };
 }
 
 /** Strip what said the stock level from a clause; a clause that only said that is dropped. */
@@ -422,7 +462,8 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
   const said = cleanString(text, 600);
   const items = inventory?.items || [];
   let t = autocorrectDictation(normalise(said).replace(FILLERS, " ").replace(/\s+/g, " ").trim(), { items });
-  const stock = detectStock(t);
+  const commaNatural = parseCommaNaturalLanguage(t);
+  let stock = commaNatural?.stock || detectStock(t);
   let count = stock?.count ?? null;
 
   // Clauses that only state the stock ("we've got loads") come out; one that
@@ -459,7 +500,12 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
   let keepLocation = false;
   let tookOut = false;
 
-  const tookMatch = main.match(/^(?:the\s+)?(.+?)\s+out(?:\s+of\s+.+)?$/);
+  if (commaNatural) {
+    itemText = commaNatural.itemText;
+    locationRaw = commaNatural.locationRaw;
+  }
+
+  const tookMatch = !commaNatural && main.match(/^(?:the\s+)?(.+?)\s+out(?:\s+of\s+.+)?$/);
   if (tookMatch && /\b(?:took|take|taken|removed|remove)\b/.test(clauses[0] || main)) {
     itemText = tookMatch[1];
     locationRaw = "";
@@ -467,17 +513,17 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
     keepLocation = false;
   }
 
-  const fromTo = !tookOut && main.match(/^(.*?)\s+from\s+.+?\s+(?:to|into|in)\s+(.+)$/);
-  const be = main.replace(VERB_LEAD, "").match(BE_LOCATION);
+  const fromTo = !commaNatural && !tookOut && main.match(/^(.*?)\s+from\s+.+?\s+(?:to|into|in)\s+(.+)$/);
+  const be = !commaNatural && main.replace(VERB_LEAD, "").match(BE_LOCATION);
   const verbLead = VERB_LEAD.test(main);
   if (verbLead) main = main.replace(VERB_LEAD, "");
-  if (!tookOut && fromTo && verbLead) {
+  if (!commaNatural && !tookOut && fromTo && verbLead) {
     itemText = fromTo[1].replace(VERB_LEAD, "");
     locationRaw = fromTo[2];
-  } else if (!tookOut && !verbLead && be) {
+  } else if (!commaNatural && !tookOut && !verbLead && be) {
     itemText = be[1];
     locationRaw = be[2];
-  } else if (!tookOut) {
+  } else if (!commaNatural && !tookOut) {
     const prep = main.match(PREP_RE);
     const bare = main.match(BARE_PLACES);
     const here = main.match(/\s(?:back\s+)?(?:here|there|over here|over there|in here|in there)\b/);
@@ -538,7 +584,7 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
   if (!location && item && (keepLocation || !locationIsHere)) location = item.location;
 
   const level = stock?.level || (item ? item.stock : "plenty");
-  const name = item ? item.name : capitalise(pronoun ? "" : itemText);
+  const name = item ? item.name : formatDisplayName(pronoun ? "" : itemText);
   let note = "";
   if (count != null) note = `About ${count} left`;
   else if (stock?.vague === "half" || /\bhalf (?:a |the )?(?:box|pack)/.test(t)) note = "About half left";
