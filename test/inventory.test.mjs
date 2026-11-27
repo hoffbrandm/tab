@@ -1,0 +1,180 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  applyUpdate,
+  detectStock,
+  formatLocation,
+  mergeInventories,
+  parseInventory,
+  removeItem,
+  searchItems,
+  shoppingList,
+  splitSearchResults,
+  understandSearch,
+  understandUpdate,
+} from "../inventory.js";
+import { createInventoryStore } from "../inventory-store.js";
+import { listen, speechSupported } from "../inventory-speech.js";
+
+// Made-up household, not anyone's real one.
+const house = () => parseInventory({
+  version: 1,
+  items: [
+    { id: "a", name: "Small picture hooks", location: "Cupboard upstairs › X box", stock: "plenty", updatedAt: "2026-11-20T10:00:00Z" },
+    { id: "b", name: "Coat hooks", location: "Garage › Toolbox", stock: "low", updatedAt: "2026-11-19T10:00:00Z" },
+    { id: "c", name: "AA batteries", location: "Kitchen drawer", stock: "low", updatedAt: "2026-11-18T10:00:00Z" },
+    { id: "d", name: "Bin bags", location: "Under the sink", stock: "plenty", updatedAt: "2026-11-17T10:00:00Z" },
+    { id: "e", name: "Light bulbs", location: "Hall cupboard", stock: "plenty", updatedAt: "2026-11-16T10:00:00Z" },
+    { id: "f", name: "Nappies", location: "Nursery › Changing unit", stock: "plenty", updatedAt: "2026-11-15T10:00:00Z" },
+    { id: "g", name: "Superglue", location: "Kitchen drawer", stock: "plenty", updatedAt: "2026-11-14T10:00:00Z" },
+  ],
+});
+
+// [said, item name, existing id or null, location, stock]
+export const UPDATE_CASES = [
+  ["I have put small picture hooks into the cupboard upstairs into the X box", "Small picture hooks", "a", "Cupboard upstairs › X box", "plenty"],
+  ["I put the hooks back in the kitchen drawer, we've only got a couple left", "Small picture hooks", "a", "Kitchen drawer", "low"],
+  ["Put the picture hooks here, we've got loads", "Small picture hooks", "a", "", "plenty"],
+  ["I've put the small picture hooks in the upstairs cupboard in the X box", "Small picture hooks", "a", "Cupboard upstairs › X box", "plenty"],
+  ["We've run out of bin bags", "Bin bags", "d", "Under the sink", "out"],
+  ["Running low on AA batteries", "AA batteries", "c", "Kitchen drawer", "low"],
+  ["The light bulbs are in the hall cupboard on the top shelf", "Light bulbs", "e", "Hall cupboard › Top shelf", "plenty"],
+  ["Moved the superglue from the kitchen drawer to the garage toolbox", "Superglue", "g", "Garage › Toolbox", "plenty"],
+  ["Put the nappies back, only 3 left", "Nappies", "f", "Nursery › Changing unit", "low"],
+  ["I've put a new box of screws in the garage on the shelf", "Screws", null, "Garage › Shelf", "plenty"],
+  ["Batteries are finished", "AA batteries", "c", "Kitchen drawer", "out"],
+  ["Put the wrapping paper under the bed in the spare room, loads left", "Wrapping paper", null, "Spare room › Under the bed", "plenty"],
+  ["I've put them in the loft", "Light bulbs", "e", "Loft", "plenty"],
+  ["Um, so I put the Calpol on top of the fridge, we're nearly out", "Calpol", null, "On top of the fridge", "low"],
+  ["Stashed the spare keys behind the clock in the hall", "Spare keys", null, "Hall › Behind the clock", "plenty"],
+  ["Picture hooks back in the X box", "Small picture hooks", "a", "Cupboard upstairs › X box", "plenty"],
+  ["I put the coat hooks upstairs, there's plenty", "Coat hooks", "b", "Upstairs", "plenty"],
+  ["We need more bin bags", "Bin bags", "d", "Under the sink", "low"],
+  ["Sellotape's in the office drawer, we've got loads", "Sellotape", null, "Office drawer", "plenty"],
+  ["Used the last of the light bulbs", "Light bulbs", "e", "Hall cupboard", "out"],
+];
+
+for (const [said, name, id, location, stock] of UPDATE_CASES) {
+  test(`update: ${said}`, () => {
+    const got = understandUpdate(said, house(), { lastItemId: "e" });
+    assert.equal(got.name, name);
+    assert.equal(got.itemId, id);
+    assert.equal(got.location, location);
+    assert.equal(got.stock, stock);
+  });
+}
+
+test("an empty inventory still reads his first sentence", () => {
+  const got = understandUpdate("I have put small picture hooks into the cupboard upstairs into the X box", parseInventory({}));
+  assert.equal(got.name, "Small picture hooks");
+  assert.equal(got.isNew, true);
+  assert.equal(got.location, "Cupboard upstairs › X box");
+});
+
+test("'here' asks where rather than guessing, and two hooks are flagged as a close call", () => {
+  const here = understandUpdate("Put the picture hooks here, we've got loads", house());
+  assert.equal(here.locationIsHere, true);
+  const hooks = understandUpdate("I put the hooks back in the kitchen drawer", house());
+  assert.equal(hooks.ambiguous, true);
+  assert.deepEqual(hooks.candidates.map((row) => row.name).sort(), ["Coat hooks", "Small picture hooks"]);
+});
+
+test("stock words", () => {
+  const cases = { "we've got loads": "plenty", "plenty left": "plenty", "lots of them": "plenty", "only one left": "low", "a few left": "low", "running out": "low", "nearly run out": "low", "we've run out": "out", "none left": "out", "they're finished": "out", "running low": "low", "only a couple of those left": "low" };
+  for (const [text, level] of Object.entries(cases)) assert.equal(detectStock(text)?.level, level, text);
+  assert.equal(detectStock("only 2 left").count, 2);
+});
+
+test("nested places read outer first", () => {
+  assert.equal(formatLocation("in the X box in the cupboard upstairs"), "Cupboard upstairs › X box");
+  assert.equal(formatLocation("under the stairs"), "Under the stairs");
+});
+
+// [query, expected first suggestion, "best" or "dym"]
+export const SEARCH_CASES = [
+  ["where are the hooks", ["Coat hooks", "Small picture hooks"], "dym"],
+  ["I'm looking for something to hang a picture", ["Small picture hooks"], "dym"],
+  ["hoks", ["Coat hooks", "Small picture hooks"], "dym"],
+  ["do we have any batteries?", ["AA batteries"], "dym"],
+  ["where did I put the glue", ["Superglue"], "dym"],
+  ["light bulb", ["Light bulbs"], "best"],
+  ["nappy", ["Nappies"], "best"],
+  ["where are the small picture hooks", ["Small picture hooks"], "best"],
+];
+
+for (const [query, names, where] of SEARCH_CASES) {
+  test(`search: ${query}`, () => {
+    const { best, didYouMean } = splitSearchResults(searchItems(house(), understandSearch(query)).results);
+    const list = where === "best" ? best : didYouMean;
+    assert.ok(list.length, `nothing under ${where}`);
+    assert.ok(names.includes(list[0].item.name), `${list[0].item.name} first`);
+  });
+}
+
+test("what's in a place lists the place", () => {
+  const found = searchItems(house(), understandSearch("what's in the kitchen drawer"));
+  assert.equal(found.mode, "place");
+  assert.deepEqual(found.results.map((row) => row.item.name).sort(), ["AA batteries", "Superglue"]);
+});
+
+test("updates keep history, bought goes back to plenty, the shopping list is low and out", () => {
+  const inv = house();
+  applyUpdate(inv, { itemId: "a", name: "Small picture hooks", location: "Kitchen drawer", stock: "low" }, { now: new Date("2026-11-27T10:00:00Z") });
+  const hooks = inv.items.find((item) => item.id === "a");
+  assert.equal(hooks.history[0].location, "Kitchen drawer");
+  assert.equal(hooks.updatedAt, "2026-11-27T10:00:00.000Z");
+  assert.deepEqual(shoppingList(inv).map((item) => item.name), ["AA batteries", "Coat hooks", "Small picture hooks"]);
+});
+
+test("merging two phones keeps the newer copy and honours deletions", () => {
+  const phoneA = house();
+  const phoneB = house();
+  applyUpdate(phoneA, { itemId: "c", name: "AA batteries", location: "Kitchen drawer", stock: "plenty" }, { now: new Date("2026-11-27T10:00:00Z") });
+  removeItem(phoneB, "d", new Date("2026-11-27T11:00:00Z"));
+  applyUpdate(phoneB, { name: "Matches", location: "Kitchen drawer", stock: "low" }, { now: new Date("2026-11-27T11:00:00Z"), id: "m" });
+  const merged = mergeInventories(phoneA, phoneB, new Date("2026-11-27T12:00:00Z"));
+  assert.equal(merged.items.find((item) => item.id === "c").stock, "plenty");
+  assert.equal(merged.items.some((item) => item.id === "d"), false);
+  assert.equal(merged.items.some((item) => item.id === "m"), true);
+});
+
+test("a bad item is dropped, not fatal", () => {
+  const inv = parseInventory({ items: [null, { id: "x" }, { id: "y", name: "Tape", stock: "weird" }] });
+  assert.deepEqual(inv.items.map((item) => [item.name, item.stock]), [["Tape", "plenty"]]);
+});
+
+test("the inventory is its own gist file: writes touch inventory.json only, and never over an unreadable one", async () => {
+  const calls = [];
+  let content = null;
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url, method: init.method || "GET", body: init.body });
+    if (init.method === "PATCH") {
+      content = JSON.parse(init.body).files["inventory.json"].content;
+      return new Response("{}", { status: 200 });
+    }
+    const files = { "tab.json": { content: "{}" } };
+    if (content) files["inventory.json"] = { content };
+    return new Response(JSON.stringify({ id: "g", files }), { status: 200 });
+  };
+  const client = createInventoryStore({ token: "t", fetchImpl });
+  assert.equal((await client.read("g")).exists, false);
+  await client.write(house(), "g");
+  const patch = calls.find((call) => call.method === "PATCH");
+  assert.deepEqual(Object.keys(JSON.parse(patch.body).files), ["inventory.json"]);
+  assert.equal(JSON.parse(patch.body).public, undefined);
+  assert.equal((await client.read("g")).inventory.items.length, 7);
+  content = "{not json";
+  await assert.rejects(client.write(house(), "g"), /not valid JSON/);
+});
+
+test("speech: absent API is reported, a silent session is stopped by the watchdog", async () => {
+  assert.equal(speechSupported({}), false);
+  let error = "";
+  listen({ win: {}, onError: (code) => { error = code; } });
+  assert.equal(error, "service-not-allowed");
+  class Silent { start() { this.onstart?.(); } stop() { this.onend?.(); } abort() { this.onend?.(); } }
+  const errors = [];
+  listen({ win: { webkitSpeechRecognition: Silent }, onError: (code) => errors.push(code), nothingMs: 20 });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(errors, ["no-speech"]);
+});

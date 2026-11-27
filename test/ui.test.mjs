@@ -106,14 +106,15 @@ test("the bar carries the rooms the month runs through, and More carries the res
   // Eleven items wrapped to three rows and took a third of a phone screen. Of
   // the five that replaced them, Weeklies and Monthlies are config that barely
   // changes once it is right — so the bar is Home, what is coming, who owes
-  // what, and More.
+  // what, and More. Inventory joined them: it is used day to day around the
+  // house, not visited now and then.
   assert.match(app, /const DOCK = \[/);
   assert.match(app, /const MORE_ROOMS = \[/);
   const dock = app.slice(app.indexOf("const DOCK = ["), app.indexOf("function moneyControl("));
   assert.match(dock, /DOCK\.map/);
   assert.match(dock, /item\("more", "More", dockIsMore\(screen\.name\)\)/);
   const inBar = [...app.slice(app.indexOf("const DOCK = ["), app.indexOf("/** The rooms More lists")).matchAll(/\["([a-z]+)",/g)].map((m) => m[1]);
-  assert.deepEqual(inBar, ["home", "planned", "tabs"]);
+  assert.deepEqual(inBar, ["home", "planned", "tabs", "inventory"]);
   const underMore = [...app.slice(app.indexOf("const MORE_ROOMS = ["), app.indexOf("function dockIsMore")).matchAll(/\["([a-z£0-9]+)",/g)].map((m) => m[1]);
   assert.deepEqual(underMore, ["weeklies", "monthlies", "annual", "pots", "payslips", "ani", "giving"]);
   // A friend's tab is a Tabs screen, so the bar says so rather than going blank.
@@ -121,7 +122,7 @@ test("the bar carries the rooms the month runs through, and More carries the res
   // More lists them as rows, and a row navigates by its id.
   assert.match(app, /edit: "go-room"/);
   assert.match(app, /if \(action === "go-room" && MORE_ROOMS\.some/);
-  assert.match(css, /grid-template-columns: repeat\(4, 1fr\)/);
+  assert.match(css, /grid-template-columns: repeat\(5, 1fr\)/);
   assert.match(rule(".app-shell"), /padding-bottom: calc\(96px/);
 });
 
