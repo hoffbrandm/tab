@@ -2,10 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyUpdate,
+  consolidateInventory,
   detectStock,
+  findExistingByName,
   formatLocation,
   LOW_STOCK_COUNT_THRESHOLD,
   mergeInventories,
+  normaliseItemKey,
   parseInventory,
   removeItem,
   searchItems,
@@ -14,6 +17,7 @@ import {
   understandSearch,
   understandUpdate,
 } from "../inventory.js";
+import { addMishearAlias, autocorrectDictation, rankItemsEnhanced } from "../inventory-match.js";
 import { createInventoryStore } from "../inventory-store.js";
 import { listen, speechSupported } from "../inventory-speech.js";
 
@@ -221,6 +225,63 @@ test("the inventory is its own gist file: writes touch inventory.json only, and 
   assert.equal((await client.read("g")).inventory.items.length, 7);
   content = "{not json";
   await assert.rejects(client.write(house(), "g"), /not valid JSON/);
+});
+
+test("normalised names dedupe: printer paper twice becomes one item", () => {
+  const inv = parseInventory({
+    version: 1,
+    items: [{ id: "p1", name: "Printer paper", location: "Office", stock: "plenty", updatedAt: "2026-11-27T10:00:00Z" }],
+  });
+  applyUpdate(inv, { name: "printer papers", location: "Office drawer", stock: "low" }, { now: new Date("2026-11-27T11:00:00Z") });
+  assert.equal(inv.items.length, 1);
+  assert.equal(inv.items[0].name, "Printer paper");
+  assert.equal(inv.items[0].stock, "low");
+});
+
+test("Printer paper. and printer papers share one normalised key", () => {
+  assert.equal(normaliseItemKey("Printer paper."), normaliseItemKey("printer papers"));
+  assert.equal(normaliseItemKey("3-D printer filament"), normaliseItemKey("3D printer filaments"));
+});
+
+test("consolidate on load merges identical normalised names", () => {
+  const raw = parseInventory({
+    version: 1,
+    items: [
+      { id: "a", name: "Printer paper", location: "Office", stock: "plenty", updatedAt: "2026-11-27T10:00:00Z", aliases: [] },
+      { id: "b", name: "printer papers", location: "Garage", stock: "low", updatedAt: "2026-11-28T10:00:00Z", aliases: [] },
+    ],
+  });
+  const merged = consolidateInventory(raw);
+  assert.equal(merged.items.length, 1);
+  assert.equal(merged.items[0].stock, "low");
+  assert.equal(merged.items[0].location, "Garage");
+});
+
+test("misheard 3d printed complement matches filament item and learns alias", () => {
+  const inv = parseInventory({
+    version: 1,
+    items: [{ id: "f", name: "3D printer filament", location: "Office", stock: "plenty", updatedAt: "2026-11-27T10:00:00Z" }],
+  });
+  const corrected = autocorrectDictation("3d printed complement", inv);
+  assert.match(corrected, /printer filament/);
+  const ranked = rankItemsEnhanced(corrected, inv.items);
+  assert.ok(ranked[0].score >= 0.78);
+  assert.equal(ranked[0].item.name, "3D printer filament");
+  const got = understandUpdate("I put the 3d printed complement in the office drawer", inv);
+  assert.equal(got.itemId, "f");
+  const aliases = addMishearAlias(inv.items[0], "3d printed complement", "3D printer filament");
+  applyUpdate(inv, { itemId: "f", name: "3D printer filament", location: "Office drawer", stock: "plenty", learnAlias: "3d printed complement" });
+  assert.ok(inv.items[0].aliases.includes("3d printed complement"));
+  const next = understandUpdate("put 3d printed complement upstairs", inv);
+  assert.equal(next.itemId, "f");
+});
+
+test("findExistingByName catches near duplicates", () => {
+  const inv = parseInventory({
+    version: 1,
+    items: [{ id: "p", name: "Printer paper", location: "Office", stock: "plenty", updatedAt: "2026-11-27T10:00:00Z" }],
+  });
+  assert.equal(findExistingByName(inv, "Printer paper.").item.id, "p");
 });
 
 test("speech: absent API is reported, a silent session is stopped by the watchdog", async () => {

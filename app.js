@@ -108,9 +108,14 @@ import { emptyStore, parseStore } from "./store.js";
 import { SWIPE_DELETE_WIDTH, swipeAxis, swipeOffset, swipeShouldOpen } from "./swipe-row.js";
 import {
   applyUpdate,
+  consolidateInventory,
   emptyInventory,
+  findExistingByName,
   knownLocations,
   mergeInventories,
+  mergeTwoItems,
+  nearDuplicatePairs,
+  normaliseItemKey,
   removeItem,
   restoreItem,
   searchItems,
@@ -118,6 +123,7 @@ import {
   splitSearchResults,
   STOCK_LABELS,
   STOCK_LEVELS,
+  suggestItemNames,
   understandSearch,
   understandUpdate,
 } from "./inventory.js";
@@ -126,6 +132,7 @@ import { loadSemantic, onSemanticState, semanticScores, semanticState } from "./
 import { listen, speechErrorMessage, speechSupported } from "./inventory-speech.js";
 
 const LOCAL_KEY = "tab.personal.v1";
+const INV_BROWSER_MIC_KEY = "tab.inventory.browserMic";
 const SCREENS = ["home", "weeklies", "monthlies", "planned", "annual", "pots", "payslips", "ani", "giving", "more", "tabs", "inventory"];
 const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
@@ -156,6 +163,11 @@ let invSync = { name: "saved" };
 let invGeneration = 0;
 let inventoryView = "items";
 let inventorySearch = { text: "", found: null };
+let inventoryNearDupDismissed = new Set();
+
+function invBrowserMicOn() {
+  try { return localStorage.getItem(INV_BROWSER_MIC_KEY) === "1"; } catch { return false; }
+}
 let lastInventoryItemId = null;
 let lastInventoryUndo = null;
 
@@ -2885,6 +2897,16 @@ document.addEventListener("change", async (event) => {
   }
 });
 
+document.addEventListener("change", (event) => {
+  if (event.target.dataset?.action === "inv-browser-mic-toggle") {
+    try {
+      localStorage.setItem(INV_BROWSER_MIC_KEY, event.target.checked ? "1" : "0");
+    } catch { /* private mode */ }
+    if (modal?.kind === "inv-update") renderModal({ focus: false });
+    else if (screen.name === "inventory") render();
+  }
+});
+
 document.addEventListener("submit", (event) => {
   const handlers = {
     "friend-form": saveFriend,
@@ -2932,6 +2954,17 @@ document.addEventListener("input", (event) => {
     searchTimer = setTimeout(() => runInventorySearch(value), 140);
   }
   if (event.target.id === "inv-said" && modal?.kind === "inv-update") modal.text = event.target.value;
+  if (event.target.name === "name" && modal?.kind === "inv-update" && modal.phase === "confirm") {
+    const datalist = document.getElementById("inv-name-suggest");
+    if (datalist) {
+      const names = suggestItemNames(event.target.value, inventory.items);
+      datalist.innerHTML = [...new Set([...names, ...inventory.items.map((item) => item.name)])]
+        .slice(0, 12)
+        .map((name) => `<option value="${esc(name)}"></option>`)
+        .join("");
+    }
+    snapshotInventoryForm();
+  }
   if (event.target.closest("#transaction-form")) updateLiveSplit();
   if (event.target.closest("#payslip-form")) updatePayslipNet();
   if (event.target.closest("#per-diem-form")) updatePerDiemRate();
@@ -3872,8 +3905,10 @@ async function loadInventory() {
   inventoryState = { name: "loading" };
   try {
     const { inventory: loaded } = await inventoryClient.read(gistId);
-    inventory = loaded;
+    const before = JSON.stringify(loaded);
+    inventory = consolidateInventory(loaded);
     inventoryState = { name: "ready" };
+    if (JSON.stringify(inventory) !== before) inventoryQueue.schedule();
   } catch (error) {
     inventoryState = { name: "error", message: error.message || "The inventory could not be opened." };
   }
@@ -3937,7 +3972,8 @@ const MIC_ICON = `<svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true" w
 function inventoryScreen() {
   const toBuy = inventoryReady() ? shoppingList(inventory) : [];
   const count = inventory.items.length;
-  const help = "Tap Update and say what you put where, and how many are left — “I put the picture hooks in the X box upstairs, we’ve only got a couple left”. Tab works out the item, the place and Plenty / Low / Run out, and shows a card to check before it saves. Search understands rough names and typos (“hooks”, “hoks”). Low and Run out go on To buy; tick one when it’s bought and it goes back to Plenty. Everything stays in your private gist; speech goes through the phone’s own dictation.";
+  const nearDup = inventoryReady() ? nearDuplicatePairs(inventory.items).filter((pair) => !inventoryNearDupDismissed.has(pair.a.id + ":" + pair.b.id)) : [];
+  const help = "Tap Update, use the mic on your keyboard to dictate, then Check. Tab works out the item, the place and Plenty / Low / Run out, and shows a card to fix anything before it saves. Search understands rough names and typos. Low and Run out go on To buy. Everything stays in your private gist as inventory.json only.";
   let body;
   if (inventoryState.name === "loading" || inventoryState.name === "idle") {
     body = `<p class="helper">Opening the inventory…</p>`;
@@ -3946,14 +3982,21 @@ function inventoryScreen() {
   } else {
     body = `
       <div class="inv-actions">
-        <button class="primary inv-speak" type="button" data-action="inv-update" aria-label="Update inventory by voice">${MIC_ICON}<span>Update</span></button>
+        <button class="primary inv-speak" type="button" data-action="inv-update" aria-label="Update inventory — type or dictate">${MIC_ICON}<span>Update</span></button>
         <button class="secondary" type="button" data-action="inv-add">Add by hand</button>
       </div>
       <form class="inv-search" id="inv-search-form" role="search">
         <label class="visually-hidden" for="inv-search">Find something</label>
         <input id="inv-search" type="search" name="q" placeholder="Where are the…" value="${esc(inventorySearch.text)}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />
-        ${speechSupported(window) ? `<button type="button" class="inv-mic${searchListening ? " listening" : ""}" data-action="inv-search-mic" aria-label="${searchListening ? "Stop listening" : "Search by voice"}">${MIC_ICON}</button>` : ""}
+        ${invBrowserMicOn() && speechSupported(window) ? `<button type="button" class="inv-mic${searchListening ? " listening" : ""}" data-action="inv-search-mic" aria-label="${searchListening ? "Stop listening" : "In-app mic (experimental)"}">${MIC_ICON}</button>` : ""}
       </form>
+      ${nearDup.length ? `<section class="block inv-near-dup" aria-label="Possible duplicates">
+        <p class="helper">These look like the same thing:</p>
+        ${nearDup.map((pair) => `<div class="inv-near-dup-row">
+          <span>${esc(pair.a.name)} · ${esc(pair.b.name)}</span>
+          <button type="button" class="text-button" data-action="inv-merge" data-id="${esc(pair.a.id)}" data-extra="${esc(pair.b.id)}">Merge these?</button>
+        </div>`).join("")}
+      </section>` : ""}
       <div id="inv-results" aria-live="polite">${inventoryResultsMarkup()}</div>
       <div class="inv-switch" role="tablist">
         <button type="button" role="tab" class="${inventoryView === "items" ? "on" : ""}" aria-selected="${inventoryView === "items"}" data-action="inv-view" data-id="items">Everything${count ? ` (${count})` : ""}</button>
@@ -4152,13 +4195,10 @@ function startSearchListening() {
 /* ---------------------------------------------------------- update sheet */
 
 function openInventoryUpdate() {
+  stopListening();
   modal = { kind: "inv-update", phase: "say", text: "", listening: false, error: "", proposal: null };
-  const speaking = speechSupported(window);
   renderModal({ focus: false });
-  if (speaking) startUpdateListening();
-  // Focus in the same tap so iPhone raises the keyboard (and its mic) at once.
-  if (!speaking) document.querySelector("#inv-said")?.focus();
-  else renderModal({ focus: false });
+  document.querySelector("#inv-said")?.focus();
 }
 
 async function proposeUpdate(text) {
@@ -4169,6 +4209,16 @@ async function proposeUpdate(text) {
     return;
   }
   const proposal = understandUpdate(said, inventory, { lastItemId: lastInventoryItemId });
+  proposal.heardItemName = proposal.name;
+  if (proposal.isNew && !proposal.forceNew) {
+    const found = findExistingByName(inventory, proposal.name);
+    if (found) {
+      proposal.itemId = found.item.id;
+      proposal.name = found.item.name;
+      proposal.isNew = false;
+      proposal.autoMatched = true;
+    }
+  }
   modal.phase = "confirm";
   modal.text = said;
   modal.proposal = proposal;
@@ -4218,28 +4268,31 @@ function locationField(value, { suggestions = [], placeholder = "e.g. Cupboard u
 
 function inventoryUpdateForm() {
   if (modal.phase !== "confirm") {
-    const speaking = speechSupported(window);
+    const browserMic = invBrowserMicOn() && speechSupported(window);
     return `<form id="inv-update-form">${modalHead("Update")}
-      ${speaking ? `<button type="button" class="inv-mic-big${modal.listening ? " listening" : ""}" data-action="inv-listen" aria-label="${modal.listening ? "Stop" : "Speak"}">${MIC_ICON}</button>
-      <p class="inv-listen-status" data-listen-status>${modal.listening ? "Listening… speak now" : "Tap the mic to speak"}</p>` : ""}
-      <label>What happened<textarea id="inv-said" name="said" rows="3" maxlength="600" placeholder="I’ve put the small picture hooks in the X box in the upstairs cupboard, we’ve got loads">${esc(modal.text || "")}</textarea></label>
+      <label>What happened<textarea id="inv-said" name="said" rows="4" maxlength="600" placeholder="I’ve put the small picture hooks in the X box in the upstairs cupboard, we’ve only got a couple left">${esc(modal.text || "")}</textarea></label>
+      <p class="helper">Tap the mic on your keyboard and speak. Dictation on the phone is more reliable than the in-app mic.</p>
+      ${browserMic ? `<p class="helper inv-listen-status" data-listen-status>${modal.listening ? "Listening…" : ""}</p>
+      <button type="button" class="inv-mic inv-mic-optional" data-action="inv-listen" aria-label="${modal.listening ? "Stop in-app mic" : "Use in-app mic (experimental)"}">${MIC_ICON}<span>In-app mic</span></button>` : ""}
       ${modal.error ? `<p class="form-error">${esc(modal.error)}</p>` : ""}
-      ${speaking ? "" : `<p class="helper">Tap the box, then the mic on the keyboard to dictate.</p>`}
-      <button class="primary wide" type="submit">Next</button>
+      <button class="primary wide" type="submit">Check</button>
     </form>`;
   }
   const p = modal.proposal;
   const matched = p.itemId ? inventoryItem(p.itemId) : null;
   const others = p.candidates.filter((row) => row.id !== p.itemId);
+  const nameSuggestions = suggestItemNames(p.name, inventory.items);
   const status = matched
-    ? `Updating <strong>${esc(matched.name)}</strong>${matched.location ? ` · was in ${esc(matched.location)}` : ""}`
+    ? `${p.autoMatched ? "Matched existing" : "Updating"} <strong>${esc(matched.name)}</strong>${matched.location ? ` · was in ${esc(matched.location)}` : ""}`
     : "New item";
   return `<form id="inv-update-form">${modalHead("Check and save")}
     ${p.needsSplit ? `<p class="form-error" role="alert">Sounds like more than one item — save this one, then say the other separately.</p>` : ""}
     <p class="inv-heard">“${esc(modal.text)}” <button type="button" class="text-button" data-action="inv-reword">Change</button></p>
     <div>
-      <label>Item<input name="name" required maxlength="80" value="${esc(p.name)}" autocomplete="off" /></label>
-      <p class="helper inv-match">${status}</p>
+      <label>Item<input name="name" required maxlength="80" value="${esc(p.name)}" autocomplete="off" autocapitalize="words" enterkeyhint="done" list="inv-name-suggest" aria-describedby="inv-name-hint" />
+      <datalist id="inv-name-suggest">${nameSuggestions.map((name) => `<option value="${esc(name)}"></option>`).join("")}${inventory.items.map((item) => `<option value="${esc(item.name)}"></option>`).join("")}</datalist></label>
+      <p class="helper inv-match" id="inv-name-hint">${status}</p>
+      ${nameSuggestions.length ? `<div class="inv-chips" aria-label="Suggestions">${nameSuggestions.map((name) => `<button type="button" class="inv-chip" data-action="inv-name-fill" data-extra="${esc(name)}">${esc(name)}</button>`).join("")}</div>` : ""}
       ${others.length || p.itemId ? `<div class="inv-chips">${others.length ? `<span class="inv-chips-label">${p.ambiguous || !p.itemId ? "Did you mean" : "Or"}</span>` : ""}
         ${others.map((row) => `<button type="button" class="inv-chip" data-action="inv-pick" data-id="${esc(row.id)}">${esc(row.name)}</button>`).join("")}
         ${p.itemId ? `<button type="button" class="inv-chip quiet" data-action="inv-pick" data-id="new">New item instead</button>` : ""}
@@ -4250,7 +4303,10 @@ function inventoryUpdateForm() {
     <label>Note <span class="optional">optional</span><input name="note" maxlength="200" value="${esc(p.note || (matched?.note ?? ""))}" placeholder="e.g. About 3 left" /></label>
     <p class="form-error" id="form-error"></p>
     <button class="primary wide" type="submit">Save</button>
-    <button class="secondary wide" type="button" data-action="inv-again">Say it again</button>
+    <button class="secondary wide" type="button" data-action="inv-again">Type it again</button>
+    <details class="room-help form-help"><summary>In-app microphone (experimental)</summary>
+      <label class="check-row"><input type="checkbox" name="browserMic" ${invBrowserMicOn() ? "checked" : ""} data-action="inv-browser-mic-toggle" /><span>Show the in-app mic on Update and Search</span></label>
+    </details>
   </form>`;
 }
 
@@ -4285,7 +4341,7 @@ function openInventoryItem(id, name = "") {
 function saveInventoryChange(change, verb) {
   let saved = null;
   const ok = changeInventory(() => {
-    const result = applyUpdate(inventory, change);
+    const result = applyUpdate(inventory, change, { forceNew: Boolean(change.forceNew) });
     saved = result.item;
     lastInventoryUndo = { id: result.item.id, before: result.before };
   });
@@ -4308,7 +4364,12 @@ function saveInventoryUpdate(event) {
   snapshotInventoryForm();
   const p = modal.proposal;
   if (!p.name.trim()) return showFormError("Give the item a name.");
-  const existing = p.itemId ? inventoryItem(p.itemId) : null;
+  let existing = p.itemId ? inventoryItem(p.itemId) : null;
+  if (!existing && !p.forceNew) {
+    const found = findExistingByName(inventory, p.name);
+    if (found) existing = found.item;
+  }
+  const learnAlias = p.heardItemName && normaliseItemKey(p.heardItemName) !== normaliseItemKey(p.name) ? p.heardItemName : "";
   saveInventoryChange({
     itemId: existing?.id || null,
     name: p.name,
@@ -4316,6 +4377,8 @@ function saveInventoryUpdate(event) {
     location: p.location.trim() || existing?.location || "",
     stock: p.stock,
     note: p.note,
+    learnAlias,
+    forceNew: Boolean(p.forceNew && !existing),
   }, existing ? "Updated" : "Added");
 }
 
@@ -4371,6 +4434,22 @@ function markBought(id) {
   showToast(`${item.name} back to Plenty`, { action: "inv-undo", actionLabel: "Undo" });
 }
 
+function mergeInventoryPair(idA, idB) {
+  if (!changeInventory(() => {
+    const a = inventoryItem(idA);
+    const b = inventoryItem(idB);
+    if (!a || !b) return;
+    const merged = mergeTwoItems(a, b);
+    inventory.items = inventory.items.filter((row) => row.id !== b.id);
+    const index = inventory.items.findIndex((row) => row.id === a.id);
+    if (index >= 0) inventory.items[index] = merged;
+    removeItem(inventory, b.id);
+    inventoryNearDupDismissed.add(`${idA}:${idB}`);
+  })) return;
+  render();
+  showToast(`Merged into ${inventoryItem(idA)?.name || "one item"}`);
+}
+
 async function shareShoppingList() {
   const lines = shoppingList(inventory).map((item) => `• ${item.name}${item.stock === "out" ? " (run out)" : " (low)"}`);
   const text = `To buy\n${lines.join("\n")}`;
@@ -4403,16 +4482,35 @@ function handleInventoryClick(action, target, event) {
   }
   if (action === "inv-again") {
     event.preventDefault();
+    stopListening();
     modal = { kind: "inv-update", phase: "say", text: "", listening: false, error: "", proposal: null };
     renderModal({ focus: false });
-    if (speechSupported(window)) { startUpdateListening(); renderModal({ focus: false }); }
-    else document.querySelector("#inv-said")?.focus();
+    document.querySelector("#inv-said")?.focus();
   }
   if (action === "inv-reword") {
     event.preventDefault();
     modal.phase = "say";
     renderModal({ focus: false });
     document.querySelector("#inv-said")?.focus();
+  }
+  if (action === "inv-merge" && id && extra) {
+    event.preventDefault();
+    mergeInventoryPair(id, extra);
+  }
+  if (action === "inv-name-fill" && extra) {
+    event.preventDefault();
+    const input = document.querySelector('#inv-update-form input[name="name"]');
+    if (input) input.value = extra;
+    snapshotInventoryForm();
+    const picked = findExistingByName(inventory, extra);
+    if (picked && modal?.proposal) {
+      modal.proposal.itemId = picked.item.id;
+      modal.proposal.name = picked.item.name;
+      modal.proposal.isNew = false;
+      modal.proposal.forceNew = false;
+    }
+    renderModal({ focus: false });
+    document.querySelector('#inv-update-form input[name="name"]')?.focus();
   }
   if (action === "inv-pick" && modal?.proposal) {
     event.preventDefault();
@@ -4422,6 +4520,8 @@ function handleInventoryClick(action, target, event) {
       const current = p.itemId ? inventoryItem(p.itemId) : null;
       if (current) p.candidates = [{ id: current.id, name: current.name, location: current.location, stock: current.stock, score: 0 }, ...p.candidates.filter((row) => row.id !== current.id)];
       p.itemId = null;
+      p.forceNew = true;
+      p.isNew = true;
       p.name = p.itemText ? p.itemText[0].toUpperCase() + p.itemText.slice(1) : p.name;
     } else {
       const picked = inventoryItem(id);
