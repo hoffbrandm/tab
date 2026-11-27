@@ -138,6 +138,7 @@ import {
   writeAiSettings,
 } from "./inventory-ai-settings.js";
 import { testInventoryAiKey, understandSearchSmart, understandUpdateSmart } from "./inventory-ai.js";
+import { inventoryClickRoutedGlobally } from "./inventory-ui-actions.js";
 
 const LOCAL_KEY = "tab.personal.v1";
 const INV_BROWSER_MIC_KEY = "tab.inventory.browserMic";
@@ -2531,7 +2532,7 @@ document.addEventListener("click", async (event) => {
     }
   }
 
-  if (action.startsWith("inv-")) {
+  if (action.startsWith("inv-") && !inventoryClickRoutedGlobally(action)) {
     handleInventoryClick(action, target, event);
     return;
   }

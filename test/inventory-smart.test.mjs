@@ -6,6 +6,7 @@ import {
   validateUpdatePayload,
 } from "../inventory-understand-schema.js";
 import { AI_MODEL_IDS, readAiSettings, writeAiSettings } from "../inventory-ai-settings.js";
+import { inventoryClickRoutedGlobally } from "../inventory-ui-actions.js";
 import { understandUpdateSmart, withTimeout } from "../inventory-ai.js";
 import { UPDATE_CASES } from "./inventory-fixtures.mjs";
 
@@ -15,6 +16,12 @@ const mockStorage = {
   setItem: (k, v) => storage.set(k, v),
   removeItem: (k) => storage.delete(k),
 };
+
+test("inv-ai-settings is not swallowed by handleInventoryClick", () => {
+  assert.equal(inventoryClickRoutedGlobally("inv-ai-settings"), true);
+  assert.equal(inventoryClickRoutedGlobally("inv-ai-test-key"), true);
+  assert.equal(inventoryClickRoutedGlobally("inv-update"), false);
+});
 
 test("screenshot sentence: 3D filament, office, run out (rules)", () => {
   const said = "3D printer filament, it belongs in the office, but we don't have any";
