@@ -79,7 +79,7 @@ test("WebKit: Smart understanding opens sheet (iPhone viewport)", async (t) => {
   };
   await page.route(/generativelanguage\.googleapis\.com/, mockGemini);
   await page.getByRole("button", { name: "Test key" }).click();
-  await page.waitForFunction(() => document.body.innerText.includes("Key works"), { timeout: 8000 });
+  await page.waitForFunction(() => /Key works \(model:/.test(document.body.innerText), { timeout: 8000 });
   const shot = join(root, "test-artifacts", "inv-smart-understanding-webkit.png");
   await page.screenshot({ path: shot, fullPage: false });
   await browser.close();
