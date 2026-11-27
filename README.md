@@ -33,9 +33,25 @@ A classic personal access token with only the `gist` scope also works.
 - No gist id
 - No token
 - No bank feeds, paid APIs, or extra host
+- No inventory: what is where lives in `inventory.json` in the private gist
 - No NI numbers, policy numbers, or real spreadsheet figures
 
 If this browser still has the old `localStorage` copy (`tab.personal.v1`) and the gist has no friends or expenses, you can import that leftover once. After that, the live household is only in the gist.
+
+## Inventory
+
+**Inventory** is in the bar next to Tabs: where things are in the house, and what is running low.
+
+- **Update** opens a sheet and starts listening in the same tap. Say it the way you would to someone else — “I put the hooks back in the kitchen drawer, we've only got a couple left”, “put the picture hooks here, we've got loads”, “we've run out of bin bags”. When you stop talking, Tab works out the item, the place and the stock, and shows a card to check: the item (and which listed item it matched, with “Did you mean” chips when two are close), the place (reusing one already in the list when you name it — “the X box” lands on “Cupboard upstairs › X box”), and **Plenty / Low / Run out**. Save, and a toast offers Undo. “Here” leaves the place blank and offers recent places; a blank place keeps the one it had.
+- **Search** takes a typed or spoken question — “where are the hooks”, “something to hang a picture”, “what's in the kitchen drawer” — and shows the best matches with where they are and how many are left, or **Did you mean…** when it is not sure (“hooks” → Small picture hooks, Coat hooks; “hoks” works too).
+- **To buy** is everything Low or Run out. Tick one when it is bought and it goes back to Plenty. Share list hands it to the share sheet.
+- **Add by hand**, tap a row to edit (with “Also called” names that search and matching use), swipe left to delete. Each item keeps its last eight moves.
+
+**Where it is stored.** `inventory.json`, a second file in the same private gist. A gist save only touches the files it names, so an inventory save never rewrites `tab.json` and a household save never rewrites the inventory. Before each save Tab re-reads the file and merges by item (newer copy wins, a deletion beats an older edit), so two phones do not overwrite each other. A file that is not valid JSON is never written over. Reading is lenient: a bad item is dropped, not fatal.
+
+**Speech.** The browser's own speech recognition (`webkitSpeechRecognition`, the same Apple dictation as the keyboard mic). No key, no account, nothing of ours in between. iOS Safari has it; home-screen web apps only since iOS 17, and iOS can ask for microphone and speech permission again after the app is closed. iOS 27 has a known WebKit bug (326069) where a later session in the same page opens the mic and hears nothing, so a session that hears nothing for a few seconds stops and says to use the keyboard mic. Where the API is missing, Update focuses the text box in the same tap so the keyboard — and its mic — come straight up.
+
+**Understanding.** All on the phone. `inventory.js` does rules (place phrases like in / into / back in / on top of / under / behind / next to, nested places ordered outer first; stock phrases like loads / plenty / a couple left / only one / running low / run out / none left / finished; pronouns meaning the last item touched) and fuzzy matching (plurals, prefixes, typos, word-in-compound). A small built-in “what is it for” list maps uses to things (hang → hooks, nails; headache → paracetamol). Search also uses a sentence-embedding model (all-MiniLM-L6-v2, about 23 MB, through transformers.js from jsDelivr and Hugging Face) once it has loaded in the background; the browser caches it. If it cannot load, search says “matching by words only” and carries on. `understandUpdate` and `understandSearch` are the seams an optional LLM parser (a key kept on the device, like the gist token) could sit behind later.
 
 ## Store shape
 

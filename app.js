@@ -106,9 +106,27 @@ import { createPersistQueue } from "./persist-queue.js";
 import { createSession } from "./session.js";
 import { emptyStore, parseStore } from "./store.js";
 import { SWIPE_DELETE_WIDTH, swipeAxis, swipeOffset, swipeShouldOpen } from "./swipe-row.js";
+import {
+  applyUpdate,
+  emptyInventory,
+  knownLocations,
+  mergeInventories,
+  removeItem,
+  restoreItem,
+  searchItems,
+  shoppingList,
+  splitSearchResults,
+  STOCK_LABELS,
+  STOCK_LEVELS,
+  understandSearch,
+  understandUpdate,
+} from "./inventory.js";
+import { createInventoryStore, createMemoryInventoryStore } from "./inventory-store.js";
+import { loadSemantic, onSemanticState, semanticScores, semanticState } from "./inventory-semantic.js";
+import { listen, speechErrorMessage, speechSupported } from "./inventory-speech.js";
 
 const LOCAL_KEY = "tab.personal.v1";
-const SCREENS = ["home", "weeklies", "monthlies", "planned", "annual", "pots", "payslips", "ani", "giving", "more", "tabs"];
+const SCREENS = ["home", "weeklies", "monthlies", "planned", "annual", "pots", "payslips", "ani", "giving", "more", "tabs", "inventory"];
 const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
 const sessionStore = createSession({ storage: window.sessionStorage });
@@ -131,10 +149,24 @@ let payslipTaxYear = null;
 let lastDeleted = null;
 let swipeState = null;
 let suppressClick = false;
+let inventory = emptyInventory();
+let inventoryState = { name: "idle" };
+let inventoryClient = null;
+let invSync = { name: "saved" };
+let invGeneration = 0;
+let inventoryView = "items";
+let inventorySearch = { text: "", found: null };
+let lastInventoryItemId = null;
+let lastInventoryUndo = null;
 
 const persistQueue = createPersistQueue({
   persist: () => persist(),
   debounceMs: 400,
+});
+
+const inventoryQueue = createPersistQueue({
+  persist: () => persistInventory(),
+  debounceMs: 300,
 });
 
 function parseHash() {
@@ -233,6 +265,7 @@ function clearLocalStore() {
 
 function openWithToken(token, login = "") {
   gist = createGistStore({ token });
+  inventoryClient = createInventoryStore({ token });
   session = { login, token };
 }
 
@@ -256,6 +289,7 @@ async function bootApp() {
     boot = { name: "ready" };
     maybeOfferLocalImport();
     render();
+    loadInventory();
     if (payload.oneOffsRewritten || payload.payslipsRewritten) persist().catch(() => {});
   } catch (error) {
     if (error instanceof GistError && error.status === 401) {
@@ -331,7 +365,9 @@ function render() {
   else if (boot.name === "error") app.innerHTML = errorScreen(boot.message, "Try again", "reload");
   else if (boot.name === "signed-out") app.innerHTML = signInScreen();
   else app.innerHTML = readyScreen();
+  document.body.classList.toggle("inventory-screen", boot.name === "ready" && screen.name === "inventory");
   renderModal();
+  if (boot.name === "ready" && screen.name === "inventory" && inventoryReady()) maybeLoadSemantic();
 }
 
 function readyScreen() {
@@ -346,6 +382,7 @@ function readyScreen() {
   if (screen.name === "giving") return givingScreen();
   if (screen.name === "more") return moreScreen();
   if (screen.name === "tabs") return tabsScreen();
+  if (screen.name === "inventory") return inventoryScreen();
   return cashflowScreen();
 }
 
@@ -364,6 +401,10 @@ function isLocalHost() {
  * word in the top bar, and it only grows when there is something to say.
  */
 function syncChip() {
+  if (invSync.name === "error" && sync.name !== "error") {
+    return `<button class="status-chip error" data-sync-chip data-action="retry-inventory-sync" type="button">${esc(invSync.message || "Could not save")}</button>`;
+  }
+  if (invSync.name === "saving" && sync.name !== "error") return `<span class="status-chip saving" data-sync-chip>Saving…</span>`;
   if (sync.name === "saving") return `<span class="status-chip saving" data-sync-chip>Saving…</span>`;
   if (sync.name === "error") {
     return `<button class="status-chip error" data-sync-chip data-action="retry-sync" type="button">${esc(sync.message || "Could not save")}</button>`;
@@ -459,6 +500,7 @@ const DOCK = [
   ["home", "Home"],
   ["planned", "Planned"],
   ["tabs", "Tabs"],
+  ["inventory", "Inventory"],
 ];
 
 /** The rooms More lists, with a line each saying what they are for. */
@@ -1584,7 +1626,7 @@ function transactionRow({ transaction, balancePence }, friend) {
   </button></article>`;
 }
 
-function renderModal() {
+function renderModal({ focus: shouldFocus = true } = {}) {
   document.querySelector(".modal-layer")?.remove();
   if (!modal) return;
   const layer = document.createElement("div");
@@ -1592,7 +1634,7 @@ function renderModal() {
   layer.innerHTML = `<div class="scrim" data-action="close-modal"></div><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">${modalMarkup()}</section>`;
   document.body.append(layer);
   const focus = layer.querySelector("input:not(.visually-hidden):not([type=hidden]):not([type=checkbox]):not([type=radio]), select, button");
-  requestAnimationFrame(() => focus?.focus());
+  if (shouldFocus) requestAnimationFrame(() => focus?.focus());
 }
 
 function modalMarkup() {
@@ -1622,6 +1664,8 @@ function modalMarkup() {
     "pension-value": pensionValueForm,
     payslip: payslipForm,
     donation: donationForm,
+    "inv-update": inventoryUpdateForm,
+    "inv-item": inventoryItemForm,
   };
   return kinds[modal.kind] ? kinds[modal.kind]() : "";
 }
@@ -2372,7 +2416,7 @@ function openTransaction(type, friendId, transaction) {
 }
 
 function openFriendForm(friend) { modal = { kind: "friend", friend }; renderModal(); }
-function closeModal() { modal = null; render(); }
+function closeModal() { stopListening(); modal = null; render(); }
 
 function findIn(list, id) {
   return (household()[list] || []).find((item) => item.id === id);
@@ -2409,6 +2453,8 @@ function openLocalWorkbook() {
   };
   store = emptyStore();
   gistId = "local";
+  inventoryClient = createMemoryInventoryStore();
+  loadInventory();
   boot = { name: "ready" };
   sync = { name: "local" };
   history.replaceState(null, "", `${location.pathname}#/home`);
@@ -2422,6 +2468,11 @@ function signOut() {
   store = emptyStore();
   gistId = null;
   localSession = false;
+  stopListening();
+  inventory = emptyInventory();
+  inventoryState = { name: "idle" };
+  inventoryClient = null;
+  inventorySearch = { text: "", found: null };
   boot = { name: "signed-out" };
   modal = null;
   history.replaceState(null, "", `${location.pathname}#/home`);
@@ -2441,6 +2492,26 @@ document.addEventListener("click", async (event) => {
       closeSwipeRows();
       return;
     }
+  }
+
+  if (action.startsWith("inv-")) {
+    handleInventoryClick(action, target, event);
+    return;
+  }
+  if (action === "remove-inv-item") {
+    event.preventDefault();
+    event.stopPropagation();
+    removeInventoryItem(id);
+    return;
+  }
+  if (action === "tick-inv-bought") {
+    event.preventDefault();
+    markBought(id);
+    return;
+  }
+  if (action === "retry-inventory-sync") {
+    persistInventory().catch(() => {});
+    return;
   }
 
   if (action === "go") {
@@ -2841,12 +2912,26 @@ document.addEventListener("submit", (event) => {
     "pension-value-form": savePensionValue,
     "payslip-form": savePayslip,
     "donation-form": saveDonation,
+    "inv-update-form": saveInventoryUpdate,
+    "inv-item-form": saveInventoryItem,
+    "inv-search-form": (submitted) => {
+      submitted.preventDefault();
+      const input = submitted.target.querySelector("#inv-search");
+      runInventorySearch(input?.value || "");
+      input?.blur();
+    },
   };
   const handler = handlers[event.target.id];
   if (handler) handler(event);
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.id === "inv-search") {
+    clearTimeout(searchTimer);
+    const value = event.target.value;
+    searchTimer = setTimeout(() => runInventorySearch(value), 140);
+  }
+  if (event.target.id === "inv-said" && modal?.kind === "inv-update") modal.text = event.target.value;
   if (event.target.closest("#transaction-form")) updateLiveSplit();
   if (event.target.closest("#payslip-form")) updatePayslipNet();
   if (event.target.closest("#per-diem-form")) updatePerDiemRate();
@@ -3768,6 +3853,594 @@ function updateLiveSplit() {
   } catch (error) {
     output.textContent = error.message;
   }
+}
+
+
+/* ================================================================ Inventory
+ * Where things are and what is running low. Its own file in the same private
+ * gist (inventory.json), its own save queue, and its own parsing in
+ * inventory.js. Speak or type: "I put the hooks back in the kitchen drawer,
+ * we've only got a couple left" becomes a card to check, then a save.
+ */
+
+function inventoryReady() {
+  return inventoryState.name === "ready";
+}
+
+async function loadInventory() {
+  if (!inventoryClient || !gistId) return;
+  inventoryState = { name: "loading" };
+  try {
+    const { inventory: loaded } = await inventoryClient.read(gistId);
+    inventory = loaded;
+    inventoryState = { name: "ready" };
+  } catch (error) {
+    inventoryState = { name: "error", message: error.message || "The inventory could not be opened." };
+  }
+  if (boot.name === "ready" && screen.name === "inventory" && !modal) render();
+}
+
+async function persistInventory() {
+  if (!inventoryReady() || !inventoryClient) return;
+  invSync = { name: "saving" };
+  updateSyncChip();
+  const generation = invGeneration;
+  try {
+    const merged = await inventoryClient.write(inventory, gistId);
+    const before = JSON.stringify(inventory);
+    inventory = generation === invGeneration ? merged : mergeInventories(inventory, merged);
+    invSync = { name: "saved" };
+    updateSyncChip();
+    const typing = document.activeElement?.matches?.("input, textarea");
+    if (JSON.stringify(inventory) !== before && screen.name === "inventory" && !modal && !typing) render();
+  } catch (error) {
+    const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+    invSync = {
+      name: "error",
+      message: offline ? "You’re offline. Your changes stay on this phone until you’re back online." : error.message,
+    };
+    updateSyncChip();
+    throw error;
+  }
+}
+
+function changeInventory(mutator) {
+  if (!inventoryReady()) {
+    showToast(inventoryState.message || "The inventory is still opening");
+    return false;
+  }
+  mutator();
+  invGeneration += 1;
+  inventoryQueue.schedule();
+  return true;
+}
+
+function inventoryItem(id) {
+  return inventory.items.find((item) => item.id === id) || null;
+}
+
+function stockPill(stock) {
+  return `<span class="inv-stock ${esc(stock)}">${esc(STOCK_LABELS[stock] || "Plenty")}</span>`;
+}
+
+function whenLabel(iso) {
+  if (!iso || iso.startsWith("1970")) return "";
+  const then = new Date(iso);
+  const days = Math.round((new Date(today()) - new Date(`${iso.slice(0, 10)}`)) / 86400000);
+  if (days <= 0) return `today ${then.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
+  if (days === 1) return "yesterday";
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(then);
+}
+
+const MIC_ICON = `<svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true" width="20" height="20"><path fill="currentColor" d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V5.5a3.5 3.5 0 1 0-7 0V11a3.5 3.5 0 0 0 3.5 3.5Zm6-3.5a1 1 0 1 0-2 0 4 4 0 0 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.91V19H8.5a1 1 0 1 0 0 2h7a1 1 0 1 0 0-2H13v-2.09A6 6 0 0 0 18 11Z"/></svg>`;
+
+function inventoryScreen() {
+  const toBuy = inventoryReady() ? shoppingList(inventory) : [];
+  const count = inventory.items.length;
+  const help = "Tap Update and say what you put where, and how many are left — “I put the picture hooks in the X box upstairs, we’ve only got a couple left”. Tab works out the item, the place and Plenty / Low / Run out, and shows a card to check before it saves. Search understands rough names and typos (“hooks”, “hoks”). Low and Run out go on To buy; tick one when it’s bought and it goes back to Plenty. Everything stays in your private gist; speech goes through the phone’s own dictation.";
+  let body;
+  if (inventoryState.name === "loading" || inventoryState.name === "idle") {
+    body = `<p class="helper">Opening the inventory…</p>`;
+  } else if (inventoryState.name === "error") {
+    body = `<div class="empty-lines"><p class="form-error">${esc(inventoryState.message)}</p><button class="text-button" type="button" data-action="inv-reload">Try again</button></div>`;
+  } else {
+    body = `
+      <div class="inv-actions">
+        <button class="primary inv-speak" type="button" data-action="inv-update" aria-label="Update inventory by voice">${MIC_ICON}<span>Update</span></button>
+        <button class="secondary" type="button" data-action="inv-add">Add by hand</button>
+      </div>
+      <form class="inv-search" id="inv-search-form" role="search">
+        <label class="visually-hidden" for="inv-search">Find something</label>
+        <input id="inv-search" type="search" name="q" placeholder="Where are the…" value="${esc(inventorySearch.text)}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />
+        ${speechSupported(window) ? `<button type="button" class="inv-mic${searchListening ? " listening" : ""}" data-action="inv-search-mic" aria-label="${searchListening ? "Stop listening" : "Search by voice"}">${MIC_ICON}</button>` : ""}
+      </form>
+      <div id="inv-results" aria-live="polite">${inventoryResultsMarkup()}</div>
+      <div class="inv-switch" role="tablist">
+        <button type="button" role="tab" class="${inventoryView === "items" ? "on" : ""}" aria-selected="${inventoryView === "items"}" data-action="inv-view" data-id="items">Everything${count ? ` (${count})` : ""}</button>
+        <button type="button" role="tab" class="${inventoryView === "shop" ? "on" : ""}" aria-selected="${inventoryView === "shop"}" data-action="inv-view" data-id="shop">To buy${toBuy.length ? ` (${toBuy.length})` : ""}</button>
+      </div>
+      ${inventoryView === "shop" ? shoppingMarkup(toBuy) : itemsMarkup()}
+      <p class="helper inv-smart" data-smart-state>${smartLine()}</p>`;
+  }
+  return shell({
+    title: "Inventory.",
+    lede: "Where things are, and what’s running low.",
+    help,
+    body,
+  });
+}
+
+function smartLine() {
+  if (!inventory.items.length) return "";
+  const state = semanticState();
+  if (state === "ready") return "Smart search is on (runs on this phone).";
+  if (state === "loading") return "Getting smart search ready…";
+  if (state === "failed") return "Search is matching by words only right now.";
+  return "";
+}
+
+function itemsMarkup() {
+  const items = [...inventory.items].sort((a, b) => a.name.localeCompare(b.name));
+  if (!items.length) {
+    return `<section class="block">${emptyLines("Nothing listed yet. Tap Update and say where you’ve put something.", "inv-update", "Update by voice")}</section>`;
+  }
+  return `<section class="block">${items.map((item) => lineRow({
+    edit: "inv-edit",
+    id: item.id,
+    title: item.name,
+    detail: [item.location || "No place yet", whenLabel(item.updatedAt)].filter(Boolean).join(" · "),
+    amount: stockPill(item.stock),
+    removeAction: "remove-inv-item",
+    removeLabel: "Delete",
+  })).join("")}</section>`;
+}
+
+function shoppingMarkup(toBuy) {
+  if (!toBuy.length) {
+    return `<section class="block">${emptyLines("Nothing low or run out. Say “we’re running low on…” and it lands here.")}</section>`;
+  }
+  return `<section class="block">
+    <div class="section-heading"><h2>To buy</h2><button class="text-button" type="button" data-action="inv-share-list">Share list</button></div>
+    ${toBuy.map((item) => lineRow({
+      edit: "inv-edit",
+      id: item.id,
+      title: item.name,
+      detail: [item.location, item.note].filter(Boolean).join(" · ") || "No place yet",
+      amount: stockPill(item.stock),
+      tickAction: "tick-inv-bought",
+      ticked: false,
+      tickLabel: `Mark ${item.name} bought`,
+      removeAction: "remove-inv-item",
+      removeLabel: "Delete",
+    })).join("")}
+    <p class="helper">Tick when it’s bought and it goes back to Plenty.</p>
+  </section>`;
+}
+
+function resultCard(row) {
+  const item = row.item;
+  return `<button type="button" class="inv-result" data-action="inv-edit" data-id="${esc(item.id)}">
+    <span class="inv-result-copy"><strong>${esc(item.name)}</strong><span class="inv-where">${esc(item.location || "No place yet")}</span><small>${esc(whenLabel(item.updatedAt) ? `Updated ${whenLabel(item.updatedAt)}` : "")}</small></span>
+    ${stockPill(item.stock)}
+  </button>`;
+}
+
+function inventoryResultsMarkup() {
+  const found = inventorySearch.found;
+  if (!inventorySearch.text.trim() || !found) return "";
+  if (found.mode === "place") {
+    if (!found.results.length) return `<div class="inv-results"><p class="helper">Nothing listed in ${esc(found.place)}.</p></div>`;
+    return `<div class="inv-results"><h3>In ${esc(found.place)}</h3>${found.results.map(resultCard).join("")}</div>`;
+  }
+  const { best, didYouMean } = splitSearchResults(found.results);
+  if (!best.length && !didYouMean.length) {
+    const name = found.query || inventorySearch.text;
+    return `<div class="inv-results"><p class="helper">Nothing like “${esc(name)}” yet.</p><button class="text-button" type="button" data-action="inv-add" data-extra="${esc(name)}">Add “${esc(name)}”</button></div>`;
+  }
+  return `<div class="inv-results">
+    ${best.length ? `<h3>Found</h3>${best.map(resultCard).join("")}` : ""}
+    ${didYouMean.length ? `<h3>${best.length ? "Similar" : "Did you mean…"}</h3>${didYouMean.map(resultCard).join("")}` : ""}
+  </div>`;
+}
+
+function refreshInventoryResults() {
+  const box = document.querySelector("#inv-results");
+  if (box) box.innerHTML = inventoryResultsMarkup();
+}
+
+let searchTimer = null;
+let searchTicket = 0;
+async function runInventorySearch(text) {
+  inventorySearch.text = text;
+  const ticket = ++searchTicket;
+  const parsed = understandSearch(text);
+  inventorySearch.found = { ...searchItems(inventory, parsed), query: parsed.query, place: parsed.place };
+  refreshInventoryResults();
+  if (semanticState() !== "ready" || parsed.place || !text.trim()) return;
+  const scores = await semanticScores(parsed.query || text, inventory.items);
+  if (!scores || ticket !== searchTicket) return;
+  inventorySearch.found = { ...searchItems(inventory, parsed, { semantic: scores }), query: parsed.query, place: parsed.place };
+  refreshInventoryResults();
+}
+
+function maybeLoadSemantic() {
+  if (semanticState() !== "idle" || !inventory.items.length) return;
+  const start = () => loadSemantic();
+  if (window.requestIdleCallback) window.requestIdleCallback(start, { timeout: 2500 });
+  else setTimeout(start, 1200);
+}
+
+onSemanticState(() => {
+  const line = document.querySelector("[data-smart-state]");
+  if (line) line.textContent = smartLine();
+  if (semanticState() === "ready" && inventorySearch.text.trim() && screen.name === "inventory") runInventorySearch(inventorySearch.text);
+});
+
+/* ---------------------------------------------------------- speech */
+
+let activeListen = null;
+let searchListening = false;
+
+function stopListening() {
+  activeListen?.cancel();
+  activeListen = null;
+  searchListening = false;
+}
+
+function startUpdateListening() {
+  if (!modal || modal.kind !== "inv-update") return;
+  stopListening();
+  modal.listening = true;
+  modal.error = "";
+  activeListen = listen({
+    win: window,
+    onText: (text) => {
+      if (modal?.kind !== "inv-update") return;
+      modal.text = text;
+      const box = document.querySelector("#inv-said");
+      if (box) box.value = text;
+    },
+    onDone: (text) => {
+      activeListen = null;
+      if (modal?.kind !== "inv-update") return;
+      modal.listening = false;
+      modal.text = text;
+      proposeUpdate(text);
+    },
+    onError: (code) => {
+      activeListen = null;
+      if (modal?.kind !== "inv-update") return;
+      modal.listening = false;
+      modal.error = speechErrorMessage(code);
+      renderModal();
+    },
+    onState: (state) => {
+      if (modal?.kind !== "inv-update") return;
+      modal.listening = state === "listening";
+      document.querySelector(".inv-mic-big")?.classList.toggle("listening", modal.listening);
+      const status = document.querySelector("[data-listen-status]");
+      if (status) status.textContent = modal.listening ? "Listening… speak now" : "";
+    },
+  });
+}
+
+function startSearchListening() {
+  stopListening();
+  searchListening = true;
+  const input = document.querySelector("#inv-search");
+  document.querySelector(".inv-mic")?.classList.add("listening");
+  activeListen = listen({
+    win: window,
+    onText: (text) => { if (input) input.value = text; },
+    onDone: (text) => {
+      activeListen = null;
+      searchListening = false;
+      document.querySelector(".inv-mic")?.classList.remove("listening");
+      if (input) input.value = text;
+      runInventorySearch(text);
+    },
+    onError: (code) => {
+      activeListen = null;
+      searchListening = false;
+      document.querySelector(".inv-mic")?.classList.remove("listening");
+      const message = speechErrorMessage(code);
+      if (message) showToast(message);
+    },
+  });
+}
+
+/* ---------------------------------------------------------- update sheet */
+
+function openInventoryUpdate() {
+  modal = { kind: "inv-update", phase: "say", text: "", listening: false, error: "", proposal: null };
+  const speaking = speechSupported(window);
+  renderModal({ focus: false });
+  if (speaking) startUpdateListening();
+  // Focus in the same tap so iPhone raises the keyboard (and its mic) at once.
+  if (!speaking) document.querySelector("#inv-said")?.focus();
+  else renderModal({ focus: false });
+}
+
+async function proposeUpdate(text) {
+  const said = String(text || "").trim();
+  if (!said) {
+    modal.error = "Say or type what you put where.";
+    renderModal({ focus: false });
+    return;
+  }
+  const proposal = understandUpdate(said, inventory, { lastItemId: lastInventoryItemId });
+  modal.phase = "confirm";
+  modal.text = said;
+  modal.proposal = proposal;
+  modal.error = "";
+  renderModal({ focus: false });
+  // A new-looking name might still be something listed under other words.
+  if (proposal.isNew && proposal.itemText && semanticState() === "ready" && inventory.items.length) {
+    const scores = await semanticScores(proposal.itemText, inventory.items);
+    if (!scores || modal?.proposal !== proposal) return;
+    const extra = [...scores].filter(([, score]) => score >= 0.75).sort((a, b) => b[1] - a[1]).slice(0, 2)
+      .map(([id]) => inventoryItem(id)).filter((item) => item && !proposal.candidates.some((row) => row.id === item.id));
+    if (!extra.length) return;
+    snapshotInventoryForm();
+    proposal.candidates = [...proposal.candidates, ...extra.map((item) => ({ id: item.id, name: item.name, location: item.location, stock: item.stock, score: 0.6 }))];
+    renderModal({ focus: false });
+  }
+}
+
+function snapshotInventoryForm() {
+  const form = document.querySelector("#inv-update-form, #inv-item-form");
+  if (!form || !modal?.proposal) return;
+  const data = new FormData(form);
+  const proposal = modal.proposal;
+  if (data.has("name")) proposal.name = String(data.get("name"));
+  if (data.has("location")) proposal.location = String(data.get("location"));
+  if (data.has("stock")) proposal.stock = String(data.get("stock"));
+  if (data.has("note")) proposal.note = String(data.get("note"));
+  if (data.has("aliases")) proposal.aliasesText = String(data.get("aliases"));
+}
+
+function stockField(selected) {
+  return `<fieldset><legend>How many left</legend><div class="segmented segmented-3">
+    ${STOCK_LEVELS.map((level) => `<label><input type="radio" name="stock" value="${level}" ${selected === level ? "checked" : ""} /><span>${STOCK_LABELS[level]}</span></label>`).join("")}
+  </div></fieldset>`;
+}
+
+function locationField(value, { suggestions = [], placeholder = "e.g. Cupboard upstairs › X box", chipsWhenFilled = true } = {}) {
+  const places = knownLocations(inventory);
+  // A place already worked out needs no row of alternatives under it; the list
+  // on the field still offers every known place.
+  const showChips = !value || chipsWhenFilled;
+  const chips = showChips ? [...new Set([...suggestions, ...places])].filter((place) => place && place !== value).slice(0, value ? 3 : 4) : [];
+  return `<label>Where<input name="location" maxlength="160" value="${esc(value || "")}" placeholder="${esc(placeholder)}" list="inv-places" autocomplete="off" /></label>
+    <datalist id="inv-places">${places.map((place) => `<option value="${esc(place)}"></option>`).join("")}</datalist>
+    ${chips.length ? `<div class="inv-chips" aria-label="Places used before">${chips.map((place) => `<button type="button" class="inv-chip" data-action="inv-place" data-extra="${esc(place)}">${esc(place)}</button>`).join("")}</div>` : ""}`;
+}
+
+function inventoryUpdateForm() {
+  if (modal.phase !== "confirm") {
+    const speaking = speechSupported(window);
+    return `<form id="inv-update-form">${modalHead("Update")}
+      ${speaking ? `<button type="button" class="inv-mic-big${modal.listening ? " listening" : ""}" data-action="inv-listen" aria-label="${modal.listening ? "Stop" : "Speak"}">${MIC_ICON}</button>
+      <p class="inv-listen-status" data-listen-status>${modal.listening ? "Listening… speak now" : "Tap the mic to speak"}</p>` : ""}
+      <label>What happened<textarea id="inv-said" name="said" rows="3" maxlength="600" placeholder="I’ve put the small picture hooks in the X box in the upstairs cupboard, we’ve got loads">${esc(modal.text || "")}</textarea></label>
+      ${modal.error ? `<p class="form-error">${esc(modal.error)}</p>` : ""}
+      ${speaking ? "" : `<p class="helper">Tap the box, then the mic on the keyboard to dictate.</p>`}
+      <button class="primary wide" type="submit">Next</button>
+    </form>`;
+  }
+  const p = modal.proposal;
+  const matched = p.itemId ? inventoryItem(p.itemId) : null;
+  const others = p.candidates.filter((row) => row.id !== p.itemId);
+  const status = matched
+    ? `Updating <strong>${esc(matched.name)}</strong>${matched.location ? ` · was in ${esc(matched.location)}` : ""}`
+    : "New item";
+  return `<form id="inv-update-form">${modalHead("Check and save")}
+    ${p.needsSplit ? `<p class="form-error" role="alert">Sounds like more than one item — save this one, then say the other separately.</p>` : ""}
+    <p class="inv-heard">“${esc(modal.text)}” <button type="button" class="text-button" data-action="inv-reword">Change</button></p>
+    <div>
+      <label>Item<input name="name" required maxlength="80" value="${esc(p.name)}" autocomplete="off" /></label>
+      <p class="helper inv-match">${status}</p>
+      ${others.length || p.itemId ? `<div class="inv-chips">${others.length ? `<span class="inv-chips-label">${p.ambiguous || !p.itemId ? "Did you mean" : "Or"}</span>` : ""}
+        ${others.map((row) => `<button type="button" class="inv-chip" data-action="inv-pick" data-id="${esc(row.id)}">${esc(row.name)}</button>`).join("")}
+        ${p.itemId ? `<button type="button" class="inv-chip quiet" data-action="inv-pick" data-id="new">New item instead</button>` : ""}
+      </div>` : ""}
+    </div>
+    <div>${locationField(p.location, { chipsWhenFilled: false, suggestions: p.locationSuggestions, placeholder: p.locationIsHere ? "Where’s “here”? Pick or type" : "e.g. Cupboard upstairs › X box" })}</div>
+    ${stockField(p.stock)}
+    <label>Note <span class="optional">optional</span><input name="note" maxlength="200" value="${esc(p.note || (matched?.note ?? ""))}" placeholder="e.g. About 3 left" /></label>
+    <p class="form-error" id="form-error"></p>
+    <button class="primary wide" type="submit">Save</button>
+    <button class="secondary wide" type="button" data-action="inv-again">Say it again</button>
+  </form>`;
+}
+
+function inventoryItemForm() {
+  const p = modal.proposal;
+  const item = p.itemId ? inventoryItem(p.itemId) : null;
+  const history = item?.history || [];
+  return `<form id="inv-item-form">${modalHead(item ? "Edit item" : "Add an item")}
+    <label>Item<input name="name" required maxlength="80" value="${esc(p.name)}" autocomplete="off" /></label>
+    <label>Also called <span class="optional">optional, commas between</span><input name="aliases" maxlength="200" value="${esc(p.aliasesText ?? (item?.aliases || []).join(", "))}" placeholder="e.g. hooks, hanging hooks" autocomplete="off" /></label>
+    <div>${locationField(p.location)}</div>
+    ${stockField(p.stock)}
+    <label>Note <span class="optional">optional</span><input name="note" maxlength="200" value="${esc(p.note || "")}" /></label>
+    ${history.length > 1 ? `<details class="room-help form-help"><summary>History</summary><ul class="inv-history">${history.map((entry) => `<li><span>${esc(whenLabel(entry.at) || "")}</span> ${esc(entry.location || "No place")} · ${esc(STOCK_LABELS[entry.stock])}</li>`).join("")}</ul></details>` : ""}
+    <p class="form-error" id="form-error"></p>
+    <button class="primary wide" type="submit">${item ? "Save" : "Add item"}</button>
+    ${item ? `<button class="danger-link" type="button" data-action="inv-delete-from-form" data-id="${esc(item.id)}">Delete item</button>` : ""}
+  </form>`;
+}
+
+function openInventoryItem(id, name = "") {
+  const item = id ? inventoryItem(id) : null;
+  modal = {
+    kind: "inv-item",
+    proposal: item
+      ? { itemId: item.id, name: item.name, location: item.location, stock: item.stock, note: item.note }
+      : { itemId: null, name: name ? name[0].toUpperCase() + name.slice(1) : "", location: "", stock: "plenty", note: "" },
+  };
+  renderModal();
+}
+
+function saveInventoryChange(change, verb) {
+  let saved = null;
+  const ok = changeInventory(() => {
+    const result = applyUpdate(inventory, change);
+    saved = result.item;
+    lastInventoryUndo = { id: result.item.id, before: result.before };
+  });
+  if (!ok || !saved) return;
+  lastInventoryItemId = saved.id;
+  modal = null;
+  if (inventorySearch.text.trim()) runInventorySearch(inventorySearch.text);
+  render();
+  showToast(`${verb} ${saved.name}`, { action: "inv-undo", actionLabel: "Undo" });
+}
+
+function saveInventoryUpdate(event) {
+  event.preventDefault();
+  if (modal?.kind !== "inv-update") return;
+  if (modal.phase !== "confirm") {
+    stopListening();
+    proposeUpdate(new FormData(event.target).get("said"));
+    return;
+  }
+  snapshotInventoryForm();
+  const p = modal.proposal;
+  if (!p.name.trim()) return showFormError("Give the item a name.");
+  const existing = p.itemId ? inventoryItem(p.itemId) : null;
+  saveInventoryChange({
+    itemId: existing?.id || null,
+    name: p.name,
+    // "Here" left blank keeps the place it had rather than wiping it.
+    location: p.location.trim() || existing?.location || "",
+    stock: p.stock,
+    note: p.note,
+  }, existing ? "Updated" : "Added");
+}
+
+function saveInventoryItem(event) {
+  event.preventDefault();
+  if (modal?.kind !== "inv-item") return;
+  snapshotInventoryForm();
+  const p = modal.proposal;
+  if (!p.name.trim()) return showFormError("Give the item a name.");
+  saveInventoryChange({
+    itemId: p.itemId,
+    name: p.name,
+    location: p.location,
+    stock: p.stock,
+    note: p.note,
+    aliases: String(p.aliasesText || "").split(",").map((alias) => alias.trim()).filter(Boolean),
+  }, p.itemId ? "Saved" : "Added");
+}
+
+function removeInventoryItem(id) {
+  let removed = null;
+  changeInventory(() => { removed = removeItem(inventory, id); });
+  if (!removed) return;
+  lastInventoryUndo = { id, before: removed, deleted: true };
+  modal = null;
+  if (inventorySearch.text.trim()) runInventorySearch(inventorySearch.text);
+  render();
+  showToast(`Deleted ${removed.name}`, { action: "inv-undo", actionLabel: "Undo" });
+}
+
+function undoInventory() {
+  const undo = lastInventoryUndo;
+  lastInventoryUndo = null;
+  if (!undo) return;
+  changeInventory(() => {
+    if (undo.before) restoreItem(inventory, undo.before, undo.before);
+    else removeItem(inventory, undo.id);
+  });
+  if (inventorySearch.text.trim()) runInventorySearch(inventorySearch.text);
+  render();
+  showToast("Undone");
+}
+
+function markBought(id) {
+  const item = inventoryItem(id);
+  if (!item) return;
+  const note = /left$/i.test(item.note || "") ? "" : item.note;
+  changeInventory(() => {
+    const result = applyUpdate(inventory, { itemId: id, name: item.name, location: item.location, stock: "plenty", note });
+    lastInventoryUndo = { id, before: result.before };
+  });
+  render();
+  showToast(`${item.name} back to Plenty`, { action: "inv-undo", actionLabel: "Undo" });
+}
+
+async function shareShoppingList() {
+  const lines = shoppingList(inventory).map((item) => `• ${item.name}${item.stock === "out" ? " (run out)" : " (low)"}`);
+  const text = `To buy\n${lines.join("\n")}`;
+  try {
+    if (navigator.share) await navigator.share({ title: "To buy", text });
+    else if (navigator.clipboard) { await navigator.clipboard.writeText(text); showToast("List copied"); }
+  } catch { /* Share sheet dismissed. */ }
+}
+
+function handleInventoryClick(action, target, event) {
+  const { id, extra } = target.dataset;
+  if (action === "inv-update") { event.preventDefault(); openInventoryUpdate(); }
+  if (action === "inv-add") { event.preventDefault(); openInventoryItem(null, extra || ""); }
+  if (action === "inv-edit") { event.preventDefault(); stopListening(); openInventoryItem(id); }
+  if (action === "inv-view") { inventoryView = id === "shop" ? "shop" : "items"; render(); }
+  if (action === "inv-reload") loadInventory().then(render);
+  if (action === "inv-undo") { event.preventDefault(); undoInventory(); }
+  if (action === "inv-share-list") shareShoppingList();
+  if (action === "inv-search-mic") {
+    event.preventDefault();
+    if (searchListening) { activeListen?.stop(); return; }
+    startSearchListening();
+  }
+  if (action === "inv-listen") {
+    event.preventDefault();
+    if (modal?.listening) { activeListen?.stop(); return; }
+    modal.text = document.querySelector("#inv-said")?.value || modal.text;
+    startUpdateListening();
+    renderModal({ focus: false });
+  }
+  if (action === "inv-again") {
+    event.preventDefault();
+    modal = { kind: "inv-update", phase: "say", text: "", listening: false, error: "", proposal: null };
+    renderModal({ focus: false });
+    if (speechSupported(window)) { startUpdateListening(); renderModal({ focus: false }); }
+    else document.querySelector("#inv-said")?.focus();
+  }
+  if (action === "inv-reword") {
+    event.preventDefault();
+    modal.phase = "say";
+    renderModal({ focus: false });
+    document.querySelector("#inv-said")?.focus();
+  }
+  if (action === "inv-pick" && modal?.proposal) {
+    event.preventDefault();
+    snapshotInventoryForm();
+    const p = modal.proposal;
+    if (id === "new") {
+      const current = p.itemId ? inventoryItem(p.itemId) : null;
+      if (current) p.candidates = [{ id: current.id, name: current.name, location: current.location, stock: current.stock, score: 0 }, ...p.candidates.filter((row) => row.id !== current.id)];
+      p.itemId = null;
+      p.name = p.itemText ? p.itemText[0].toUpperCase() + p.itemText.slice(1) : p.name;
+    } else {
+      const picked = inventoryItem(id);
+      if (picked) {
+        p.itemId = picked.id;
+        p.name = picked.name;
+        if (!p.location) p.location = picked.location;
+        if (!p.stockHeard) p.stock = picked.stock;
+        p.ambiguous = false;
+      }
+    }
+    renderModal({ focus: false });
+  }
+  if (action === "inv-place") {
+    event.preventDefault();
+    const input = document.querySelector('.modal input[name="location"]');
+    if (input) input.value = extra || "";
+  }
+  if (action === "inv-delete-from-form") { event.preventDefault(); removeInventoryItem(id); }
 }
 
 bootApp();
