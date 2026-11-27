@@ -60,6 +60,7 @@ test("WebKit: Smart understanding opens sheet (iPhone viewport)", async (t) => {
   await page.locator('[data-action="inv-ai-settings"]').first().click();
   await waitForModalSettled(page);
   const topmost = await assertTopmostInModal(page);
+  assert.equal(topmost.title, true, "modal title must be topmost");
   assert.equal(topmost.key, true, "API key field must be topmost");
   assert.equal(topmost.testKey, true, "Test key must be topmost");
   const title = await page.locator("#modal-title").textContent();
@@ -126,9 +127,10 @@ function assertTopmostInModal(page) {
       const top = document.elementFromPoint(x, y);
       return top && layer.contains(top);
     }
+    const title = document.getElementById("modal-title");
     const key = document.querySelector('input[name="apiKey"]');
     const testBtn = [...document.querySelectorAll("button")].find((b) => b.dataset.action === "inv-ai-test-key");
-    return { key: hitInModal(key), testKey: hitInModal(testBtn) };
+    return { title: hitInModal(title), key: hitInModal(key), testKey: hitInModal(testBtn) };
   });
 }
 
@@ -183,6 +185,7 @@ test("WebKit: stale cached app.js (pre-fix) then upgrade opens sheet", async (t)
   await freshPage.locator('[data-action="inv-ai-settings"]').first().click();
   await waitForModalSettled(freshPage);
   const top = await assertTopmostInModal(freshPage);
+  assert.equal(top.title, true);
   assert.equal(top.key, true);
   await browser.close();
   server.close();
