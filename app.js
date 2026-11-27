@@ -1664,12 +1664,17 @@ function transactionRow({ transaction, balancePence }, friend) {
 }
 
 function renderModal({ focus: shouldFocus = true } = {}) {
-  document.querySelector(".modal-layer")?.remove();
-  if (!modal) return;
+  const root = document.getElementById("modal-root") || document.body;
+  root.querySelector(".modal-layer")?.remove();
+  if (!modal) {
+    document.body.classList.remove("modal-open");
+    return;
+  }
+  document.body.classList.add("modal-open");
   const layer = document.createElement("div");
   layer.className = "modal-layer";
   layer.innerHTML = `<div class="scrim" data-action="close-modal"></div><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">${modalMarkup()}</section>`;
-  document.body.append(layer);
+  root.append(layer);
   const focus = layer.querySelector("input:not(.visually-hidden):not([type=hidden]):not([type=checkbox]):not([type=radio]), select, button");
   if (shouldFocus) requestAnimationFrame(() => focus?.focus());
 }
@@ -4019,8 +4024,8 @@ function inventoryScreen() {
       <div class="inv-actions">
         <button class="primary inv-speak" type="button" data-action="inv-update" aria-label="Update inventory — type or dictate">${MIC_ICON}<span>Update</span></button>
         <button class="secondary" type="button" data-action="inv-add">Add by hand</button>
-        <button class="text-button" type="button" data-action="inv-ai-settings">Smart understanding</button>
       </div>
+      <button class="inv-settings-link" type="button" data-action="inv-ai-settings">Smart understanding</button>
       <form class="inv-search" id="inv-search-form" role="search">
         <label class="visually-hidden" for="inv-search">Find something</label>
         <input id="inv-search" type="search" name="q" placeholder="Where are the…" value="${esc(inventorySearch.text)}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />

@@ -58,8 +58,10 @@ test("WebKit: Smart understanding opens sheet (iPhone viewport)", async (t) => {
   page.on("pageerror", (e) => errors.push(String(e)));
   await openInventoryLocal(page, `http://127.0.0.1:${boundPort}`);
   await page.locator('[data-action="inv-ai-settings"]').first().click();
-  const dialog = page.locator(".modal-layer .modal");
-  await dialog.waitFor({ state: "visible", timeout: 5000 });
+  await waitForModalSettled(page);
+  const topmost = await assertTopmostInModal(page);
+  assert.equal(topmost.key, true, "API key field must be topmost");
+  assert.equal(topmost.testKey, true, "Test key must be topmost");
   const title = await page.locator("#modal-title").textContent();
   assert.match(title || "", /Smart understanding/i);
   const keyField = page.locator('input[name="apiKey"]');
@@ -92,6 +94,42 @@ async function openInventoryLocal(page, baseUrl) {
     await page.waitForTimeout(300);
   }
   await page.waitForSelector('[data-action="inv-ai-settings"]', { timeout: 15_000 });
+}
+
+async function waitForModalSettled(page) {
+  const modal = page.locator(".modal-layer .modal");
+  await modal.waitFor({ state: "visible", timeout: 5000 });
+  await modal.evaluate((node) =>
+    new Promise((resolve) => {
+      const finish = () => resolve();
+      const name = getComputedStyle(node).animationName;
+      if (!name || name === "none") {
+        finish();
+        return;
+      }
+      node.addEventListener("animationend", finish, { once: true });
+      setTimeout(finish, 400);
+    }),
+  );
+}
+
+function assertTopmostInModal(page) {
+  return page.evaluate(() => {
+    const layer = document.querySelector(".modal-layer");
+    if (!layer) return { ok: false, reason: "no modal layer" };
+    function hitInModal(el) {
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) return false;
+      const x = r.left + r.width / 2;
+      const y = r.top + Math.min(r.height / 2, r.height - 4);
+      const top = document.elementFromPoint(x, y);
+      return top && layer.contains(top);
+    }
+    const key = document.querySelector('input[name="apiKey"]');
+    const testBtn = [...document.querySelectorAll("button")].find((b) => b.dataset.action === "inv-ai-test-key");
+    return { key: hitInModal(key), testKey: hitInModal(testBtn) };
+  });
 }
 
 test("WebKit: stale cached app.js (pre-fix) then upgrade opens sheet", async (t) => {
@@ -143,7 +181,9 @@ test("WebKit: stale cached app.js (pre-fix) then upgrade opens sheet", async (t)
   const freshPage = await freshCtx.newPage();
   await openInventoryLocal(freshPage, baseUrl);
   await freshPage.locator('[data-action="inv-ai-settings"]').first().click();
-  await freshPage.locator(".modal-layer .modal").waitFor({ state: "visible", timeout: 5000 });
+  await waitForModalSettled(freshPage);
+  const top = await assertTopmostInModal(freshPage);
+  assert.equal(top.key, true);
   await browser.close();
   server.close();
 });
