@@ -365,6 +365,7 @@ function render() {
   else if (boot.name === "error") app.innerHTML = errorScreen(boot.message, "Try again", "reload");
   else if (boot.name === "signed-out") app.innerHTML = signInScreen();
   else app.innerHTML = readyScreen();
+  document.body.classList.toggle("inventory-screen", boot.name === "ready" && screen.name === "inventory");
   renderModal();
   if (boot.name === "ready" && screen.name === "inventory" && inventoryReady()) maybeLoadSemantic();
 }
@@ -3893,7 +3894,11 @@ async function persistInventory() {
     const typing = document.activeElement?.matches?.("input, textarea");
     if (JSON.stringify(inventory) !== before && screen.name === "inventory" && !modal && !typing) render();
   } catch (error) {
-    invSync = { name: "error", message: error.message };
+    const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+    invSync = {
+      name: "error",
+      message: offline ? "You’re offline. Your changes stay on this phone until you’re back online." : error.message,
+    };
     updateSyncChip();
     throw error;
   }
@@ -3941,7 +3946,7 @@ function inventoryScreen() {
   } else {
     body = `
       <div class="inv-actions">
-        <button class="primary inv-speak" type="button" data-action="inv-update">${MIC_ICON}<span>Update</span></button>
+        <button class="primary inv-speak" type="button" data-action="inv-update" aria-label="Update inventory by voice">${MIC_ICON}<span>Update</span></button>
         <button class="secondary" type="button" data-action="inv-add">Add by hand</button>
       </div>
       <form class="inv-search" id="inv-search-form" role="search">
@@ -4230,6 +4235,7 @@ function inventoryUpdateForm() {
     ? `Updating <strong>${esc(matched.name)}</strong>${matched.location ? ` · was in ${esc(matched.location)}` : ""}`
     : "New item";
   return `<form id="inv-update-form">${modalHead("Check and save")}
+    ${p.needsSplit ? `<p class="form-error" role="alert">Sounds like more than one item — save this one, then say the other separately.</p>` : ""}
     <p class="inv-heard">“${esc(modal.text)}” <button type="button" class="text-button" data-action="inv-reword">Change</button></p>
     <div>
       <label>Item<input name="name" required maxlength="80" value="${esc(p.name)}" autocomplete="off" /></label>

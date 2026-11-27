@@ -14,6 +14,8 @@ export const STOCK_LEVELS = ["plenty", "low", "out"];
 export const STOCK_LABELS = { plenty: "Plenty", low: "Low", out: "Run out" };
 const HISTORY_LIMIT = 8;
 const TOMBSTONE_DAYS = 90;
+/** Counts above this stay Plenty with a note; at or below become Low. */
+export const LOW_STOCK_COUNT_THRESHOLD = 5;
 
 /* ------------------------------------------------------------------ model */
 
@@ -277,34 +279,61 @@ const OF_THEM = "(?: of (?:them|those|these|'em|it|the [a-z ]+?))?";
 
 // Order matters: "running out" and "nearly run out" are low, not out.
 const STOCK_RULES = [
-  ["low", new RegExp(`\\b(?:running (?:out|low)|run(?:ning)? short|getting low|nearly (?:run |ran )?(?:out|gone|finished|empty)|almost (?:run |ran )?(?:out|gone|finished|empty)|not (?:got )?(?:many|much|enough|a lot)(?: left)?|only (?:got |have |got about |about )?(?:a couple|a few|a handful|a little|a bit|one|two|three|${NUM}|the one)${OF_THEM}(?: left| remaining)?|just (?:a couple|a few|one|two|${NUM})${OF_THEM} left|(?:a couple|a few|a handful|${NUM})${OF_THEM} (?:left|remaining)|last (?:one|few|couple|pack|packet|box|bottle|roll|bag|tin|tube)|need (?:to (?:buy|get|order) )?(?:more|some more)|need to (?:buy|get|order|restock)|(?:should|must) (?:buy|get|order) (?:more|some)|(?:buy|get|order) more|we'?ve (?:only )?got a couple|we have (?:only )?a couple|there(?:'s| is| are) (?:only )?a couple|low (?:on|stock)|\\blow\\b|few left|hardly any)`), "low"],
-  ["out", /\b(?:(?:have |we've |we have |'ve )?(?:run|ran) out|out of (?:stock|them|those|these|it)|we(?:'re| are) out|none left|no more(?: left)?|nothing left|none at all|all gone|(?:all )?used up|used (?:them|it|those|these) (?:all )?up|used (?:all of )?(?:them|it) all|used the last|finished (?:them|it|those|the lot)|(?:is|are|it's|they're) finished|\bfinished\b|(?:is|are|it's|they're) empty|there(?:'s| is| are) none|(?:got|have) none|zero left|none\b)/, "out"],
-  ["plenty", /\b(?:loads|plenty|lots|a lot|tons|heaps|masses|hundreds|full (?:box|pack|bag|set|tub|tin)|stocked up|restocked|topped up|well stocked|bought (?:more|loads|lots|some|a new|new)|new (?:box|pack|packet|bag|set|roll)|a good (?:amount|number|supply|few)|more than enough|enough|a load|a ton|shed ?loads|loads left|we're fine|we are fine|good for now|all good)\b/, "plenty"],
+  ["low", new RegExp(`\\b(?:running (?:out|low)|run(?:ning)? short|getting low|nearly (?:run |ran )?(?:out|gone|finished|empty)|almost (?:run |ran )?(?:out|gone|finished|empty)|not (?:got )?(?:many|much|enough|a lot)(?: left)?|only (?:got |have |got about |about )?(?:a couple|a few|a handful|a little|a bit|\\bone\\b|\\btwo\\b|\\bthree\\b|${NUM}|the one)${OF_THEM}(?: left| remaining)?|just (?:a couple|a few|\\bone\\b|\\btwo\\b|${NUM})${OF_THEM} left|(?:a couple|a few|a handful|${NUM})${OF_THEM} (?:left|remaining)|last (?:one|few|couple|pack|packet|box|bottle|roll|bag|tin|tube)|need (?:to (?:buy|get|order) )?(?:more|some more)|need to (?:buy|get|order|restock)|(?:should|must) (?:buy|get|order) (?:more|some)|(?:buy|get|order) more|we'?ve (?:only )?got a couple|we have (?:only )?a couple|there(?:'s| is| are) (?:only )?a couple|low (?:on|stock)|\\blow\\b|few left|hardly any)`), "low"],
+  ["out", /\b(?:(?:have |we've |we have |'ve )?(?:run|ran) out|out of (?:stock|them|those|these|it)|we(?:'re| are) out|none left|no more(?: left)?|nothing left|none at all|all gone|(?:all )?used up|used (?:them|it|those|these) (?:all )?up|used (?:all of )?(?:them|it) all|used the last(?:\s+of)?|finished (?:them|it|those|the lot)|(?:is|are|it's|they're) finished|\bfinished\b|(?:is|are|it's|they're) empty|there(?:'s| is| are) none|(?:got|have) none|zero left|none\b)/, "out"],
+  ["plenty", /\b(?:loads|plenty|lots|a lot|tons|heaps|masses|hundreds|half (?:a |the )?(?:box|pack|packet|bag|roll|tin|tub|bottle|tube)|full (?:box|pack|bag|set|tub|tin)|stocked up|restocked|topped up|well stocked|bought (?:more|loads|lots|some|a new|new)|new (?:box|pack|packet|bag|set|roll)|a good (?:amount|number|supply|few)|more than enough|enough|a load|a ton|shed ?loads|loads left|we're fine|we are fine|good for now|all good)\b/, "plenty"],
 ];
+
+function refineStockLevel(stock, text) {
+  if (!stock) return null;
+  const t = normalise(text);
+  if (/\bhalf (?:a |the )?(?:box|pack|packet|bag|roll|tin|tub|bottle|tube)\b/.test(t) && !/\bhalf (?:a |the )?(?:box|pack)/.test(stock.phrase)) {
+    stock = { ...stock, level: "plenty", phrase: stock.phrase || "half a box", vague: "half" };
+  }
+  if (stock.count != null && stock.count > LOW_STOCK_COUNT_THRESHOLD) {
+    return { ...stock, level: "plenty" };
+  }
+  if (stock.count != null && stock.count >= 1 && stock.count <= LOW_STOCK_COUNT_THRESHOLD) {
+    return { ...stock, level: "low" };
+  }
+  if (/\ba handful(?:\s+of)?\b/.test(t) && stock.level !== "out") {
+    return { ...stock, level: "low", phrase: stock.phrase || "a handful" };
+  }
+  return stock;
+}
 
 /** The stock level a sentence states, the words that said it, and any rough count. */
 export function detectStock(text) {
   const t = normalise(text);
+  const hardOut = t.match(/\b(?:none left|no more(?: left)?|nothing left|all gone|zero left)\b/);
+  if (hardOut) {
+    return refineStockLevel({ level: "out", phrase: hardOut[0], index: hardOut.index, count: null }, t);
+  }
   for (const [, pattern, level] of STOCK_RULES) {
     const found = t.match(pattern);
     if (found) {
       let count = null;
-      const counted = found[0].match(new RegExp(`\\b(${NUM})${OF_THEM} (?:left|remaining)`)) || found[0].match(new RegExp(`only (?:got |have |about )?(${NUM})\\b`));
+      const counted = found[0].match(new RegExp(`\\b(${NUM})${OF_THEM} (?:left|remaining)`))
+        || found[0].match(new RegExp(`(?:only |about |roughly |around )?(?:got |have )?(${NUM})\\b`))
+        || found[0].match(new RegExp(`\\b(${NUM})\\b(?=\\s*(?:left|remaining))`));
       if (counted) {
         const raw = counted[1].replace(/^a /, "");
         count = /^\d+$/.test(raw) ? Number(raw) : NUM_WORDS[raw] ?? null;
       }
-      return { level, phrase: found[0], index: found.index, count };
+      return refineStockLevel({ level, phrase: found[0], index: found.index, count }, t);
     }
+  }
+  if (/\ba handful(?:\s+of)?\b/.test(t)) {
+    return refineStockLevel({ level: "low", phrase: "a handful", index: t.search(/\ba handful/), count: null }, t);
   }
   return null;
 }
 
 /* ------------------------------------------------------- update parsing */
 
-const FILLERS = /\b(?:um+|uh+|erm+|er|you know|i mean|basically|like,|okay so|ok so|right so|so yeah|yeah)\b/g;
+const FILLERS = /\b(?:um+|uh+|erm+|er+|you know|i mean|basically|literally|sort of|kind of|like(?=\s|,)|okay so|ok so|right so|so yeah|yeah|,?\s*right)\b/gi;
 const LEADS = /^(?:(?:ok(?:ay)?|so|right|and|well|hey|now|just|also|oh)\b[ ,]*)+/;
-const VERBS = "put|putting|placed|moved|move|stored|store|stashed|left|kept|keep|popped|pop|dropped|chucked|thrown|threw|stuck|added|add|returned|return|taken|took|hidden|hid|packed|tidied|filed|stacked|hung|lined|placing|moving|storing";
+const VERBS = "put|putting|placed|moved|move|stored|store|stashed|left|kept|keep|popped|pop|dropped|chucked|thrown|threw|stuck|added|add|returned|return|taken|took|take|takes|taking|got|get|gotten|removed|remove|hidden|hid|packed|tidied|filed|stacked|hung|lined|placing|moving|storing";
 const SUBJECT = "(?:i(?:'ve| have| just| had|'d)?|we(?:'ve| have| just)?|sarah(?:'s| has)?|someone(?:'s| has)?|eli(?:'s| has)?|you(?:'ve)?)";
 const VERB_LEAD = new RegExp(`^(?:${SUBJECT}\\s+)?(?:just\\s+|now\\s+|also\\s+|gone and\\s+|finally\\s+)*(?:${VERBS})\\b\\s*`);
 const BE_LOCATION = /^(.+?)(?:'s|'re|\s+(?:are|is|'re|'s|live|lives|go|goes|belong|belongs|now live|are now|is now|have been|has been|are kept|is kept|are stored|is stored|can be found|sit|sits|have gone(?: up| back| away| down)?|has gone(?: up| back| away| down)?|went(?: up| back| away| down)?|are going|ended up))\s+(?:now\s+|kept\s+|stored\s+|put\s+|moved\s+)?(?=(?:back\s+)?(?:in|into|inside|on|onto|under|underneath|beneath|behind|next to|beside|by|at|above|below|upstairs|downstairs|in the|on the|here|there)\b)(.*)$/;
@@ -321,20 +350,41 @@ const PART_ARTICLES = /^(?:(?:the|a|an|this|that|these|those|our|my|one of the|o
 const ROOM_WORDS = /\b(?:upstairs|downstairs|loft|attic|garage|shed|kitchen|utility|hall|hallway|landing|bathroom|ensuite|en suite|bedroom|nursery|office|study|lounge|living room|dining room|playroom|conservatory|garden|porch|cellar|basement|car|boot|room)\b/;
 const FURNITURE_WORDS = /\b(?:cupboard|wardrobe|closet|cabinet|shelf|shelves|shelving|unit|dresser|desk|sideboard|chest|bookcase|rack|fridge|freezer|larder|pantry|airing|stairs|sink|bed|table|counter|worktop|island|cot|sofa)\b/;
 const CONTAINER_WORDS = /\b(?:box|tub|bag|tin|jar|basket|crate|drawer|caddy|case|pouch|tray|bin|bucket|organiser|organizer|pot|container|envelope|folder|file|toolbox|holdall)\b/;
-const LOCATION_CUT = /\s*\b(?:because|cos|cause|so that|so we|so i|so they|for now|for later|just in case|in case|to keep|which is|which are|where we|you know|right)\b.*$/;
+const LOCATION_CUT = /\s*\b(?:because|cos|cause|so that|so we|so i|so they|for now|for later|just in case|in case|to keep|which is|which are|where we|you know|right|we have|we've|we're|i have|i've|there's|there is|there are|about|roughly|around)\b.*$/;
 
 function capitalise(text) {
   return text ? text[0].toUpperCase() + text.slice(1) : text;
 }
 
+function stripStockPhrases(text) {
+  let rest = normalise(text);
+  for (let i = 0; i < 4; i += 1) {
+    const stock = detectStock(rest);
+    if (!stock) break;
+    rest = rest.replace(stock.phrase, " ").replace(/\s+/g, " ").trim();
+  }
+  return rest;
+}
+
 function cleanItemPhrase(text) {
-  let item = normalise(text).split(",")[0].replace(/[,.;:!?]+/g, " ").replace(/\s+/g, " ").trim();
+  let item = stripStockPhrases(text).replace(FILLERS, " ").split(",")[0].replace(/[,.;:!?]+/g, " ").replace(/\s+/g, " ").trim();
+  item = item.replace(VERB_LEAD, "").replace(LEADS, "").trim();
   for (let i = 0; i < 3; i += 1) {
     item = item.replace(/^back\s+/, "").replace(DETERMINERS, "").replace(CONTAINER_OF, "").trim();
   }
+  item = item.replace(/\b(?:out of|from)\s+(?:the\s+)?[a-z][\w\s]*$/i, "").trim();
+  item = item.replace(/\s+(?:left|remaining)(?:\s+of\s+them)?$/g, "").trim();
   item = item.replace(/\s+(?:back|away|over|down|up|again|now|as well|too|here|there|safely)$/g, "").trim();
   item = item.replace(/\s+(?:back|away)$/, "").trim();
   return item;
+}
+
+function detectNeedsSplit(text) {
+  const t = normalise(text).replace(FILLERS, " ").replace(/\s+/g, " ").trim();
+  const verbs = (t.match(/\b(?:put|placed|moved|stashed|stored|left|took|taken)\b/g) || []).length;
+  if (verbs >= 2 && /\band\b/.test(t)) return true;
+  if (/\b(?:put|moved|placed|stashed)\b[^.]+?\band\b[^.]+?\b(?:the\s+)?\w+.*\b(?:in|into|on|under)\b/.test(t)) return true;
+  return false;
 }
 
 function locationRank(part) {
@@ -346,7 +396,7 @@ function locationRank(part) {
 
 /** "into the cupboard upstairs, into the X box" -> "Cupboard upstairs › X box" (outer first). */
 export function formatLocation(raw) {
-  let text = normalise(raw).replace(LOCATION_CUT, "").replace(/[.;:!?]+/g, ",").trim()
+  let text = stripStockPhrases(raw).replace(FILLERS, " ").replace(LOCATION_CUT, "").replace(/[.;:!?]+/g, ",").trim()
     .replace(/^(?:(?:back|away|up|down|over|now|safely)\s+)+/, "");
   if (!text) return "";
   const parts = [];
@@ -460,18 +510,27 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
   let itemText = "";
   let locationRaw = "";
   let keepLocation = false;
+  let tookOut = false;
 
-  const fromTo = main.match(/^(.*?)\s+from\s+.+?\s+(?:to|into|in)\s+(.+)$/);
+  const tookMatch = main.match(/^(?:the\s+)?(.+?)\s+out(?:\s+of\s+.+)?$/);
+  if (tookMatch && /\b(?:took|take|taken|removed|remove)\b/.test(clauses[0] || main)) {
+    itemText = tookMatch[1];
+    locationRaw = "";
+    tookOut = true;
+    keepLocation = false;
+  }
+
+  const fromTo = !tookOut && main.match(/^(.*?)\s+from\s+.+?\s+(?:to|into|in)\s+(.+)$/);
   const be = main.replace(VERB_LEAD, "").match(BE_LOCATION);
   const verbLead = VERB_LEAD.test(main);
   if (verbLead) main = main.replace(VERB_LEAD, "");
-  if (fromTo && verbLead) {
+  if (!tookOut && fromTo && verbLead) {
     itemText = fromTo[1].replace(VERB_LEAD, "");
     locationRaw = fromTo[2];
-  } else if (!verbLead && be) {
+  } else if (!tookOut && !verbLead && be) {
     itemText = be[1];
     locationRaw = be[2];
-  } else {
+  } else if (!tookOut) {
     const prep = main.match(PREP_RE);
     const bare = main.match(BARE_PLACES);
     const here = main.match(/\s(?:back\s+)?(?:here|there|over here|over there|in here|in there)\b/);
@@ -489,6 +548,13 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
     }
   }
   if (!itemText && stockItemText) itemText = stockItemText;
+  if (!locationRaw && itemText) {
+    const tail = itemText.match(/^(.*?)\s+(?:in|into|on|onto|under|inside)\s+(.+)$/i);
+    if (tail) {
+      itemText = tail[1];
+      locationRaw = `in ${tail[2]}`;
+    }
+  }
   itemText = cleanItemPhrase(itemText);
   if (/^(?:put|got|have|we|i)$/.test(itemText)) itemText = "";
   locationRaw = locationRaw.replace(/^[\s,]+/, "");
@@ -526,6 +592,9 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
 
   const level = stock?.level || (item ? item.stock : "plenty");
   const name = item ? item.name : capitalise(pronoun ? "" : itemText);
+  let note = "";
+  if (count != null) note = `About ${count} left`;
+  else if (stock?.vague === "half" || /\bhalf (?:a |the )?(?:box|pack)/.test(t)) note = "About half left";
   return {
     said,
     itemText,
@@ -534,6 +603,7 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
     isNew: !item,
     pronoun,
     ambiguous,
+    needsSplit: detectNeedsSplit(said),
     candidates: candidates.map((row) => ({ id: row.item.id, name: row.item.name, location: row.item.location, stock: row.item.stock, score: Number(row.score.toFixed(2)) })),
     location,
     locationMatched: placed.matched,
@@ -544,13 +614,14 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
     stockHeard: Boolean(stock),
     stockPhrase: stock?.phrase || "",
     count,
-    note: count != null ? `About ${count} left` : "",
+    note,
+    tookOut,
   };
 }
 
 /* -------------------------------------------------------- search parsing */
 
-const QUESTION_LEADS = /^(?:(?:hey|ok|okay|so|right|um|erm|can you tell me|tell me|do you know|any idea)\s*,?\s*)*(?:where(?:'s| is| are|'re| was| were| have| has| did| do)?(?:\s+(?:i|we|you|someone|sarah|eli)\s+(?:put|leave|left|keep|store|stash|hide)(?:\s+the|\s+our|\s+my)?)?|where can i find|where would i find|where do we keep|have we got(?: any)?|have we any|do we have(?: any)?|do we still have(?: any)?|have we still got(?: any)?|is there(?: any)?|are there(?: any)?|i'?m (?:looking|searching|hunting) for|i am (?:looking|searching) for|i need|we need|looking for|search(?:ing)? for|find(?: me)?|show me|got any|how many|how much|what about)\b\s*/;
+const QUESTION_LEADS = /^(?:(?:hey|ok|okay|so|right|um|erm|can you tell me|tell me|do you know|any idea)\s*,?\s*)*(?:where(?:'s| is| are|'re| was| were| have| has| did| do)?(?:\s+(?:i|we|you|someone|sarah|eli)\s+(?:put|leave|left|keep|store|stash|hide)(?:\s+the|\s+our|\s+my)?)?|where can i find|where would i find|where do we keep|where might(?: the)?|what do we have (?:for|to)|have we got(?: any)?|have we any|do we have(?: any)?|do we still have(?: any)?|have we still got(?: any)?|is there(?: any)?|are there(?: any)?|i'?m (?:looking|searching|hunting) for|i am (?:looking|searching) for|i need|we need|looking for|search(?:ing)? for|find(?: me)?|show me|got any|how many|how much|what about)\b\s*/;
 const PURPOSE = /\b(?:something|anything|stuff|things?|a thing)\s+(?:to|for|that|which|i can use to|we can use to|i could use to)\s+(.+)$/;
 
 /** Words that point at things, for "something to hang a picture" style questions. */
@@ -602,6 +673,25 @@ export const CONCEPTS = {
   garden: ["glove", "secateur", "hose"],
   shoe: ["shoe polish", "lace"],
   dog: ["dog food", "poo bag", "lead"],
+  bathroom: ["bleach", "cleaner", "toilet roll", "plunger", "limescale"],
+  toilet: ["toilet roll", "bleach", "brush"],
+  kitchen: ["foil", "baking paper", "sponge", "washing up liquid", "cling film"],
+  cook: ["foil", "baking paper", "oil", "spice"],
+  baking: ["baking paper", "foil", "flour"],
+  diy: ["drill", "screw", "rawl plug", "filler", "sandpaper", "masking tape"],
+  toolbox: ["screwdriver", "hammer", "tape measure", "allen key"],
+  stationery: ["pen", "pencil", "stapler", "sellotape", "envelope", "paper"],
+  batteries: ["AA batteries", "AAA batteries", "battery"],
+  battery: ["AA batteries", "AAA batteries", "battery"],
+  tape: ["sellotape", "masking tape", "duct tape"],
+  first: ["plaster", "bandage", "antiseptic", "thermometer"],
+  aid: ["plaster", "bandage", "antiseptic"],
+  disinfect: ["antiseptic", "wipe", "spray"],
+  stain: ["stain remover", "vanish", "bicarbonate"],
+  spill: ["cloth", "kitchen roll", "wipe"],
+  mop: ["mop", "bucket", "floor cleaner"],
+  hoover: ["vacuum bag", "filter"],
+  laminate: ["floor cleaner", "mop"],
 };
 
 export function understandSearch(text) {
@@ -610,10 +700,16 @@ export function understandSearch(text) {
   t = t.replace(QUESTION_LEADS, "").replace(/\b(?:please|at the moment|right now|now|again|at all|left)\b/g, " ").replace(/\s+/g, " ").trim();
   const inPlace = t.match(/^(?:what(?:'s| is| do we have| have we got| have we)?|whats)\s+(?:in|inside|on|under)\s+(.+)$/);
   const purpose = t.match(PURPOSE);
-  let query = cleanItemPhrase(purpose ? purpose[1] : t);
+  const forWhat = t.match(/\b(?:what (?:do )?we have|anything|something) (?:for|to)\s+(.+)$/);
+  let query = cleanItemPhrase(purpose ? purpose[1] : forWhat ? forWhat[1] : t);
   const words = tokens(query);
   const expanded = new Set();
-  for (const word of words) for (const extra of CONCEPTS[word] || []) expanded.add(extra);
+  for (const word of words) {
+    for (const extra of CONCEPTS[word] || []) expanded.add(extra);
+    for (const [key, list] of Object.entries(CONCEPTS)) {
+      if (key.includes(word) || word.includes(key)) list.forEach((entry) => expanded.add(entry));
+    }
+  }
   return {
     said,
     query: inPlace ? "" : query,

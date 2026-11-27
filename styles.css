@@ -598,6 +598,16 @@ legend { padding: 0; margin-bottom: 7px; }
   text-decoration: underline;
 }
 
+/* Inventory search results sit high on the page; keep the toast above the dock, not over the list. */
+body.inventory-screen #toast {
+  bottom: auto;
+  top: calc(max(22px, env(safe-area-inset-top)) + 56px);
+  transform: translate(-50%, -80px);
+}
+body.inventory-screen #toast.show {
+  transform: translate(-50%, 0);
+}
+
 .busy {
   display: grid;
   place-items: center;

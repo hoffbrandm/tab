@@ -4,6 +4,7 @@ import {
   applyUpdate,
   detectStock,
   formatLocation,
+  LOW_STOCK_COUNT_THRESHOLD,
   mergeInventories,
   parseInventory,
   removeItem,
@@ -83,6 +84,61 @@ test("stock words", () => {
   const cases = { "we've got loads": "plenty", "plenty left": "plenty", "lots of them": "plenty", "only one left": "low", "a few left": "low", "running out": "low", "nearly run out": "low", "we've run out": "out", "none left": "out", "they're finished": "out", "running low": "low", "only a couple of those left": "low" };
   for (const [text, level] of Object.entries(cases)) assert.equal(detectStock(text)?.level, level, text);
   assert.equal(detectStock("only 2 left").count, 2);
+});
+
+test("counts above the low threshold stay plenty with a note", () => {
+  assert.equal(LOW_STOCK_COUNT_THRESHOLD, 5);
+  const eight = understandUpdate("Spare keys in the hall, about 8 left", house());
+  assert.equal(eight.stock, "plenty");
+  assert.equal(eight.note, "About 8 left");
+  const three = understandUpdate("Put the nappies back, only 3 left", house());
+  assert.equal(three.stock, "low");
+});
+
+test("filler words and compound places stay out of the item name", () => {
+  const got = understandUpdate(
+    "um like basically I put the spare batteries in the blue box on the top shelf of the hall cupboard we have about 8 left",
+    parseInventory({}),
+  );
+  assert.equal(got.name, "Spare batteries");
+  assert.equal(got.stock, "plenty");
+  assert.match(got.location, /Hall cupboard/i);
+  assert.match(got.location, /Blue box/i);
+});
+
+test("took out, used the last, half a box and a handful", () => {
+  const took = understandUpdate("took the drill out of the garage", house());
+  assert.equal(took.name, "Drill");
+  assert.equal(took.location, "");
+  assert.equal(took.tookOut, true);
+  const tape = understandUpdate("we used the last of the tape", house());
+  assert.equal(tape.stock, "out");
+  assert.equal(tape.name, "Tape");
+  const screws = understandUpdate("half a box of screws in the garage", house());
+  assert.equal(screws.name, "Screws");
+  assert.equal(screws.stock, "plenty");
+  const nails = understandUpdate("a handful of nails left in the toolbox", house());
+  assert.equal(nails.name, "Nails");
+  assert.equal(nails.stock, "low");
+});
+
+test("two items in one sentence asks to split", () => {
+  const got = understandUpdate("I put the hooks in the drawer and the glue in the garage", house());
+  assert.equal(got.needsSplit, true);
+});
+
+test("search understands indirect household uses", () => {
+  const inv = parseInventory({
+    items: [
+      { id: "c1", name: "Bathroom spray", location: "Under the sink", stock: "plenty", updatedAt: "2026-11-20T10:00:00Z" },
+      { id: "c2", name: "AA batteries", location: "Kitchen drawer", stock: "plenty", updatedAt: "2026-11-19T10:00:00Z" },
+    ],
+  });
+  const clean = searchItems(inv, understandSearch("something to clean the bathroom"));
+  assert.ok(clean.results.length, "clean the bathroom");
+  assert.equal(clean.results[0].item.name, "Bathroom spray");
+  const power = searchItems(inv, understandSearch("need batteries for the remote"));
+  assert.equal(power.results[0].item.name, "AA batteries");
 });
 
 test("nested places read outer first", () => {
