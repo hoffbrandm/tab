@@ -132,6 +132,7 @@ import { loadSemantic, onSemanticState, semanticScores, semanticState } from "./
 import { listen, speechErrorMessage, speechSupported } from "./inventory-speech.js";
 import {
   AI_MODEL_IDS,
+  displayGeminiModel,
   INV_AI_STORAGE_KEY,
   readAiSettings,
   smartUnderstandingAvailable,
@@ -1550,9 +1551,12 @@ function moreScreen() {
           edit: "inv-ai-settings",
           id: "",
           title: "Smart understanding",
-          detail: smartUnderstandingAvailable(readAiSettings(localStorage))
-            ? `${readAiSettings(localStorage).provider === "anthropic" ? "Anthropic" : "Google Gemini"} API on this device`
-            : "Paste a free Gemini key for natural-language updates",
+          detail: (() => {
+            const ai = readAiSettings(localStorage);
+            if (!smartUnderstandingAvailable(ai)) return "Paste a free Gemini key for natural-language updates";
+            if (ai.provider === "anthropic") return `Anthropic — ${AI_MODEL_IDS.anthropic}`;
+            return `Google Gemini — ${displayGeminiModel(ai)}`;
+          })(),
           amount: "<span class=\"line-chevron\" aria-hidden=\"true\">›</span>",
         })}
       </section>
@@ -4138,7 +4142,7 @@ async function runInventorySearch(text) {
   inventorySearch.text = text;
   const ticket = ++searchTicket;
   const settings = readAiSettings(localStorage);
-  const smart = await understandSearchSmart(text, inventory, { settings, fetchImpl: fetch });
+  const smart = await understandSearchSmart(text, inventory, { settings, fetchImpl: fetch, storage: localStorage });
   const parsed = smart.parsed;
   inventorySearch.source = smart.source;
   inventorySearch.found = { ...searchItems(inventory, parsed), query: parsed.query, place: parsed.place, aiMatches: smart.matches };
@@ -4271,6 +4275,7 @@ async function proposeUpdate(text) {
     settings,
     lastItemId: lastInventoryItemId,
     fetchImpl: fetch,
+    storage: localStorage,
   });
   if (modal?.text !== said) return;
   const proposal = smart.proposal;
@@ -4358,8 +4363,9 @@ async function testApiKeyFromModal() {
   const apiKey = String(data.get("apiKey") || "");
   modal.testMessage = "Checking…";
   renderModal({ focus: false });
-  const result = await testInventoryAiKey({ provider, apiKey, fetchImpl: fetch });
+  const result = await testInventoryAiKey({ provider, apiKey, fetchImpl: fetch, storage: localStorage });
   modal.testMessage = result.message;
+  modal.settings = readAiSettings(localStorage);
   renderModal({ focus: false });
 }
 
@@ -4369,7 +4375,7 @@ function inventoryAiSettingsForm() {
     <p class="helper">Google Gemini (free tier) is recommended. Only item names, aliases and known places are sent to the model — nothing else from your household. The API key is stored in <strong>localStorage</strong> on this device only (key <code>${INV_AI_STORAGE_KEY}</code>), never in your gist.</p>
     <label class="check-row"><input type="checkbox" name="smartUnderstanding" ${settings.smartUnderstanding ? "checked" : ""} /><span>Use Smart understanding when a key is saved</span></label>
     <label>Provider<select name="provider">
-      <option value="gemini" ${settings.provider === "gemini" ? "selected" : ""}>Google Gemini — ${AI_MODEL_IDS.gemini} (recommended)</option>
+      <option value="gemini" ${settings.provider === "gemini" ? "selected" : ""}>Google Gemini — ${esc(displayGeminiModel(settings))} (recommended)</option>
       <option value="anthropic" ${settings.provider === "anthropic" ? "selected" : ""}>Anthropic — ${AI_MODEL_IDS.anthropic}</option>
     </select></label>
     <label>API key<input type="password" name="apiKey" autocomplete="off" spellcheck="false" value="${esc(settings.apiKey)}" placeholder="Paste from Google AI Studio" /></label>

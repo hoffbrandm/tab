@@ -68,27 +68,32 @@ test("understandUpdateSmart uses rules without API key", async () => {
 test("understandUpdateSmart uses mock Gemini fetch", async () => {
   storage.clear();
   writeAiSettings(mockStorage, { provider: "gemini", apiKey: "test-key", smartUnderstanding: true });
-  const fetchImpl = async (url, init) => ({
-    ok: true,
-    async json() {
-      return {
-        candidates: [{
-          content: {
-            parts: [{ text: JSON.stringify({
-              changes: [{
-                action: "move",
-                item: "AA batteries",
-                place: ["Kitchen", "Drawer"],
-                stock: "unchanged",
-                note: "",
-              }],
-            }) }],
-          },
-        }],
-      };
-    },
-    async text() { return ""; },
-  });
+  const fetchImpl = async (url) => {
+    if (!String(url).includes("generateContent")) {
+      return { ok: true, async json() { return { models: [] }; } };
+    }
+    return {
+      ok: true,
+      async json() {
+        return {
+          candidates: [{
+            content: {
+              parts: [{ text: JSON.stringify({
+                changes: [{
+                  action: "move",
+                  item: "AA batteries",
+                  place: ["Kitchen", "Drawer"],
+                  stock: "unchanged",
+                  note: "",
+                }],
+              }) }],
+            },
+          }],
+        };
+      },
+      async text() { return ""; },
+    };
+  };
   const inv = {
     items: [{ id: "c", name: "AA batteries", location: "Hall", stock: "low", updatedAt: "" }],
   };
@@ -101,7 +106,7 @@ test("understandUpdateSmart uses mock Gemini fetch", async () => {
 });
 
 test("primary Gemini model id", () => {
-  assert.equal(AI_MODEL_IDS.gemini, "gemini-2.5-flash-lite");
+  assert.equal(AI_MODEL_IDS.gemini, "gemini-3.5-flash-lite");
 });
 
 test("benchmark: rules accuracy on update utterances", () => {

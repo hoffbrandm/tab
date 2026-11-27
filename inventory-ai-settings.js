@@ -1,17 +1,21 @@
 /** Smart understanding API keys — localStorage on this device only, never in the gist. */
 
+import { DEFAULT_GEMINI_MODEL, displayGeminiModel, normalizeGeminiModelStored } from "./inventory-gemini-models.js";
+
 export const INV_AI_STORAGE_KEY = "tab.inventory.ai.v1";
 
 export const AI_PROVIDER_IDS = ["gemini", "anthropic"];
 
-/** Gemini is primary (free-tier flash-lite); Anthropic optional second. */
+/** Default labels when no per-device resolved model is stored yet. */
 export const AI_MODEL_IDS = {
-  gemini: "gemini-2.5-flash-lite",
+  gemini: DEFAULT_GEMINI_MODEL,
   anthropic: "claude-haiku-4-5",
 };
 
+export { DEFAULT_GEMINI_MODEL, displayGeminiModel };
+
 export function emptyAiSettings() {
-  return { provider: "gemini", apiKey: "", smartUnderstanding: true };
+  return { provider: "gemini", apiKey: "", smartUnderstanding: true, geminiModel: DEFAULT_GEMINI_MODEL };
 }
 
 export function readAiSettings(storage) {
@@ -26,7 +30,10 @@ export function readAiSettings(storage) {
     let provider = raw.provider || raw.cloudProvider || "gemini";
     if (!AI_PROVIDER_IDS.includes(provider)) provider = "gemini";
     const smartUnderstanding = raw.smartUnderstanding !== false;
-    return { provider, apiKey, smartUnderstanding };
+    const geminiModel = raw.geminiModel === undefined && apiKey
+      ? DEFAULT_GEMINI_MODEL
+      : normalizeGeminiModelStored(raw.geminiModel);
+    return { provider, apiKey, smartUnderstanding, geminiModel };
   } catch {
     return emptyAiSettings();
   }
@@ -38,10 +45,12 @@ export function writeAiSettings(storage, partial) {
   const next = { ...readAiSettings(store), ...partial };
   if (!AI_PROVIDER_IDS.includes(next.provider)) next.provider = "gemini";
   next.apiKey = String(next.apiKey || "").trim();
+  if (next.geminiModel) next.geminiModel = String(next.geminiModel).trim();
   store.setItem(INV_AI_STORAGE_KEY, JSON.stringify({
     provider: next.provider,
     apiKey: next.apiKey,
     smartUnderstanding: next.smartUnderstanding !== false,
+    geminiModel: next.geminiModel || DEFAULT_GEMINI_MODEL,
   }));
   return next;
 }
