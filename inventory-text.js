@@ -58,6 +58,24 @@ export function wordSimilarity(a, b) {
   return ratio >= 0.74 ? ratio * 0.9 : 0;
 }
 
+const UPPER_TOKENS = new Set("aa aaa usb hdmi led tv pc dvd cd ssd hdd ram cpu gpu wi fi".split(" "));
+
+/** Title-style name that keeps acronyms such as 3D, AA, USB. */
+export function formatDisplayName(text) {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+  return raw.split(" ").map((word, index) => {
+    const bare = word.replace(/^'+|'+$/g, "");
+    if (/^\d+d$/i.test(bare)) return `${bare[0]}D`;
+    const lower = bare.toLowerCase();
+    if (UPPER_TOKENS.has(lower) || (lower.length <= 4 && /^[a-z]{2,4}$/i.test(bare) && bare === bare.toUpperCase())) {
+      return bare.toUpperCase();
+    }
+    if (index === 0) return bare.charAt(0).toUpperCase() + bare.slice(1).toLowerCase();
+    return bare.toLowerCase();
+  }).join(" ");
+}
+
 export function phraseScore(said, name) {
   const q = Array.isArray(said) ? said : tokens(said);
   const n = Array.isArray(name) ? name : tokens(name);

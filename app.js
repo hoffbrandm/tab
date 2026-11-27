@@ -130,6 +130,14 @@ import {
 import { createInventoryStore, createMemoryInventoryStore } from "./inventory-store.js";
 import { loadSemantic, onSemanticState, semanticScores, semanticState } from "./inventory-semantic.js";
 import { listen, speechErrorMessage, speechSupported } from "./inventory-speech.js";
+import {
+  AI_MODEL_IDS,
+  INV_AI_STORAGE_KEY,
+  readAiSettings,
+  smartUnderstandingAvailable,
+  writeAiSettings,
+} from "./inventory-ai-settings.js";
+import { testInventoryAiKey, understandSearchSmart, understandUpdateSmart } from "./inventory-ai.js";
 
 const LOCAL_KEY = "tab.personal.v1";
 const INV_BROWSER_MIC_KEY = "tab.inventory.browserMic";
@@ -182,10 +190,14 @@ const inventoryQueue = createPersistQueue({
 });
 
 function parseHash() {
-  const hash = location.hash.replace(/^#\/?/, "");
-  const match = hash.match(/^friend\/([\w-]+)$/);
-  if (match) return { name: "friend", friendId: match[1] };
-  return SCREENS.includes(hash) ? { name: hash } : { name: "home" };
+  const raw = location.hash.replace(/^#\/?/, "");
+  const [path, queryString] = raw.split("?");
+  const query = queryString ? new URLSearchParams(queryString) : null;
+  const match = path.match(/^friend\/([\w-]+)$/);
+  if (match) return { name: "friend", friendId: match[1], query };
+  const base = path.split("/")[0];
+  if (SCREENS.includes(base)) return { name: base, query };
+  return { name: "home", query };
 }
 
 function hashFor(next) {
@@ -1532,6 +1544,18 @@ function moreScreen() {
         })).join("")}
       </section>
       <section class="block">
+        ${sectionHead("Inventory")}
+        ${lineRow({
+          edit: "inv-ai-settings",
+          id: "",
+          title: "Smart understanding",
+          detail: smartUnderstandingAvailable(readAiSettings(localStorage))
+            ? `${readAiSettings(localStorage).provider === "anthropic" ? "Anthropic" : "Google Gemini"} API on this device`
+            : "Paste a free Gemini key for natural-language updates",
+          amount: "<span class=\"line-chevron\" aria-hidden=\"true\">›</span>",
+        })}
+      </section>
+      <section class="block">
         ${sectionHead("Payslip categories", "add-payslip-category-master", "Add")}
         <p class="helper">Names for pay and deduction lines on your slip.</p>
         <details class="room-help">
@@ -1678,6 +1702,7 @@ function modalMarkup() {
     donation: donationForm,
     "inv-update": inventoryUpdateForm,
     "inv-item": inventoryItemForm,
+    "inv-ai-settings": inventoryAiSettingsForm,
   };
   return kinds[modal.kind] ? kinds[modal.kind]() : "";
 }
@@ -2540,6 +2565,14 @@ document.addEventListener("click", async (event) => {
     closeModal();
     setScreen({ name: id });
   }
+  if (action === "inv-ai-settings") {
+    event.preventDefault();
+    openInventoryAiSettings();
+  }
+  if (action === "inv-ai-test-key") {
+    event.preventDefault();
+    testApiKeyFromModal();
+  }
   if (action === "go-month") {
     // Same floor as the arrows: the months listed all start at this one, and a
     // stale one in the markup must not take the app backwards.
@@ -2936,6 +2969,7 @@ document.addEventListener("submit", (event) => {
     "donation-form": saveDonation,
     "inv-update-form": saveInventoryUpdate,
     "inv-item-form": saveInventoryItem,
+    "inv-ai-settings-form": saveInventoryAiSettings,
     "inv-search-form": (submitted) => {
       submitted.preventDefault();
       const input = submitted.target.querySelector("#inv-search");
@@ -3984,6 +4018,7 @@ function inventoryScreen() {
       <div class="inv-actions">
         <button class="primary inv-speak" type="button" data-action="inv-update" aria-label="Update inventory — type or dictate">${MIC_ICON}<span>Update</span></button>
         <button class="secondary" type="button" data-action="inv-add">Add by hand</button>
+        <button class="text-button" type="button" data-action="inv-ai-settings">Smart understanding</button>
       </div>
       <form class="inv-search" id="inv-search-form" role="search">
         <label class="visually-hidden" for="inv-search">Find something</label>
@@ -4096,8 +4131,21 @@ let searchTicket = 0;
 async function runInventorySearch(text) {
   inventorySearch.text = text;
   const ticket = ++searchTicket;
-  const parsed = understandSearch(text);
-  inventorySearch.found = { ...searchItems(inventory, parsed), query: parsed.query, place: parsed.place };
+  const settings = readAiSettings(localStorage);
+  const smart = await understandSearchSmart(text, inventory, { settings, fetchImpl: fetch });
+  const parsed = smart.parsed;
+  inventorySearch.source = smart.source;
+  inventorySearch.found = { ...searchItems(inventory, parsed), query: parsed.query, place: parsed.place, aiMatches: smart.matches };
+  if (smart.matches?.length) {
+    const byName = new Map(inventory.items.map((item) => [item.name, item]));
+    inventorySearch.found.results = smart.matches
+      .map((row, index) => {
+        const item = byName.get(row.item);
+        return item ? { item, score: 1 - index * 0.05 } : null;
+      })
+      .filter(Boolean);
+    inventorySearch.found.mode = "search";
+  }
   refreshInventoryResults();
   if (semanticState() !== "ready" || parsed.place || !text.trim()) return;
   const scores = await semanticScores(parsed.query || text, inventory.items);
@@ -4208,8 +4256,23 @@ async function proposeUpdate(text) {
     renderModal({ focus: false });
     return;
   }
-  const proposal = understandUpdate(said, inventory, { lastItemId: lastInventoryItemId });
-  proposal.heardItemName = proposal.name;
+  const settings = readAiSettings(localStorage);
+  modal.phase = "think";
+  modal.text = said;
+  modal.error = "";
+  renderModal({ focus: false });
+  const smart = await understandUpdateSmart(said, inventory, {
+    settings,
+    lastItemId: lastInventoryItemId,
+    fetchImpl: fetch,
+  });
+  if (modal?.text !== said) return;
+  const proposal = smart.proposal;
+  proposal.heardItemName = proposal.itemText || proposal.name;
+  proposal.understandingSource = smart.source;
+  proposal.understandingFallback = smart.fallback;
+  proposal.understandingNote = smart.fallbackNote || "";
+  proposal.aiProposals = smart.proposals || [proposal];
   if (proposal.isNew && !proposal.forceNew) {
     const found = findExistingByName(inventory, proposal.name);
     if (found) {
@@ -4266,7 +4329,70 @@ function locationField(value, { suggestions = [], placeholder = "e.g. Cupboard u
     ${chips.length ? `<div class="inv-chips" aria-label="Places used before">${chips.map((place) => `<button type="button" class="inv-chip" data-action="inv-place" data-extra="${esc(place)}">${esc(place)}</button>`).join("")}</div>` : ""}`;
 }
 
+function understandingSourceLabel(source, fallback) {
+  if (source === "gemini") return "Understood by Gemini";
+  if (source === "anthropic") return "Understood by Anthropic";
+  return fallback ? "Basic matching" : "Basic matching";
+}
+
+function openInventoryAiSettings() {
+  modal = {
+    kind: "inv-ai-settings",
+    settings: readAiSettings(localStorage),
+    testMessage: "",
+  };
+  renderModal();
+}
+
+async function testApiKeyFromModal() {
+  if (modal?.kind !== "inv-ai-settings") return;
+  const form = document.getElementById("inv-ai-settings-form");
+  const data = new FormData(form);
+  const provider = data.get("provider");
+  const apiKey = String(data.get("apiKey") || "");
+  modal.testMessage = "Checking…";
+  renderModal({ focus: false });
+  const result = await testInventoryAiKey({ provider, apiKey, fetchImpl: fetch });
+  modal.testMessage = result.message;
+  renderModal({ focus: false });
+}
+
+function inventoryAiSettingsForm() {
+  const settings = modal.settings || readAiSettings(localStorage);
+  return `<form id="inv-ai-settings-form">${modalHead("Smart understanding")}
+    <p class="helper">Google Gemini (free tier) is recommended. Only item names, aliases and known places are sent to the model — nothing else from your household. The API key is stored in <strong>localStorage</strong> on this device only (key <code>${INV_AI_STORAGE_KEY}</code>), never in your gist.</p>
+    <label class="check-row"><input type="checkbox" name="smartUnderstanding" ${settings.smartUnderstanding ? "checked" : ""} /><span>Use Smart understanding when a key is saved</span></label>
+    <label>Provider<select name="provider">
+      <option value="gemini" ${settings.provider === "gemini" ? "selected" : ""}>Google Gemini — ${AI_MODEL_IDS.gemini} (recommended)</option>
+      <option value="anthropic" ${settings.provider === "anthropic" ? "selected" : ""}>Anthropic — ${AI_MODEL_IDS.anthropic}</option>
+    </select></label>
+    <label>API key<input type="password" name="apiKey" autocomplete="off" spellcheck="false" value="${esc(settings.apiKey)}" placeholder="Paste from Google AI Studio" /></label>
+    <button type="button" class="secondary wide" data-action="inv-ai-test-key">Test key</button>
+    ${modal.testMessage ? `<p class="helper">${esc(modal.testMessage)}</p>` : ""}
+    <button class="primary wide" type="submit">Save</button>
+  </form>`;
+}
+
+function saveInventoryAiSettings(event) {
+  event.preventDefault();
+  const data = new FormData(event.target);
+  writeAiSettings(localStorage, {
+    smartUnderstanding: Boolean(data.get("smartUnderstanding")),
+    provider: String(data.get("provider") || "gemini"),
+    apiKey: String(data.get("apiKey") || ""),
+  });
+  closeModal();
+  showToast("Smart understanding saved");
+  render();
+}
+
 function inventoryUpdateForm() {
+  if (modal.phase === "think") {
+    return `<form id="inv-update-form">${modalHead("Update")}
+      <p class="helper">Working out what you said…</p>
+      <p class="inv-heard">“${esc(modal.text)}”</p>
+    </form>`;
+  }
   if (modal.phase !== "confirm") {
     const browserMic = invBrowserMicOn() && speechSupported(window);
     return `<form id="inv-update-form">${modalHead("Update")}
@@ -4285,8 +4411,10 @@ function inventoryUpdateForm() {
   const status = matched
     ? `${p.autoMatched ? "Matched existing" : "Updating"} <strong>${esc(matched.name)}</strong>${matched.location ? ` · was in ${esc(matched.location)}` : ""}`
     : "New item";
+  const matchLabel = understandingSourceLabel(p.understandingSource, p.understandingFallback);
   return `<form id="inv-update-form">${modalHead("Check and save")}
     ${p.needsSplit ? `<p class="form-error" role="alert">Sounds like more than one item — save this one, then say the other separately.</p>` : ""}
+  <p class="helper inv-understanding">${esc(matchLabel)}${p.understandingFallback && p.understandingNote ? ` · ${esc(p.understandingNote)}` : ""}</p>
     <p class="inv-heard">“${esc(modal.text)}” <button type="button" class="text-button" data-action="inv-reword">Change</button></p>
     <div>
       <label>Item<input name="name" required maxlength="80" value="${esc(p.name)}" autocomplete="off" autocapitalize="words" enterkeyhint="done" list="inv-name-suggest" aria-describedby="inv-name-hint" />
@@ -4370,16 +4498,32 @@ function saveInventoryUpdate(event) {
     if (found) existing = found.item;
   }
   const learnAlias = p.heardItemName && normaliseItemKey(p.heardItemName) !== normaliseItemKey(p.name) ? p.heardItemName : "";
-  saveInventoryChange({
-    itemId: existing?.id || null,
-    name: p.name,
-    // "Here" left blank keeps the place it had rather than wiping it.
-    location: p.location.trim() || existing?.location || "",
-    stock: p.stock,
-    note: p.note,
-    learnAlias,
-    forceNew: Boolean(p.forceNew && !existing),
-  }, existing ? "Updated" : "Added");
+  const rows = p.aiProposals?.length > 1 ? p.aiProposals : [p];
+  const ok = changeInventory(() => {
+    for (const row of rows) {
+      let ex = row.itemId ? inventoryItem(row.itemId) : null;
+      if (!ex && !row.forceNew) {
+        const found = findExistingByName(inventory, row.name);
+        if (found) ex = found.item;
+      }
+      const alias = row === p ? learnAlias : "";
+      applyUpdate(inventory, {
+        itemId: ex?.id || null,
+        name: row.name,
+        location: row.location.trim() || ex?.location || "",
+        stock: row.stock,
+        note: row.note,
+        learnAlias: alias,
+        forceNew: Boolean(row.forceNew && !ex),
+      });
+    }
+  });
+  if (!ok) return;
+  lastInventoryItemId = inventory.items.at(-1)?.id || lastInventoryItemId;
+  modal = null;
+  if (inventorySearch.text.trim()) runInventorySearch(inventorySearch.text);
+  render();
+  showToast(rows.length > 1 ? `Saved ${rows.length} items` : `${existing ? "Updated" : "Added"} ${p.name}`);
 }
 
 function saveInventoryItem(event) {
