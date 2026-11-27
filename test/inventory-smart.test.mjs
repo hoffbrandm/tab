@@ -3,19 +3,9 @@ import assert from "node:assert/strict";
 import { understandUpdate } from "../inventory.js";
 import {
   proposalsFromAiPayload,
-  proposalFromShortcutJson,
   validateUpdatePayload,
 } from "../inventory-understand-schema.js";
-import {
-  ONDEVICE_MODEL_ID,
-  setEngineForTests,
-  webGpuUsable,
-} from "../inventory-ondevice.js";
-import {
-  onDeviceMarkedInstalled,
-  readAiSettings,
-  writeAiSettings,
-} from "../inventory-ai-settings.js";
+import { AI_MODEL_IDS, readAiSettings, writeAiSettings } from "../inventory-ai-settings.js";
 import { understandUpdateSmart, withTimeout } from "../inventory-ai.js";
 import { UPDATE_CASES } from "./inventory-fixtures.mjs";
 
@@ -42,7 +32,7 @@ test("validateUpdatePayload enforces schema", () => {
   assert.equal(validateUpdatePayload({ changes: [{ action: "nope", item: "x" }] }), null);
 });
 
-test("mocked on-device JSON maps to proposal", () => {
+test("mocked Gemini JSON maps to proposal", () => {
   const payload = validateUpdatePayload({
     changes: [{
       action: "add",
@@ -58,9 +48,9 @@ test("mocked on-device JSON maps to proposal", () => {
   assert.equal(proposal.stock, "out");
 });
 
-test("understandUpdateSmart uses rules without model", async () => {
+test("understandUpdateSmart uses rules without API key", async () => {
   storage.clear();
-  writeAiSettings(mockStorage, { onDeviceInstalled: false, cloudFallback: false });
+  writeAiSettings(mockStorage, { apiKey: "", smartUnderstanding: true });
   const result = await understandUpdateSmart("We've run out of bin bags", {
     items: [{ id: "d", name: "Bin bags", location: "Under the sink", stock: "plenty", updatedAt: "" }],
   }, { settings: readAiSettings(mockStorage) });
@@ -68,49 +58,43 @@ test("understandUpdateSmart uses rules without model", async () => {
   assert.equal(result.proposal.name, "Bin bags");
 });
 
-test("understandUpdateSmart uses mock on-device engine", async () => {
+test("understandUpdateSmart uses mock Gemini fetch", async () => {
   storage.clear();
-  onDeviceMarkedInstalled(mockStorage);
-  const mockEngine = {
-    chat: {
-      completions: {
-        create: async () => ({
-          choices: [{ message: { content: JSON.stringify({
-            changes: [{
-              action: "move",
-              item: "AA batteries",
-              place: ["Kitchen", "Drawer"],
-              stock: "unchanged",
-              note: "",
-            }],
-          }) } }],
-        }),
-      },
+  writeAiSettings(mockStorage, { provider: "gemini", apiKey: "test-key", smartUnderstanding: true });
+  const fetchImpl = async (url, init) => ({
+    ok: true,
+    async json() {
+      return {
+        candidates: [{
+          content: {
+            parts: [{ text: JSON.stringify({
+              changes: [{
+                action: "move",
+                item: "AA batteries",
+                place: ["Kitchen", "Drawer"],
+                stock: "unchanged",
+                note: "",
+              }],
+            }) }],
+          },
+        }],
+      };
     },
-  };
-  setEngineForTests(mockEngine);
+    async text() { return ""; },
+  });
   const inv = {
     items: [{ id: "c", name: "AA batteries", location: "Hall", stock: "low", updatedAt: "" }],
   };
-  const nav = globalThis.navigator;
-  Object.defineProperty(globalThis, "navigator", { value: { ...nav, gpu: {} }, configurable: true });
   const result = await understandUpdateSmart("batteries in the kitchen drawer", inv, {
-    settings: { ...readAiSettings(mockStorage), onDeviceInstalled: true, cloudFallback: false },
+    settings: readAiSettings(mockStorage),
+    fetchImpl,
   });
-  Object.defineProperty(globalThis, "navigator", { value: nav, configurable: true });
-  assert.equal(result.source, "on-device");
+  assert.equal(result.source, "gemini");
   assert.equal(result.proposal.location, "Kitchen › Drawer");
 });
 
-test("shortcut URL payload maps to check card fields", () => {
-  const json = JSON.stringify({ name: "3D printer filament", location: "Office", stock: "out" });
-  const p = proposalFromShortcutJson(json, { items: [] });
-  assert.equal(p.stock, "out");
-  assert.equal(p.location, "Office");
-});
-
-test("on-device model id is under ~1GB class", () => {
-  assert.match(ONDEVICE_MODEL_ID, /Llama-3\.2-1B/);
+test("primary Gemini model id", () => {
+  assert.equal(AI_MODEL_IDS.gemini, "gemini-2.5-flash-lite");
 });
 
 test("benchmark: rules accuracy on update utterances", () => {
@@ -133,20 +117,13 @@ test("benchmark: rules accuracy on update utterances", () => {
     { items: [] },
   );
   if (extra.name === "3D printer filament" && extra.location === "Office" && extra.stock === "out") hits += 1;
-  const multi = understandUpdate(
-    "I put the hooks in the drawer and the glue in the garage",
-    { items: houseItems },
-  );
-  const total = UPDATE_CASES.length + 2;
-  // Log table for agents / CI logs.
   console.log(JSON.stringify({
     benchmark: "inventory-understanding",
-    rules: { correct: hits, total, pct: Number((100 * hits / total).toFixed(1)) },
-    onDevice: "requires WebGPU download on device",
-    cloud: "skipped without key",
-    multiItemFirst: multi.name,
+    rules: { correct: hits, total: UPDATE_CASES.length + 1, pct: Number((100 * hits / (UPDATE_CASES.length + 1)).toFixed(1)) },
+    gemini: "live when API key set",
+    onDevice: "not shipped",
   }));
-  assert.ok(hits >= UPDATE_CASES.length, `rules should match all ${UPDATE_CASES.length} canned cases`);
+  assert.ok(hits >= UPDATE_CASES.length);
 });
 
 test("withTimeout rejects slow work", async () => {
@@ -154,8 +131,4 @@ test("withTimeout rejects slow work", async () => {
     () => withTimeout(new Promise((resolve) => setTimeout(resolve, 50)), 5),
     /timeout/,
   );
-});
-
-test("webGpuUsable is false in node", () => {
-  assert.equal(webGpuUsable({ navigator: {} }), false);
 });

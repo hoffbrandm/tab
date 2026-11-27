@@ -1,5 +1,6 @@
 /**
- * Smart understanding: on-device WebLLM first, optional cloud API fallback, then rules.
+ * Smart understanding: Gemini (primary) or Anthropic API, then rule fallback.
+ * Sends only item names, aliases and known places.
  */
 
 import { AI_MODEL_IDS } from "./inventory-ai-settings.js";
@@ -11,12 +12,6 @@ import {
   validateSearchPayload,
   validateUpdatePayload,
 } from "./inventory-understand-schema.js";
-import {
-  onDeviceState,
-  onDeviceUnderstandSearch,
-  onDeviceUnderstandUpdate,
-  webGpuUsable,
-} from "./inventory-ondevice.js";
 import { understandSearch, understandUpdate } from "./inventory.js";
 
 export {
@@ -26,11 +21,9 @@ export {
   validateUpdatePayload,
   aiChangeToProposal,
   proposalsFromAiPayload,
-  proposalFromShortcutJson,
 } from "./inventory-understand-schema.js";
 
 export const AI_TIMEOUT_MS = 6000;
-export const ONDEVICE_TIMEOUT_MS = 12000;
 
 export async function fetchAnthropic({ apiKey, model, userText, mode, context, fetchImpl = fetch }) {
   const res = await fetchImpl("https://api.anthropic.com/v1/messages", {
@@ -88,20 +81,20 @@ export async function callInventoryModel({ provider, apiKey, model, mode, userTe
 
 export async function testInventoryAiKey({ provider, apiKey, fetchImpl = fetch }) {
   if (!apiKey?.trim()) return { ok: false, message: "Paste an API key first." };
-  const probe = '{"changes":[{"action":"add","item":"Test","place":[],"stock":"plenty","note":""}]}';
+  const probe = '{"changes":[{"action":"add","item":"Test hooks","place":["Kitchen"],"stock":"plenty","note":""}]}';
   try {
     const context = { items: [{ name: "Spare hooks", aliases: [] }], places: ["Kitchen drawer"] };
     const text = provider === "gemini"
       ? await fetchGemini({ apiKey: apiKey.trim(), model: AI_MODEL_IDS.gemini, userText: probe, mode: "update", context, fetchImpl })
       : await fetchAnthropic({ apiKey: apiKey.trim(), model: AI_MODEL_IDS.anthropic, userText: probe, mode: "update", context, fetchImpl });
     if (!String(text || "").trim()) return { ok: false, message: "Empty response from the provider." };
-    return { ok: true, message: "Key works (cloud fallback only)." };
+    return { ok: true, message: "Key works." };
   } catch (error) {
     return { ok: false, message: String(error.message || error).replace(apiKey, "•••") };
   }
 }
 
-export function withTimeout(promise, ms) {
+export function withTimeout(promise, ms = AI_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout")), ms);
     promise.then(
@@ -136,60 +129,48 @@ export async function understandUpdateSmart(text, inventory, { settings, lastIte
     };
   };
 
-  if (settings?.onDeviceInstalled && webGpuUsable() && onDeviceState() === "ready") {
-    try {
-      const payload = await withTimeout(onDeviceUnderstandUpdate(said, inventory), ONDEVICE_TIMEOUT_MS);
-      if (payload) return packUpdateResult(payload, inventory, said, lastItemId, "on-device");
-    } catch { /* fall through */ }
-  }
-
-  if (settings?.cloudFallback && settings?.cloudApiKey) {
+  const key = settings?.apiKey?.trim();
+  const useApi = key && settings?.smartUnderstanding !== false;
+  if (useApi) {
+    const provider = settings.provider === "anthropic" ? "anthropic" : "gemini";
     try {
       const raw = await withTimeout(callInventoryModel({
-        provider: settings.cloudProvider,
-        apiKey: settings.cloudApiKey,
-        model: AI_MODEL_IDS[settings.cloudProvider],
+        provider,
+        apiKey: key,
+        model: AI_MODEL_IDS[provider],
         mode: "update",
         userText: said,
         inventory,
         fetchImpl,
       }), AI_TIMEOUT_MS);
       const payload = validateUpdatePayload(raw.data);
-      if (payload) return { ...packUpdateResult(payload, inventory, said, lastItemId, "cloud"), fallback: false };
+      if (payload) return packUpdateResult(payload, inventory, said, lastItemId, provider);
     } catch { /* rules */ }
+    return rules("Timed out or unavailable — used basic matching.");
   }
 
-  const onDeviceTried = settings?.onDeviceInstalled && webGpuUsable();
-  return rules(onDeviceTried || settings?.cloudApiKey
-    ? "Used basic matching — download the on-device model or check cloud fallback."
-  : "");
+  return rules("");
 }
 
 export async function understandSearchSmart(text, inventory, { settings, fetchImpl = fetch } = {}) {
   const parsed = understandSearch(text);
-
-  if (settings?.onDeviceInstalled && webGpuUsable() && onDeviceState() === "ready") {
-    try {
-      const valid = await withTimeout(onDeviceUnderstandSearch(text, inventory), ONDEVICE_TIMEOUT_MS);
-      if (valid) return { parsed, source: "on-device", matches: valid.matches, fallback: false };
-    } catch { /* continue */ }
+  const key = settings?.apiKey?.trim();
+  if (!key || settings?.smartUnderstanding === false) {
+    return { parsed, source: "rules", matches: null, fallback: false };
   }
-
-  if (settings?.cloudFallback && settings?.cloudApiKey) {
-    try {
-      const raw = await withTimeout(callInventoryModel({
-        provider: settings.cloudProvider,
-        apiKey: settings.cloudApiKey,
-        model: AI_MODEL_IDS[settings.cloudProvider],
-        mode: "search",
-        userText: text,
-        inventory,
-        fetchImpl,
-      }), AI_TIMEOUT_MS);
-      const valid = validateSearchPayload(raw.data, inventory);
-      if (valid) return { parsed, source: "cloud", matches: valid.matches, fallback: false };
-    } catch { /* rules */ }
-  }
-
-  return { parsed, source: "rules", matches: null, fallback: false };
+  const provider = settings.provider === "anthropic" ? "anthropic" : "gemini";
+  try {
+    const raw = await withTimeout(callInventoryModel({
+      provider,
+      apiKey: key,
+      model: AI_MODEL_IDS[provider],
+      mode: "search",
+      userText: text,
+      inventory,
+      fetchImpl,
+    }), AI_TIMEOUT_MS);
+    const valid = validateSearchPayload(raw.data, inventory);
+    if (valid) return { parsed, source: provider, matches: valid.matches, fallback: false };
+  } catch { /* rules */ }
+  return { parsed, source: "rules", matches: null, fallback: true };
 }

@@ -163,16 +163,3 @@ export function aiChangeToProposal(change, inventory, said, { lastItemId = null 
 export function proposalsFromAiPayload(payload, inventory, said, opts) {
   return payload.changes.map((change) => aiChangeToProposal(change, inventory, said, opts));
 }
-
-/** Shortcut / URL deep link: { name, location?, stock?, note? } */
-export function proposalFromShortcutJson(raw, inventory, said = "") {
-  const data = typeof raw === "string" ? JSON.parse(raw) : raw;
-  const change = {
-    action: "add",
-    item: data.name || data.item || "",
-    place: String(data.location || data.place || "").split("›").map((p) => p.trim()).filter(Boolean),
-    stock: data.stock || "plenty",
-    note: data.note || "",
-  };
-  return aiChangeToProposal(change, inventory, said || change.item);
-}

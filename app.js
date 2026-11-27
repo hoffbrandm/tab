@@ -132,22 +132,12 @@ import { loadSemantic, onSemanticState, semanticScores, semanticState } from "./
 import { listen, speechErrorMessage, speechSupported } from "./inventory-speech.js";
 import {
   AI_MODEL_IDS,
-  AI_PROVIDER_IDS,
+  INV_AI_STORAGE_KEY,
   readAiSettings,
   smartUnderstandingAvailable,
   writeAiSettings,
 } from "./inventory-ai-settings.js";
-import { proposalFromShortcutJson, testInventoryAiKey, understandSearchSmart, understandUpdateSmart } from "./inventory-ai.js";
-import {
-  connectionIsCellular,
-  ensureOnDeviceEngine,
-  ONDEVICE_MODEL_LABEL,
-  ONDEVICE_MODEL_SIZE,
-  onDeviceState,
-  onOnDeviceState,
-  unloadOnDeviceEngine,
-  webGpuUsable,
-} from "./inventory-ondevice.js";
+import { testInventoryAiKey, understandSearchSmart, understandUpdateSmart } from "./inventory-ai.js";
 
 const LOCAL_KEY = "tab.personal.v1";
 const INV_BROWSER_MIC_KEY = "tab.inventory.browserMic";
@@ -1559,11 +1549,9 @@ function moreScreen() {
           edit: "inv-ai-settings",
           id: "",
           title: "Smart understanding",
-          detail: readAiSettings(localStorage).onDeviceInstalled
-            ? `${ONDEVICE_MODEL_LABEL} on this device`
-            : smartUnderstandingAvailable(readAiSettings(localStorage))
-              ? "Cloud fallback configured"
-              : "On-device model (opt-in) for dictated updates",
+          detail: smartUnderstandingAvailable(readAiSettings(localStorage))
+            ? `${readAiSettings(localStorage).provider === "anthropic" ? "Anthropic" : "Google Gemini"} API on this device`
+            : "Paste a free Gemini key for natural-language updates",
           amount: "<span class=\"line-chevron\" aria-hidden=\"true\">›</span>",
         })}
       </section>
@@ -2581,20 +2569,9 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     openInventoryAiSettings();
   }
-  if (action === "inv-ondevice-download") {
-    event.preventDefault();
-    startOnDeviceDownload();
-  }
-  if (action === "inv-ondevice-remove") {
-    event.preventDefault();
-    unloadOnDeviceEngine({ storage: localStorage }).then(() => {
-      showToast("On-device model removed");
-      renderModal();
-    });
-  }
   if (action === "inv-ai-test-key") {
     event.preventDefault();
-    testCloudKeyFromModal();
+    testApiKeyFromModal();
   }
   if (action === "go-month") {
     // Same floor as the arrows: the months listed all start at this one, and a
@@ -3970,10 +3947,6 @@ async function loadInventory() {
     inventoryState = { name: "error", message: error.message || "The inventory could not be opened." };
   }
   if (boot.name === "ready" && screen.name === "inventory" && !modal) render();
-  if (inventoryState.name === "ready") {
-    maybeLoadOnDevice();
-    tryOpenInventoryShortcut();
-  }
 }
 
 async function persistInventory() {
@@ -4045,6 +4018,7 @@ function inventoryScreen() {
       <div class="inv-actions">
         <button class="primary inv-speak" type="button" data-action="inv-update" aria-label="Update inventory — type or dictate">${MIC_ICON}<span>Update</span></button>
         <button class="secondary" type="button" data-action="inv-add">Add by hand</button>
+        <button class="text-button" type="button" data-action="inv-ai-settings">Smart understanding</button>
       </div>
       <form class="inv-search" id="inv-search-form" role="search">
         <label class="visually-hidden" for="inv-search">Find something</label>
@@ -4356,9 +4330,8 @@ function locationField(value, { suggestions = [], placeholder = "e.g. Cupboard u
 }
 
 function understandingSourceLabel(source, fallback) {
-  if (source === "on-device") return "Understood on this device";
-  if (source === "cloud") return "Understood by AI (cloud fallback)";
-  if (source === "shortcut") return "From Shortcuts";
+  if (source === "gemini") return "Understood by Gemini";
+  if (source === "anthropic") return "Understood by Anthropic";
   return fallback ? "Basic matching" : "Basic matching";
 }
 
@@ -4367,53 +4340,16 @@ function openInventoryAiSettings() {
     kind: "inv-ai-settings",
     settings: readAiSettings(localStorage),
     testMessage: "",
-    downloadText: "",
-    progress: null,
   };
-  onOnDeviceState(() => { if (modal?.kind === "inv-ai-settings") renderModal({ focus: false }); });
   renderModal();
 }
 
-async function startOnDeviceDownload() {
-  if (!modal || modal.kind !== "inv-ai-settings") return;
-  const settings = readAiSettings(localStorage);
-  if (connectionIsCellular() && !settings.allowCellularDownload) {
-    modal.downloadText = "On mobile data. Turn on “Allow download on mobile data” or use Wi‑Fi.";
-    renderModal({ focus: false });
-    return;
-  }
-  if (!webGpuUsable()) {
-    modal.downloadText = "WebGPU is not available in this browser. Use basic matching or iOS 26+ standalone Safari.";
-    renderModal({ focus: false });
-    return;
-  }
-  modal.downloadText = "Downloading…";
-  modal.progress = { text: "Starting…", progress: 0 };
-  renderModal({ focus: false });
-  try {
-    await ensureOnDeviceEngine({
-      storage: localStorage,
-      onProgress: (report) => {
-        modal.progress = { text: report.text, progress: report.progress ?? 0 };
-        renderModal({ focus: false });
-      },
-    });
-    modal.downloadText = "Model ready for offline use.";
-    modal.progress = null;
-    showToast("On-device model ready");
-  } catch (error) {
-    modal.downloadText = String(error.message || error);
-    modal.progress = null;
-  }
-  renderModal({ focus: false });
-}
-
-async function testCloudKeyFromModal() {
+async function testApiKeyFromModal() {
   if (modal?.kind !== "inv-ai-settings") return;
   const form = document.getElementById("inv-ai-settings-form");
   const data = new FormData(form);
-  const provider = data.get("cloudProvider");
-  const apiKey = String(data.get("cloudApiKey") || "");
+  const provider = data.get("provider");
+  const apiKey = String(data.get("apiKey") || "");
   modal.testMessage = "Checking…";
   renderModal({ focus: false });
   const result = await testInventoryAiKey({ provider, apiKey, fetchImpl: fetch });
@@ -4421,57 +4357,18 @@ async function testCloudKeyFromModal() {
   renderModal({ focus: false });
 }
 
-function maybeLoadOnDevice() {
-  const settings = readAiSettings(localStorage);
-  if (!settings.onDeviceInstalled || !webGpuUsable() || onDeviceState() === "ready" || onDeviceState() === "downloading") return;
-  ensureOnDeviceEngine({ storage: localStorage }).catch(() => {});
-}
-
-function tryOpenInventoryShortcut() {
-  const add = screen.query?.get("add");
-  if (!add || screen.name !== "inventory" || !inventoryReady()) return;
-  try {
-    const proposal = proposalFromShortcutJson(decodeURIComponent(add), inventory, "From Shortcuts");
-    proposal.understandingSource = "shortcut";
-    modal = { kind: "inv-update", phase: "confirm", text: add, proposal, error: "" };
-    renderModal();
-    history.replaceState(null, "", "#/inventory");
-    screen = parseHash();
-  } catch {
-    showToast("Could not read shortcut payload");
-  }
-}
-
 function inventoryAiSettingsForm() {
   const settings = modal.settings || readAiSettings(localStorage);
-  const gpu = webGpuUsable();
-  const ods = onDeviceState();
-  const progress = modal.progress;
   return `<form id="inv-ai-settings-form">${modalHead("Smart understanding")}
-    <p class="helper">Primary path is an on-device model via WebGPU — names and places only, cached on this phone. Cloud API keys are optional fallback only.</p>
-    <p class="helper">${gpu ? "WebGPU: available" : "WebGPU: not available here — rules matching only until you use a WebGPU browser (e.g. iOS 26 home-screen app)."}</p>
-    <section class="block">
-      <h3>On this device</h3>
-      <p class="helper"><strong>${esc(ONDEVICE_MODEL_LABEL)}</strong> · ${esc(ONDEVICE_MODEL_SIZE)} download · ${settings.onDeviceInstalled ? (ods === "ready" ? "Ready" : ods) : "Not downloaded"}</p>
-      ${progress ? `<p class="helper inv-dl-status" role="status">${esc(progress.text)} ${Math.round((progress.progress || 0) * 100)}%</p><div class="inv-progress" aria-hidden="true"><span style="width:${Math.round((progress.progress || 0) * 100)}%"></span></div>` : ""}
-      ${modal.downloadText ? `<p class="helper">${esc(modal.downloadText)}</p>` : ""}
-      <label class="check-row"><input type="checkbox" name="allowCellularDownload" ${settings.allowCellularDownload ? "checked" : ""} /><span>Allow download on mobile data</span></label>
-      ${!settings.onDeviceInstalled || ods !== "ready"
-    ? `<button type="button" class="primary wide" data-action="inv-ondevice-download">Download model</button>`
-    : `<button type="button" class="secondary wide" data-action="inv-ondevice-remove">Remove downloaded model</button>`}
-    </section>
-    <details class="room-help form-help">
-      <summary>Cloud fallback (optional)</summary>
-      <p class="helper">Only used if the on-device model is unavailable. Keys stay in localStorage on this device — never in your gist.</p>
-      <label class="check-row"><input type="checkbox" name="cloudFallback" ${settings.cloudFallback ? "checked" : ""} /><span>Use cloud when on-device fails</span></label>
-      <label>Provider<select name="cloudProvider">
-        <option value="anthropic" ${settings.cloudProvider === "anthropic" ? "selected" : ""}>Anthropic (${AI_MODEL_IDS.anthropic})</option>
-        <option value="gemini" ${settings.cloudProvider === "gemini" ? "selected" : ""}>Google Gemini (${AI_MODEL_IDS.gemini})</option>
-      </select></label>
-      <label>API key <span class="optional">optional</span><input type="password" name="cloudApiKey" autocomplete="off" spellcheck="false" value="${esc(settings.cloudApiKey)}" /></label>
-      <button type="button" class="secondary wide" data-action="inv-ai-test-key">Test key</button>
-      ${modal.testMessage ? `<p class="helper">${esc(modal.testMessage)}</p>` : ""}
-    </details>
+    <p class="helper">Google Gemini (free tier) is recommended. Only item names, aliases and known places are sent to the model — nothing else from your household. The API key is stored in <strong>localStorage</strong> on this device only (key <code>${INV_AI_STORAGE_KEY}</code>), never in your gist.</p>
+    <label class="check-row"><input type="checkbox" name="smartUnderstanding" ${settings.smartUnderstanding ? "checked" : ""} /><span>Use Smart understanding when a key is saved</span></label>
+    <label>Provider<select name="provider">
+      <option value="gemini" ${settings.provider === "gemini" ? "selected" : ""}>Google Gemini — ${AI_MODEL_IDS.gemini} (recommended)</option>
+      <option value="anthropic" ${settings.provider === "anthropic" ? "selected" : ""}>Anthropic — ${AI_MODEL_IDS.anthropic}</option>
+    </select></label>
+    <label>API key<input type="password" name="apiKey" autocomplete="off" spellcheck="false" value="${esc(settings.apiKey)}" placeholder="Paste from Google AI Studio" /></label>
+    <button type="button" class="secondary wide" data-action="inv-ai-test-key">Test key</button>
+    ${modal.testMessage ? `<p class="helper">${esc(modal.testMessage)}</p>` : ""}
     <button class="primary wide" type="submit">Save</button>
   </form>`;
 }
@@ -4480,10 +4377,9 @@ function saveInventoryAiSettings(event) {
   event.preventDefault();
   const data = new FormData(event.target);
   writeAiSettings(localStorage, {
-    allowCellularDownload: Boolean(data.get("allowCellularDownload")),
-    cloudFallback: Boolean(data.get("cloudFallback")),
-    cloudProvider: String(data.get("cloudProvider") || "anthropic"),
-    cloudApiKey: String(data.get("cloudApiKey") || ""),
+    smartUnderstanding: Boolean(data.get("smartUnderstanding")),
+    provider: String(data.get("provider") || "gemini"),
+    apiKey: String(data.get("apiKey") || ""),
   });
   closeModal();
   showToast("Smart understanding saved");
