@@ -4058,10 +4058,14 @@ function inventoryQuickUpdateSection() {
   return `${top}${inventoryInlineConfirmMarkup(s)}`;
 }
 
+function showsInventoryItemPick(p) {
+  return Boolean(p.showItemPicker || p.candidates?.length);
+}
+
 function inventoryItemPickMarkup(p) {
   const typed = p.typedName || p.itemText || p.name || "";
   const pickId = p.pickId ?? (p.itemId || "new");
-  if (!p.showItemPicker && !(p.candidates?.length)) return "";
+  if (!showsInventoryItemPick(p)) return "";
   const rows = (p.candidates || []).slice(0, 3);
   const options = [
     ...rows.map((row) => ({
@@ -4104,7 +4108,7 @@ function inventoryInlineConfirmMarkup(s) {
       <datalist id="inv-name-suggest">${nameSuggestions.map((name) => `<option value="${esc(name)}"></option>`).join("")}${inventory.items.map((item) => `<option value="${esc(item.name)}"></option>`).join("")}</datalist></label>
       <p class="helper inv-match" id="inv-name-hint">${status}</p>
       ${inventoryItemPickMarkup(p)}
-      ${nameSuggestions.length ? `<div class="inv-chips" aria-label="Name suggestions">${nameSuggestions.map((name) => `<button type="button" class="inv-chip" data-action="inv-name-fill" data-extra="${esc(name)}">${esc(name)}</button>`).join("")}</div>` : ""}
+      ${!showsInventoryItemPick(p) && nameSuggestions.length ? `<div class="inv-chips" aria-label="Name suggestions">${nameSuggestions.map((name) => `<button type="button" class="inv-chip" data-action="inv-name-fill" data-extra="${esc(name)}">${esc(name)}</button>`).join("")}</div>` : ""}
     </div>
     <div>${locationField(p.location, { chipsWhenFilled: false, suggestions: p.locationSuggestions, placeholder: p.locationIsHere ? "Where’s “here”? Pick or type" : "e.g. Cupboard upstairs › X box" })}</div>
     ${stockField(p.stock)}
@@ -4536,7 +4540,7 @@ function inventoryUpdateForm() {
       <datalist id="inv-name-suggest">${nameSuggestions.map((name) => `<option value="${esc(name)}"></option>`).join("")}${inventory.items.map((item) => `<option value="${esc(item.name)}"></option>`).join("")}</datalist></label>
       <p class="helper inv-match" id="inv-name-hint">${status}</p>
       ${inventoryItemPickMarkup(p)}
-      ${nameSuggestions.length ? `<div class="inv-chips" aria-label="Name suggestions">${nameSuggestions.map((name) => `<button type="button" class="inv-chip" data-action="inv-name-fill" data-extra="${esc(name)}">${esc(name)}</button>`).join("")}</div>` : ""}
+      ${!showsInventoryItemPick(p) && nameSuggestions.length ? `<div class="inv-chips" aria-label="Name suggestions">${nameSuggestions.map((name) => `<button type="button" class="inv-chip" data-action="inv-name-fill" data-extra="${esc(name)}">${esc(name)}</button>`).join("")}</div>` : ""}
     </div>
     <div>${locationField(p.location, { chipsWhenFilled: false, suggestions: p.locationSuggestions, placeholder: p.locationIsHere ? "Where’s “here”? Pick or type" : "e.g. Cupboard upstairs › X box" })}</div>
     ${stockField(p.stock)}
