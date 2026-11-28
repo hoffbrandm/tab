@@ -64,7 +64,11 @@ test("WebKit: 2016 batteries confirm shows picker vs CR2032 at 390px", async (t)
   assert.match(name, /2016/i);
   const selected = await page.locator(".inv-pick-row.on").innerText();
   assert.match(selected, /New item/i);
-  await page.screenshot({ path: "/opt/cursor/artifacts/inv-2016-vs-2032-confirm-390.png", fullPage: true });
+  assert.equal(await page.locator("#inv-quick-confirm-form .inv-chip").count(), 0);
+  assert.equal(await page.locator("#inv-quick-confirm-form .inv-pick-row").count(), 2);
+  await page.locator("#inv-quick-confirm-form").screenshot({
+    path: "/opt/cursor/artifacts/inv-2016-vs-2032-confirm-390.png",
+  });
   await browser.close();
   server.close();
 });
