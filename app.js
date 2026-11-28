@@ -140,6 +140,7 @@ import {
 } from "./inventory-ai-settings.js";
 import { testInventoryAiKey, understandSearchSmart, understandUpdateSmart } from "./inventory-ai.js";
 import { inventoryClickRoutedGlobally } from "./inventory-ui-actions.js";
+import { emptyQuickUpdateState, INV_QUICK_PLACEHOLDER } from "./inventory-quick-update.js";
 
 const LOCAL_KEY = "tab.personal.v1";
 const INV_BROWSER_MIC_KEY = "tab.inventory.browserMic";
@@ -174,6 +175,8 @@ let invGeneration = 0;
 let inventoryView = "items";
 let inventorySearch = { text: "", found: null };
 let inventoryNearDupDismissed = new Set();
+let inventoryInlineUpdate = emptyQuickUpdateState();
+let inlineProposeTicket = 0;
 
 function invBrowserMicOn() {
   try { return localStorage.getItem(INV_BROWSER_MIC_KEY) === "1"; } catch { return false; }
@@ -2978,6 +2981,8 @@ document.addEventListener("submit", (event) => {
     "payslip-form": savePayslip,
     "donation-form": saveDonation,
     "inv-update-form": saveInventoryUpdate,
+    "inv-quick-update-form": saveInventoryQuickSaid,
+    "inv-quick-confirm-form": saveInventoryQuickConfirm,
     "inv-item-form": saveInventoryItem,
     "inv-ai-settings-form": saveInventoryAiSettings,
     "inv-search-form": (submitted) => {
@@ -2997,6 +3002,7 @@ document.addEventListener("input", (event) => {
     const value = event.target.value;
     searchTimer = setTimeout(() => runInventorySearch(value), 140);
   }
+  if (event.target.id === "inv-quick-said" && screen.name === "inventory") inventoryInlineUpdate.draftText = event.target.value;
   if (event.target.id === "inv-said" && modal?.kind === "inv-update") modal.text = event.target.value;
   if (event.target.name === "name" && modal?.kind === "inv-update" && modal.phase === "confirm") {
     const datalist = document.getElementById("inv-name-suggest");
@@ -4013,11 +4019,83 @@ function whenLabel(iso) {
 
 const MIC_ICON = `<svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true" width="20" height="20"><path fill="currentColor" d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V5.5a3.5 3.5 0 1 0-7 0V11a3.5 3.5 0 0 0 3.5 3.5Zm6-3.5a1 1 0 1 0-2 0 4 4 0 0 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.91V19H8.5a1 1 0 1 0 0 2h7a1 1 0 1 0 0-2H13v-2.09A6 6 0 0 0 18 11Z"/></svg>`;
 
+function activeInventoryUpdateProposal() {
+  if (inventoryInlineUpdate.phase === "confirm" && inventoryInlineUpdate.proposal) return inventoryInlineUpdate;
+  if (modal?.kind === "inv-update" && modal.proposal) return modal;
+  return null;
+}
+
+function resetInlineInventoryUpdate({ keepDraft = false } = {}) {
+  const draft = keepDraft ? inventoryInlineUpdate.draftText : "";
+  inlineProposeTicket += 1;
+  inventoryInlineUpdate = { ...emptyQuickUpdateState(), draftText: draft };
+}
+
+function focusInvQuickInput() {
+  if (screen.name !== "inventory") return;
+  requestAnimationFrame(() => document.querySelector("#inv-quick-said")?.focus());
+}
+
+function inventoryQuickUpdateSection() {
+  const s = inventoryInlineUpdate;
+  const top = `
+    <form class="inv-quick-update" id="inv-quick-update-form">
+      <label class="visually-hidden" for="inv-quick-said">What changed</label>
+      <div class="inv-quick-update-row">
+        <input id="inv-quick-said" name="said" type="text" maxlength="600" autocomplete="off" autocapitalize="sentences"
+          enterkeyhint="done" placeholder="${esc(INV_QUICK_PLACEHOLDER)}" value="${esc(s.draftText)}"
+          ${s.phase === "think" ? "disabled" : ""} />
+        <button type="submit" class="primary inv-quick-send" ${s.phase === "think" ? "disabled" : ""}>
+          ${s.phase === "think" ? "…" : "Check"}
+        </button>
+      </div>
+      ${s.error && s.phase !== "confirm" ? `<p class="form-error">${esc(s.error)}</p>` : ""}
+      ${s.phase === "think" ? `<p class="helper inv-progress" role="status">Working out what you said…</p>` : ""}
+    </form>`;
+  if (s.phase !== "confirm" || !s.proposal) return top;
+  return `${top}${inventoryInlineConfirmMarkup(s)}`;
+}
+
+function inventoryInlineConfirmMarkup(s) {
+  const p = s.proposal;
+  const matched = p.itemId ? inventoryItem(p.itemId) : null;
+  const others = p.candidates.filter((row) => row.id !== p.itemId);
+  const nameSuggestions = suggestItemNames(p.name, inventory.items);
+  const status = matched
+    ? `${p.autoMatched ? "Matched existing" : "Updating"} <strong>${esc(matched.name)}</strong>${matched.location ? ` · was in ${esc(matched.location)}` : ""}`
+    : "New item";
+  const matchLabel = understandingSourceLabel(p.understandingSource, p.understandingFallback);
+  return `<form class="inv-inline-confirm" id="inv-quick-confirm-form" aria-labelledby="inv-inline-confirm-title">
+    <h2 id="inv-inline-confirm-title" class="visually-hidden">Check and save</h2>
+    ${p.needsSplit ? `<p class="form-error" role="alert">Sounds like more than one item — save this one, then say the other separately.</p>` : ""}
+    <p class="helper inv-understanding">${esc(matchLabel)}${p.understandingFallback && p.understandingNote ? ` · ${esc(p.understandingNote)}` : ""}</p>
+    <p class="inv-heard">“${esc(s.text)}” <button type="button" class="text-button" data-action="inv-reword">Change</button></p>
+    <div>
+      <label>Item<input name="name" required maxlength="80" value="${esc(p.name)}" autocomplete="off" autocapitalize="words" enterkeyhint="done" list="inv-name-suggest" aria-describedby="inv-name-hint" />
+      <datalist id="inv-name-suggest">${nameSuggestions.map((name) => `<option value="${esc(name)}"></option>`).join("")}${inventory.items.map((item) => `<option value="${esc(item.name)}"></option>`).join("")}</datalist></label>
+      <p class="helper inv-match" id="inv-name-hint">${status}</p>
+      ${nameSuggestions.length ? `<div class="inv-chips" aria-label="Suggestions">${nameSuggestions.map((name) => `<button type="button" class="inv-chip" data-action="inv-name-fill" data-extra="${esc(name)}">${esc(name)}</button>`).join("")}</div>` : ""}
+      ${others.length || p.itemId ? `<div class="inv-chips">${others.length ? `<span class="inv-chips-label">${p.ambiguous || !p.itemId ? "Did you mean" : "Or"}</span>` : ""}
+        ${others.map((row) => `<button type="button" class="inv-chip" data-action="inv-pick" data-id="${esc(row.id)}">${esc(row.name)}</button>`).join("")}
+        ${p.itemId ? `<button type="button" class="inv-chip quiet" data-action="inv-pick" data-id="new">New item instead</button>` : ""}
+      </div>` : ""}
+    </div>
+    <div>${locationField(p.location, { chipsWhenFilled: false, suggestions: p.locationSuggestions, placeholder: p.locationIsHere ? "Where’s “here”? Pick or type" : "e.g. Cupboard upstairs › X box" })}</div>
+    ${stockField(p.stock)}
+    <label>Note <span class="optional">optional</span><input name="note" maxlength="200" value="${esc(p.note || (matched?.note ?? ""))}" placeholder="e.g. About 3 left" /></label>
+    <p class="form-error" id="form-error"></p>
+    <div class="inv-inline-confirm-actions">
+      <button class="primary wide" type="submit">Save</button>
+      <button class="secondary wide" type="button" data-action="inv-again">Type it again</button>
+    </div>
+  </form>`;
+}
+
 function inventoryScreen() {
   const toBuy = inventoryReady() ? shoppingList(inventory) : [];
   const count = inventory.items.length;
   const nearDup = inventoryReady() ? nearDuplicatePairs(inventory.items).filter((pair) => !inventoryNearDupDismissed.has(pair.a.id + ":" + pair.b.id)) : [];
-  const help = "Tap Update, use the mic on your keyboard to dictate, then Check. Tab works out the item, the place and Plenty / Low / Run out, and shows a card to fix anything before it saves. Search understands rough names and typos. Low and Run out go on To buy. Everything stays in your private gist as inventory.json only.";
+  const help = "Type or dictate in the box at the top (use your keyboard’s mic), tap Check, then confirm. Tab works out the item, the place and Plenty / Low / Run out. Search understands rough names and typos. Low and Run out go on To buy. Everything stays in your private gist as inventory.json only.";
   let body;
   if (inventoryState.name === "loading" || inventoryState.name === "idle") {
     body = `<p class="helper">Opening the inventory…</p>`;
@@ -4025,11 +4103,11 @@ function inventoryScreen() {
     body = `<div class="empty-lines"><p class="form-error">${esc(inventoryState.message)}</p><button class="text-button" type="button" data-action="inv-reload">Try again</button></div>`;
   } else {
     body = `
-      <div class="inv-actions">
-        <button class="primary inv-speak" type="button" data-action="inv-update" aria-label="Update inventory — type or dictate">${MIC_ICON}<span>Update</span></button>
-        <button class="secondary" type="button" data-action="inv-add">Add by hand</button>
-      </div>
+      ${inventoryQuickUpdateSection()}
       <button class="inv-settings-link" type="button" data-action="inv-ai-settings">Smart understanding</button>
+      <div class="inv-actions inv-actions--solo">
+        <button class="secondary wide" type="button" data-action="inv-add">Add by hand</button>
+      </div>
       <form class="inv-search" id="inv-search-form" role="search">
         <label class="visually-hidden" for="inv-search">Find something</label>
         <input id="inv-search" type="search" name="q" placeholder="Where are the…" value="${esc(inventorySearch.text)}" autocomplete="off" autocapitalize="off" enterkeyhint="search" />
@@ -4070,7 +4148,7 @@ function smartLine() {
 function itemsMarkup() {
   const items = [...inventory.items].sort((a, b) => a.name.localeCompare(b.name));
   if (!items.length) {
-    return `<section class="block">${emptyLines("Nothing listed yet. Tap Update and say where you’ve put something.", "inv-update", "Update by voice")}</section>`;
+    return `<section class="block">${emptyLines("Nothing listed yet. Use the box above to say where you’ve put something.", "inv-focus-quick", "Focus update box")}</section>`;
   }
   return `<section class="block">${items.map((item) => lineRow({
     edit: "inv-edit",
@@ -4206,7 +4284,9 @@ function startUpdateListening() {
       if (modal?.kind !== "inv-update") return;
       modal.listening = false;
       modal.text = text;
-      proposeUpdate(text);
+      closeModal();
+      inventoryInlineUpdate.draftText = text;
+      proposeInventoryUpdate(text);
     },
     onError: (code) => {
       activeListen = null;
@@ -4250,34 +4330,33 @@ function startSearchListening() {
   });
 }
 
-/* ---------------------------------------------------------- update sheet */
+/* ---------------------------------------------------------- inline update */
 
-function openInventoryUpdate() {
-  stopListening();
-  modal = { kind: "inv-update", phase: "say", text: "", listening: false, error: "", proposal: null };
-  renderModal({ focus: false });
-  document.querySelector("#inv-said")?.focus();
-}
-
-async function proposeUpdate(text) {
+async function proposeInventoryUpdate(text) {
   const said = String(text || "").trim();
   if (!said) {
-    modal.error = "Say or type what you put where.";
-    renderModal({ focus: false });
+    inventoryInlineUpdate.error = "Say or type what you put where.";
+    render();
     return;
   }
+  const ticket = ++inlineProposeTicket;
+  inventoryInlineUpdate = {
+    ...inventoryInlineUpdate,
+    phase: "think",
+    text: said,
+    draftText: said,
+    error: "",
+    proposal: null,
+  };
+  render();
   const settings = readAiSettings(localStorage);
-  modal.phase = "think";
-  modal.text = said;
-  modal.error = "";
-  renderModal({ focus: false });
   const smart = await understandUpdateSmart(said, inventory, {
     settings,
     lastItemId: lastInventoryItemId,
     fetchImpl: fetch,
     storage: localStorage,
   });
-  if (modal?.text !== said) return;
+  if (ticket !== inlineProposeTicket) return;
   const proposal = smart.proposal;
   proposal.heardItemName = proposal.itemText || proposal.name;
   proposal.understandingSource = smart.source;
@@ -4293,29 +4372,33 @@ async function proposeUpdate(text) {
       proposal.autoMatched = true;
     }
   }
-  modal.phase = "confirm";
-  modal.text = said;
-  modal.proposal = proposal;
-  modal.error = "";
-  renderModal({ focus: false });
-  // A new-looking name might still be something listed under other words.
+  inventoryInlineUpdate = {
+    ...inventoryInlineUpdate,
+    phase: "confirm",
+    text: said,
+    draftText: said,
+    proposal,
+    error: "",
+  };
+  render();
   if (proposal.isNew && proposal.itemText && semanticState() === "ready" && inventory.items.length) {
     const scores = await semanticScores(proposal.itemText, inventory.items);
-    if (!scores || modal?.proposal !== proposal) return;
+    if (ticket !== inlineProposeTicket || inventoryInlineUpdate.proposal !== proposal) return;
     const extra = [...scores].filter(([, score]) => score >= 0.75).sort((a, b) => b[1] - a[1]).slice(0, 2)
       .map(([id]) => inventoryItem(id)).filter((item) => item && !proposal.candidates.some((row) => row.id === item.id));
     if (!extra.length) return;
     snapshotInventoryForm();
     proposal.candidates = [...proposal.candidates, ...extra.map((item) => ({ id: item.id, name: item.name, location: item.location, stock: item.stock, score: 0.6 }))];
-    renderModal({ focus: false });
+    render();
   }
 }
 
 function snapshotInventoryForm() {
-  const form = document.querySelector("#inv-update-form, #inv-item-form");
-  if (!form || !modal?.proposal) return;
+  const form = document.querySelector("#inv-quick-confirm-form, #inv-update-form, #inv-item-form");
+  const ctx = activeInventoryUpdateProposal();
+  if (!form || !ctx?.proposal) return;
   const data = new FormData(form);
-  const proposal = modal.proposal;
+  const proposal = ctx.proposal;
   if (data.has("name")) proposal.name = String(data.get("name"));
   if (data.has("location")) proposal.location = String(data.get("location"));
   if (data.has("stock")) proposal.stock = String(data.get("stock"));
@@ -4493,12 +4576,61 @@ function saveInventoryChange(change, verb) {
   showToast(`${verb} ${saved.name}`, { action: "inv-undo", actionLabel: "Undo" });
 }
 
+function saveInventoryQuickSaid(event) {
+  event.preventDefault();
+  if (inventoryInlineUpdate.phase === "think") return;
+  const said = new FormData(event.target).get("said");
+  inventoryInlineUpdate.draftText = String(said || "");
+  proposeInventoryUpdate(said);
+}
+
+function saveInventoryQuickConfirm(event) {
+  event.preventDefault();
+  if (inventoryInlineUpdate.phase !== "confirm" || !inventoryInlineUpdate.proposal) return;
+  snapshotInventoryForm();
+  const p = inventoryInlineUpdate.proposal;
+  if (!p.name.trim()) return showFormError("Give the item a name.");
+  const learnAlias = p.heardItemName && normaliseItemKey(p.heardItemName) !== normaliseItemKey(p.name) ? p.heardItemName : "";
+  const rows = p.aiProposals?.length > 1 ? p.aiProposals : [p];
+  let existing = p.itemId ? inventoryItem(p.itemId) : null;
+  if (!existing && !p.forceNew) {
+    const found = findExistingByName(inventory, p.name);
+    if (found) existing = found.item;
+  }
+  const ok = changeInventory(() => {
+    for (const row of rows) {
+      let ex = row.itemId ? inventoryItem(row.itemId) : null;
+      if (!ex && !row.forceNew) {
+        const found = findExistingByName(inventory, row.name);
+        if (found) ex = found.item;
+      }
+      const alias = row === p ? learnAlias : "";
+      applyUpdate(inventory, {
+        itemId: ex?.id || null,
+        name: row.name,
+        location: row.location.trim() || ex?.location || "",
+        stock: row.stock,
+        note: row.note,
+        learnAlias: alias,
+        forceNew: Boolean(row.forceNew && !ex),
+      });
+    }
+  });
+  if (!ok) return;
+  lastInventoryItemId = inventory.items.at(-1)?.id || lastInventoryItemId;
+  resetInlineInventoryUpdate();
+  if (inventorySearch.text.trim()) runInventorySearch(inventorySearch.text);
+  render();
+  showToast(rows.length > 1 ? `Saved ${rows.length} items` : `${existing ? "Updated" : "Added"} ${p.name}`);
+}
+
 function saveInventoryUpdate(event) {
   event.preventDefault();
   if (modal?.kind !== "inv-update") return;
   if (modal.phase !== "confirm") {
     stopListening();
-    proposeUpdate(new FormData(event.target).get("said"));
+    const said = new FormData(event.target).get("said");
+    proposeInventoryUpdate(said);
     return;
   }
   snapshotInventoryForm();
@@ -4617,7 +4749,10 @@ async function shareShoppingList() {
 
 function handleInventoryClick(action, target, event) {
   const { id, extra } = target.dataset;
-  if (action === "inv-update") { event.preventDefault(); openInventoryUpdate(); }
+  if (action === "inv-update" || action === "inv-focus-quick") {
+    event.preventDefault();
+    focusInvQuickInput();
+  }
   if (action === "inv-add") { event.preventDefault(); openInventoryItem(null, extra || ""); }
   if (action === "inv-edit") { event.preventDefault(); stopListening(); openInventoryItem(id); }
   if (action === "inv-view") { inventoryView = id === "shop" ? "shop" : "items"; render(); }
@@ -4639,15 +4774,15 @@ function handleInventoryClick(action, target, event) {
   if (action === "inv-again") {
     event.preventDefault();
     stopListening();
-    modal = { kind: "inv-update", phase: "say", text: "", listening: false, error: "", proposal: null };
-    renderModal({ focus: false });
-    document.querySelector("#inv-said")?.focus();
+    resetInlineInventoryUpdate();
+    render();
+    focusInvQuickInput();
   }
   if (action === "inv-reword") {
     event.preventDefault();
-    modal.phase = "say";
-    renderModal({ focus: false });
-    document.querySelector("#inv-said")?.focus();
+    resetInlineInventoryUpdate({ keepDraft: true });
+    render();
+    focusInvQuickInput();
   }
   if (action === "inv-merge" && id && extra) {
     event.preventDefault();
@@ -4655,23 +4790,26 @@ function handleInventoryClick(action, target, event) {
   }
   if (action === "inv-name-fill" && extra) {
     event.preventDefault();
-    const input = document.querySelector('#inv-update-form input[name="name"]');
+    const input = document.querySelector('#inv-quick-confirm-form input[name="name"], #inv-update-form input[name="name"]');
     if (input) input.value = extra;
     snapshotInventoryForm();
     const picked = findExistingByName(inventory, extra);
-    if (picked && modal?.proposal) {
-      modal.proposal.itemId = picked.item.id;
-      modal.proposal.name = picked.item.name;
-      modal.proposal.isNew = false;
-      modal.proposal.forceNew = false;
+    const ctx = activeInventoryUpdateProposal();
+    if (picked && ctx?.proposal) {
+      ctx.proposal.itemId = picked.item.id;
+      ctx.proposal.name = picked.item.name;
+      ctx.proposal.isNew = false;
+      ctx.proposal.forceNew = false;
     }
-    renderModal({ focus: false });
-    document.querySelector('#inv-update-form input[name="name"]')?.focus();
+    if (inventoryInlineUpdate.phase === "confirm") render();
+    else renderModal({ focus: false });
+    input?.focus();
   }
-  if (action === "inv-pick" && modal?.proposal) {
+  const pickCtx = activeInventoryUpdateProposal();
+  if (action === "inv-pick" && pickCtx?.proposal) {
     event.preventDefault();
     snapshotInventoryForm();
-    const p = modal.proposal;
+    const p = pickCtx.proposal;
     if (id === "new") {
       const current = p.itemId ? inventoryItem(p.itemId) : null;
       if (current) p.candidates = [{ id: current.id, name: current.name, location: current.location, stock: current.stock, score: 0 }, ...p.candidates.filter((row) => row.id !== current.id)];
@@ -4689,11 +4827,12 @@ function handleInventoryClick(action, target, event) {
         p.ambiguous = false;
       }
     }
-    renderModal({ focus: false });
+    if (inventoryInlineUpdate.phase === "confirm") render();
+    else renderModal({ focus: false });
   }
   if (action === "inv-place") {
     event.preventDefault();
-    const input = document.querySelector('.modal input[name="location"]');
+    const input = document.querySelector('#inv-quick-confirm-form input[name="location"], .modal input[name="location"]');
     if (input) input.value = extra || "";
   }
   if (action === "inv-delete-from-form") { event.preventDefault(); removeInventoryItem(id); }

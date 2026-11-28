@@ -1556,11 +1556,54 @@ textarea {
   min-height: 92px;
 }
 textarea:focus-visible { outline: 3px solid #9bd9c6; outline-offset: 2px; }
+.inv-quick-update {
+  margin: 0 0 8px;
+}
+.inv-quick-update-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.inv-quick-update-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid #d7d6d0;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px 13px;
+  font-size: 16px;
+  font-weight: 500;
+}
+.inv-quick-send {
+  flex: none;
+  min-width: 4.7rem;
+  padding: 0 14px;
+  min-height: 44px;
+}
+.inv-inline-confirm {
+  margin: 10px 0 14px;
+  padding: 14px 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  display: grid;
+  gap: 14px;
+}
+.inv-inline-confirm-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+.inv-progress { margin: 8px 0 0; }
 .inv-actions {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
   gap: 10px;
   margin-bottom: 6px;
+}
+.inv-actions--solo {
+  grid-template-columns: minmax(0, 1fr);
 }
 .inv-settings-link {
   display: block;
