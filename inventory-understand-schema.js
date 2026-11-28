@@ -10,6 +10,7 @@ import {
 } from "./inventory.js";
 import { formatDisplayName } from "./inventory-text.js";
 import { findExistingByName } from "./inventory-match.js";
+import { modelTokensConflict } from "./inventory-model-tokens.js";
 
 const STOCK_MAP = { plenty: "plenty", low: "low", out: "out", unchanged: null };
 const ACTIONS = new Set(["add", "move", "update_stock", "took_out", "remove"]);
@@ -45,7 +46,7 @@ export function systemPrompt(mode, context) {
   const ctx = JSON.stringify(context);
   if (mode === "update") {
     return `You parse household inventory updates from dictated English. Output ONLY valid JSON matching this schema (no markdown):\n${UPDATE_SCHEMA}\n`
-      + `Rules: use exact item names from context when they mean the same thing; place is an array of path segments (outer room first); `
+      + `Rules: use exact item names from context only when they mean the same thing (same model/size codes: CR2016≠CR2032, AA≠AAA, M3≠M4, 1.75mm≠2.85mm); place is an array of path segments (outer room first); `
       + `stock plenty|low|out|unchanged; action add for new items, move when location changes, update_stock when only quantity changes, took_out when removed from storage but kept on list, remove when deleted. `
       + `Split multiple items in one utterance into multiple changes. Ignore filler like "it belongs in". Map "don't have any"/"none left" to stock out. `
       + `Known items and places: ${ctx}`;
@@ -117,7 +118,8 @@ export function aiChangeToProposal(change, inventory, said, { lastItemId = null 
     if (found) item = found.item;
     else {
       const ranked = rankItems(displayName, items);
-      if (ranked[0]?.score >= 0.72) item = ranked[0].item;
+      const top = ranked[0];
+      if (top?.score >= 0.72 && !modelTokensConflict(displayName, top.item.name)) item = top.item;
     }
   }
   const placed = placePathToLocation(change.place, inventory);

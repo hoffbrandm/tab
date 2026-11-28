@@ -1768,6 +1768,36 @@ textarea:focus-visible { outline: 3px solid #9bd9c6; outline-offset: 2px; }
   font-weight: 700;
 }
 .inv-chip.quiet { background: transparent; color: var(--green); border-color: transparent; }
+.inv-pick { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; }
+.inv-pick-label {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.inv-pick-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 2px solid #d7d6d0;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+.inv-pick-row.on {
+  border-color: var(--green);
+  background: #eef6f0;
+  box-shadow: 0 0 0 1px var(--green);
+}
+.inv-pick-title { font-weight: 700; }
+.inv-pick-meta { font-size: 0.88rem; color: var(--muted); font-weight: 500; }
 .inv-history { margin: 6px 0 0; padding-left: 18px; font-weight: 500; line-height: 1.5; }
 .inv-history span { color: var(--muted); }
 .inv-smart { margin-top: 18px; }
