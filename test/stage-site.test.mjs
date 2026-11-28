@@ -80,6 +80,7 @@ test("the real app publishes every module it imports, and only those", () => {
     "inventory-ai.js",
     "inventory-gemini-models.js",
     "inventory-match.js",
+    "inventory-quick-update.js",
     "inventory-semantic.js",
     "inventory-speech.js",
     "inventory-store.js",
