@@ -3,7 +3,8 @@
  * Pure — runs on the phone; nothing is sent out.
  */
 
-import { levenshtein, normalise, phraseScore, singular, tokens } from "./inventory-text.js";
+import { formatDisplayName, levenshtein, normalise, phraseScore, singular, tokens } from "./inventory-text.js";
+import { modelTokensConflict } from "./inventory-model-tokens.js";
 
 const ARTICLE = /^(?:a|an|the|some)\s+/;
 
@@ -134,14 +135,108 @@ export function findExistingByName(inventory, name, { minScore = 0.78 } = {}) {
   const key = normaliseItemKey(name);
   if (!key) return null;
   for (const item of inventory.items || []) {
-    if (normaliseItemKey(item.name) === key) return { item, score: 1, exactKey: true };
+    if (normaliseItemKey(item.name) === key && !modelTokensConflict(name, item.name)) {
+      return { item, score: 1, exactKey: true };
+    }
     for (const alias of item.aliases || []) {
-      if (normaliseItemKey(alias) === key) return { item, score: 0.99, exactKey: true };
+      if (normaliseItemKey(alias) === key && !modelTokensConflict(name, item.name)) {
+        return { item, score: 0.99, exactKey: true };
+      }
     }
   }
   const top = rankItemsEnhanced(name, inventory.items || [])[0];
-  if (top && top.score >= minScore) return { item: top.item, score: top.score, exactKey: false };
+  if (top && top.score >= minScore) {
+    if (modelTokensConflict(name, top.item.name)) return null;
+    return { item: top.item, score: top.score, exactKey: false };
+  }
   return null;
+}
+
+export { modelTokensConflict } from "./inventory-model-tokens.js";
+
+function candidateRow(item, score) {
+  return {
+    id: item.id,
+    name: item.name,
+    location: item.location,
+    stock: item.stock,
+    score: Number(score.toFixed(2)),
+  };
+}
+
+/**
+ * After rules/AI parsing: resolve auto-match vs new item, pickId, and top candidates.
+ */
+export function finalizeInventoryProposal(proposal, inventory) {
+  const items = inventory?.items || [];
+  const typed = formatDisplayName(proposal.itemText || proposal.name || "");
+  proposal.typedName = typed;
+  const ranked = rankItemsEnhanced(typed, items).filter((row) => row.score > 0.32).slice(0, 3);
+  proposal.candidates = ranked.map((row) => candidateRow(row.item, row.score));
+
+  let confident = false;
+  const found = findExistingByName(inventory, typed);
+
+  if (proposal.itemId) {
+    const current = items.find((row) => row.id === proposal.itemId);
+    if (current && modelTokensConflict(typed, current.name)) {
+      proposal.itemId = null;
+      proposal.isNew = true;
+      proposal.autoMatched = false;
+    } else if (current) {
+      const exact = found?.exactKey && found.item.id === current.id;
+      const sameKey = normaliseItemKey(current.name) === normaliseItemKey(typed);
+      confident = Boolean(exact || sameKey);
+      if (!confident && found && !found.exactKey) {
+        proposal.itemId = null;
+        proposal.isNew = true;
+        proposal.autoMatched = false;
+      }
+    }
+  } else if (found?.exactKey && !modelTokensConflict(typed, found.item.name)) {
+    proposal.itemId = found.item.id;
+    proposal.name = found.item.name;
+    proposal.isNew = false;
+    proposal.autoMatched = true;
+    proposal.matchConfidence = "exact";
+    confident = true;
+  } else {
+    proposal.itemId = null;
+    proposal.isNew = true;
+    proposal.autoMatched = false;
+    proposal.name = typed;
+    proposal.matchConfidence = proposal.candidates.length ? "similar" : "new";
+  }
+
+  if (proposal.pickId === undefined || proposal.pickId === null) {
+    proposal.pickId = confident && proposal.itemId ? proposal.itemId : "new";
+  }
+  applyPickId(proposal, items, typed);
+  proposal.showItemPicker = proposal.candidates.length > 0 || confident;
+  return proposal;
+}
+
+export function applyPickId(proposal, inventory, typedName) {
+  const items = Array.isArray(inventory) ? inventory : inventory?.items || [];
+  const typed = typedName || proposal.typedName || proposal.itemText || proposal.name;
+  const pickId = proposal.pickId;
+  if (pickId === "new") {
+    proposal.itemId = null;
+    proposal.forceNew = true;
+    proposal.isNew = true;
+    proposal.name = formatDisplayName(typed);
+    proposal.autoMatched = false;
+    return proposal;
+  }
+  const item = items.find((row) => row.id === pickId);
+  if (item) {
+    proposal.itemId = item.id;
+    proposal.name = item.name;
+    proposal.forceNew = false;
+    proposal.isNew = false;
+    proposal.autoMatched = false;
+  }
+  return proposal;
 }
 
 export function mergeTwoItems(keep, other) {

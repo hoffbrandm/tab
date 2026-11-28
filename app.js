@@ -110,6 +110,8 @@ import {
   applyUpdate,
   consolidateInventory,
   emptyInventory,
+  applyPickId,
+  finalizeInventoryProposal,
   findExistingByName,
   knownLocations,
   mergeInventories,
@@ -4056,10 +4058,37 @@ function inventoryQuickUpdateSection() {
   return `${top}${inventoryInlineConfirmMarkup(s)}`;
 }
 
+function inventoryItemPickMarkup(p) {
+  const typed = p.typedName || p.itemText || p.name || "";
+  const pickId = p.pickId ?? (p.itemId || "new");
+  if (!p.showItemPicker && !(p.candidates?.length)) return "";
+  const rows = (p.candidates || []).slice(0, 3);
+  const options = [
+    ...rows.map((row) => ({
+      id: row.id,
+      title: row.name,
+      meta: [row.location, STOCK_LABELS[row.stock]].filter(Boolean).join(" · "),
+      selected: pickId === row.id,
+    })),
+    {
+      id: "new",
+      title: `New item: ${typed}`,
+      meta: "",
+      selected: pickId === "new" || !pickId,
+    },
+  ];
+  return `<div class="inv-pick" role="radiogroup" aria-label="Which item is this?">
+    <p class="inv-pick-label">Which item?</p>
+    ${options.map((opt) => `<button type="button" class="inv-pick-row${opt.selected ? " on" : ""}" data-action="inv-pick" data-id="${esc(opt.id)}" role="radio" aria-checked="${opt.selected ? "true" : "false"}">
+      <span class="inv-pick-title">${esc(opt.title)}</span>
+      ${opt.meta ? `<span class="inv-pick-meta">${esc(opt.meta)}</span>` : ""}
+    </button>`).join("")}
+  </div>`;
+}
+
 function inventoryInlineConfirmMarkup(s) {
   const p = s.proposal;
   const matched = p.itemId ? inventoryItem(p.itemId) : null;
-  const others = p.candidates.filter((row) => row.id !== p.itemId);
   const nameSuggestions = suggestItemNames(p.name, inventory.items);
   const status = matched
     ? `${p.autoMatched ? "Matched existing" : "Updating"} <strong>${esc(matched.name)}</strong>${matched.location ? ` · was in ${esc(matched.location)}` : ""}`
@@ -4074,11 +4103,8 @@ function inventoryInlineConfirmMarkup(s) {
       <label>Item<input name="name" required maxlength="80" value="${esc(p.name)}" autocomplete="off" autocapitalize="words" enterkeyhint="done" list="inv-name-suggest" aria-describedby="inv-name-hint" />
       <datalist id="inv-name-suggest">${nameSuggestions.map((name) => `<option value="${esc(name)}"></option>`).join("")}${inventory.items.map((item) => `<option value="${esc(item.name)}"></option>`).join("")}</datalist></label>
       <p class="helper inv-match" id="inv-name-hint">${status}</p>
-      ${nameSuggestions.length ? `<div class="inv-chips" aria-label="Suggestions">${nameSuggestions.map((name) => `<button type="button" class="inv-chip" data-action="inv-name-fill" data-extra="${esc(name)}">${esc(name)}</button>`).join("")}</div>` : ""}
-      ${others.length || p.itemId ? `<div class="inv-chips">${others.length ? `<span class="inv-chips-label">${p.ambiguous || !p.itemId ? "Did you mean" : "Or"}</span>` : ""}
-        ${others.map((row) => `<button type="button" class="inv-chip" data-action="inv-pick" data-id="${esc(row.id)}">${esc(row.name)}</button>`).join("")}
-        ${p.itemId ? `<button type="button" class="inv-chip quiet" data-action="inv-pick" data-id="new">New item instead</button>` : ""}
-      </div>` : ""}
+      ${inventoryItemPickMarkup(p)}
+      ${nameSuggestions.length ? `<div class="inv-chips" aria-label="Name suggestions">${nameSuggestions.map((name) => `<button type="button" class="inv-chip" data-action="inv-name-fill" data-extra="${esc(name)}">${esc(name)}</button>`).join("")}</div>` : ""}
     </div>
     <div>${locationField(p.location, { chipsWhenFilled: false, suggestions: p.locationSuggestions, placeholder: p.locationIsHere ? "Where’s “here”? Pick or type" : "e.g. Cupboard upstairs › X box" })}</div>
     ${stockField(p.stock)}
@@ -4363,15 +4389,7 @@ async function proposeInventoryUpdate(text) {
   proposal.understandingFallback = smart.fallback;
   proposal.understandingNote = smart.fallbackNote || "";
   proposal.aiProposals = smart.proposals || [proposal];
-  if (proposal.isNew && !proposal.forceNew) {
-    const found = findExistingByName(inventory, proposal.name);
-    if (found) {
-      proposal.itemId = found.item.id;
-      proposal.name = found.item.name;
-      proposal.isNew = false;
-      proposal.autoMatched = true;
-    }
-  }
+  finalizeInventoryProposal(proposal, inventory);
   inventoryInlineUpdate = {
     ...inventoryInlineUpdate,
     phase: "confirm",
@@ -4395,10 +4413,13 @@ async function proposeInventoryUpdate(text) {
 
 function snapshotInventoryForm() {
   const form = document.querySelector("#inv-quick-confirm-form, #inv-update-form, #inv-item-form");
+  if (!form) return;
   const ctx = activeInventoryUpdateProposal();
-  if (!form || !ctx?.proposal) return;
+  const proposal = ctx?.proposal
+    || (modal?.kind === "inv-item" ? modal.proposal : null)
+    || (modal?.kind === "inv-update" ? modal.proposal : null);
+  if (!proposal) return;
   const data = new FormData(form);
-  const proposal = ctx.proposal;
   if (data.has("name")) proposal.name = String(data.get("name"));
   if (data.has("location")) proposal.location = String(data.get("location"));
   if (data.has("stock")) proposal.stock = String(data.get("stock"));
@@ -4501,7 +4522,6 @@ function inventoryUpdateForm() {
   }
   const p = modal.proposal;
   const matched = p.itemId ? inventoryItem(p.itemId) : null;
-  const others = p.candidates.filter((row) => row.id !== p.itemId);
   const nameSuggestions = suggestItemNames(p.name, inventory.items);
   const status = matched
     ? `${p.autoMatched ? "Matched existing" : "Updating"} <strong>${esc(matched.name)}</strong>${matched.location ? ` · was in ${esc(matched.location)}` : ""}`
@@ -4515,11 +4535,8 @@ function inventoryUpdateForm() {
       <label>Item<input name="name" required maxlength="80" value="${esc(p.name)}" autocomplete="off" autocapitalize="words" enterkeyhint="done" list="inv-name-suggest" aria-describedby="inv-name-hint" />
       <datalist id="inv-name-suggest">${nameSuggestions.map((name) => `<option value="${esc(name)}"></option>`).join("")}${inventory.items.map((item) => `<option value="${esc(item.name)}"></option>`).join("")}</datalist></label>
       <p class="helper inv-match" id="inv-name-hint">${status}</p>
-      ${nameSuggestions.length ? `<div class="inv-chips" aria-label="Suggestions">${nameSuggestions.map((name) => `<button type="button" class="inv-chip" data-action="inv-name-fill" data-extra="${esc(name)}">${esc(name)}</button>`).join("")}</div>` : ""}
-      ${others.length || p.itemId ? `<div class="inv-chips">${others.length ? `<span class="inv-chips-label">${p.ambiguous || !p.itemId ? "Did you mean" : "Or"}</span>` : ""}
-        ${others.map((row) => `<button type="button" class="inv-chip" data-action="inv-pick" data-id="${esc(row.id)}">${esc(row.name)}</button>`).join("")}
-        ${p.itemId ? `<button type="button" class="inv-chip quiet" data-action="inv-pick" data-id="new">New item instead</button>` : ""}
-      </div>` : ""}
+      ${inventoryItemPickMarkup(p)}
+      ${nameSuggestions.length ? `<div class="inv-chips" aria-label="Name suggestions">${nameSuggestions.map((name) => `<button type="button" class="inv-chip" data-action="inv-name-fill" data-extra="${esc(name)}">${esc(name)}</button>`).join("")}</div>` : ""}
     </div>
     <div>${locationField(p.location, { chipsWhenFilled: false, suggestions: p.locationSuggestions, placeholder: p.locationIsHere ? "Where’s “here”? Pick or type" : "e.g. Cupboard upstairs › X box" })}</div>
     ${stockField(p.stock)}
@@ -4796,10 +4813,8 @@ function handleInventoryClick(action, target, event) {
     const picked = findExistingByName(inventory, extra);
     const ctx = activeInventoryUpdateProposal();
     if (picked && ctx?.proposal) {
-      ctx.proposal.itemId = picked.item.id;
-      ctx.proposal.name = picked.item.name;
-      ctx.proposal.isNew = false;
-      ctx.proposal.forceNew = false;
+      ctx.proposal.pickId = picked.item.id;
+      applyPickId(ctx.proposal, inventory);
     }
     if (inventoryInlineUpdate.phase === "confirm") render();
     else renderModal({ focus: false });
@@ -4810,23 +4825,16 @@ function handleInventoryClick(action, target, event) {
     event.preventDefault();
     snapshotInventoryForm();
     const p = pickCtx.proposal;
-    if (id === "new") {
-      const current = p.itemId ? inventoryItem(p.itemId) : null;
-      if (current) p.candidates = [{ id: current.id, name: current.name, location: current.location, stock: current.stock, score: 0 }, ...p.candidates.filter((row) => row.id !== current.id)];
-      p.itemId = null;
-      p.forceNew = true;
-      p.isNew = true;
-      p.name = p.itemText ? p.itemText[0].toUpperCase() + p.itemText.slice(1) : p.name;
-    } else {
-      const picked = inventoryItem(id);
-      if (picked) {
-        p.itemId = picked.id;
-        p.name = picked.name;
-        if (!p.location) p.location = picked.location;
-        if (!p.stockHeard) p.stock = picked.stock;
-        p.ambiguous = false;
-      }
+    p.pickId = id === "new" ? "new" : id;
+    applyPickId(p, inventory);
+    const picked = id === "new" ? null : inventoryItem(id);
+    if (picked) {
+      if (!p.location) p.location = picked.location;
+      if (!p.stockHeard) p.stock = picked.stock;
+      p.ambiguous = false;
     }
+    const input = document.querySelector('#inv-quick-confirm-form input[name="name"], #inv-update-form input[name="name"]');
+    if (input) input.value = p.name;
     if (inventoryInlineUpdate.phase === "confirm") render();
     else renderModal({ focus: false });
   }

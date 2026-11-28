@@ -20,8 +20,21 @@ import {
   normaliseItemKey,
   rankItemsEnhanced,
 } from "./inventory-match.js";
+import { modelTokensConflict } from "./inventory-model-tokens.js";
 
-export { addMishearAlias, consolidateInventory, findExistingByName, mergeTwoItems, nearDuplicatePairs, normaliseItemKey, rankItemsEnhanced, suggestItemNames } from "./inventory-match.js";
+export {
+  addMishearAlias,
+  applyPickId,
+  consolidateInventory,
+  finalizeInventoryProposal,
+  findExistingByName,
+  mergeTwoItems,
+  modelTokensConflict,
+  nearDuplicatePairs,
+  normaliseItemKey,
+  rankItemsEnhanced,
+  suggestItemNames,
+} from "./inventory-match.js";
 
 export const INVENTORY_FILENAME = "inventory.json";
 export const STOCK_LEVELS = ["plenty", "low", "out"];
@@ -567,7 +580,7 @@ export function understandUpdate(text, inventory, { lastItemId = null } = {}) {
   } else if (!pronoun) {
     candidates = rankItems(itemText, items).slice(0, 4);
     const [top, second] = candidates;
-    if (top && top.score >= 0.72) {
+    if (top && top.score >= 0.72 && !modelTokensConflict(itemText, top.item.name)) {
       item = top.item;
       ambiguous = Boolean(second && second.score >= 0.68 && top.score - second.score < 0.12);
       if (ambiguous) {
